@@ -12,8 +12,9 @@
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "typecheck": "tsc --noEmit",
-    "prepare": "npm run build"
+    "prepare": "pnpm run build"
   },
+  "packageManager": "pnpm@10.11.0",
   "files": [
     "dist",
     "LICENSE",

@@ -20,11 +20,11 @@ WallCrawler is a next-generation browser automation framework that seamlessly co
 ## Installation
 
 ```bash
+pnpm add wallcrawler
+# or
 npm install wallcrawler
 # or
 yarn add wallcrawler
-# or
-pnpm add wallcrawler
 ```
 
 ## Quick Start

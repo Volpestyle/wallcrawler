@@ -5,7 +5,8 @@
 - **Always use the latest versions**: For any package installation, either:
   1. Check Context7 for the most up-to-date version
   2. Install directly via command line to get the latest version
-  3. Use `npm install package@latest` or `pnpm add package@latest`
+  3. Use `pnpm add package@latest` (project uses pnpm)
+- **Package Manager**: This project uses pnpm as the package manager
 
 ## Technical Implementation References
 
