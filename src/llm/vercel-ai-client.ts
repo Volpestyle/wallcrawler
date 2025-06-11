@@ -1,37 +1,57 @@
-import { generateObject, generateText } from 'ai';
-import { z } from 'zod';
-import { LLMClient, LLMProviderConfig } from '../types/llm';
-import { ModelProvider } from '../types/config';
-import { createLogger } from '../utils/logger';
-import { LLMError } from '../types/errors';
+import { generateObject, generateText, Message } from "ai";
+import { z } from "zod";
+import { LLMClient, LLMProviderConfig } from "../types/llm";
+import { ModelProvider } from "../types/config";
+import { createLogger } from "../utils/logger";
+import { LLMError } from "../types/errors";
+import { randomUUID } from "crypto";
+
+import type { LanguageModelV1 } from "ai";
+
+interface ModelConfig {
+  apiKey?: string;
+  baseURL?: string;
+  region?: string;
+}
+
+interface ModelWrapper extends LanguageModelV1 {
+  provider: ModelProvider;
+  config: ModelConfig;
+}
+
+interface MessageContent {
+  type: "text" | "image";
+  text?: string;
+  image?: string;
+}
 
 // Import providers conditionally
 let openai: any, anthropic: any, bedrock: any, ollama: any;
 
 try {
-  const openaiModule = require('@ai-sdk/openai');
+  const openaiModule = require("@ai-sdk/openai");
   openai = openaiModule.openai;
 } catch {}
 
 try {
-  const anthropicModule = require('@ai-sdk/anthropic');
+  const anthropicModule = require("@ai-sdk/anthropic");
   anthropic = anthropicModule.anthropic;
 } catch {}
 
 try {
-  const bedrockModule = require('@ai-sdk/amazon-bedrock');
+  const bedrockModule = require("@ai-sdk/amazon-bedrock");
   bedrock = bedrockModule.bedrock;
 } catch {}
 
 try {
-  const ollamaModule = require('ollama-ai-provider');
+  const ollamaModule = require("ollama-ai-provider");
   ollama = ollamaModule.ollama;
 } catch {}
 
-const logger = createLogger('llm');
+const logger = createLogger("llm");
 
 export class VercelAIClient implements LLMClient {
-  private model: any;
+  private model: ModelWrapper;
   private provider: ModelProvider;
 
   constructor(private config: LLMProviderConfig & { provider: ModelProvider }) {
@@ -39,34 +59,44 @@ export class VercelAIClient implements LLMClient {
     this.model = this.createModel();
   }
 
-  private createModel(): any {
+  private createModel(): ModelWrapper {
     const { provider, model, apiKey, baseURL } = this.config;
 
     switch (provider) {
-      case 'openai':
+      case "openai":
         if (!openai) {
-          throw new Error('OpenAI provider not installed. Run: npm install @ai-sdk/openai');
+          throw new Error(
+            "OpenAI provider not installed. Run: npm install @ai-sdk/openai"
+          );
         }
         return openai(model, { apiKey, baseURL });
 
-      case 'anthropic':
+      case "anthropic":
         if (!anthropic) {
-          throw new Error('Anthropic provider not installed. Run: npm install @ai-sdk/anthropic');
+          throw new Error(
+            "Anthropic provider not installed. Run: npm install @ai-sdk/anthropic"
+          );
         }
         return anthropic(model, { apiKey, baseURL });
 
-      case 'bedrock':
+      case "bedrock":
         if (!bedrock) {
-          throw new Error('Bedrock provider not installed. Run: npm install @ai-sdk/amazon-bedrock');
+          throw new Error(
+            "Bedrock provider not installed. Run: npm install @ai-sdk/amazon-bedrock"
+          );
         }
         // Bedrock uses AWS credentials, not API key
-        return bedrock(model, { region: process.env.AWS_REGION || 'us-east-1' });
+        return bedrock(model, {
+          region: process.env.AWS_REGION || "us-east-1",
+        });
 
-      case 'ollama':
+      case "ollama":
         if (!ollama) {
-          throw new Error('Ollama provider not installed. Run: npm install ollama-ai-provider');
+          throw new Error(
+            "Ollama provider not installed. Run: npm install ollama-ai-provider"
+          );
         }
-        return ollama(model, { baseURL: baseURL || 'http://localhost:11434' });
+        return ollama(model, { baseURL: baseURL || "http://localhost:11434" });
 
       default:
         throw new Error(`Unsupported provider: ${provider}`);
@@ -81,10 +111,10 @@ export class VercelAIClient implements LLMClient {
     maxTokens?: number;
   }): Promise<T> {
     try {
-      logger.debug('Generating object', {
+      logger.debug("Generating object", {
         provider: this.provider,
         model: this.config.model,
-        schemaShape: Object.keys(options.schema.shape || {}),
+        schemaShape: Object.keys((options.schema as any)._def.shape || {}),
       });
 
       const messages = this.buildMessages(options.prompt, options.images);
@@ -97,15 +127,15 @@ export class VercelAIClient implements LLMClient {
         maxTokens: options.maxTokens,
       });
 
-      logger.info('Object generated successfully', {
+      logger.info("Object generated successfully", {
         provider: this.provider,
         model: this.config.model,
       });
 
       return result.object;
     } catch (error: any) {
-      logger.error('Failed to generate object', error);
-      
+      logger.error("Failed to generate object", error);
+
       throw new LLMError(
         `Failed to generate object: ${error.message}`,
         this.provider,
@@ -122,18 +152,26 @@ export class VercelAIClient implements LLMClient {
     maxTokens?: number;
   }): Promise<string> {
     try {
-      logger.debug('Generating text', {
+      logger.debug("Generating text", {
         provider: this.provider,
         model: this.config.model,
       });
 
-      const messages = [];
-      
+      const messages: Message[] = [];
+
       if (options.system) {
-        messages.push({ role: 'system' as const, content: options.system });
+        messages.push({
+          id: randomUUID(),
+          role: "system" as const,
+          content: options.system,
+        });
       }
-      
-      messages.push({ role: 'user' as const, content: options.prompt });
+
+      messages.push({
+        id: randomUUID(),
+        role: "user" as const,
+        content: options.prompt,
+      });
 
       const result = await generateText({
         model: this.model,
@@ -142,7 +180,7 @@ export class VercelAIClient implements LLMClient {
         maxTokens: options.maxTokens,
       });
 
-      logger.info('Text generated successfully', {
+      logger.info("Text generated successfully", {
         provider: this.provider,
         model: this.config.model,
         length: result.text.length,
@@ -150,8 +188,8 @@ export class VercelAIClient implements LLMClient {
 
       return result.text;
     } catch (error: any) {
-      logger.error('Failed to generate text', error);
-      
+      logger.error("Failed to generate text", error);
+
       throw new LLMError(
         `Failed to generate text: ${error.message}`,
         this.provider,
@@ -161,18 +199,42 @@ export class VercelAIClient implements LLMClient {
     }
   }
 
-  private buildMessages(prompt: string, images?: string[]): any[] {
-    const content: any[] = [{ type: 'text', text: prompt }];
+  private buildMessages(
+    prompt: string,
+    images?: (string | Buffer | Uint8Array)[]
+  ): Message[] {
+    const content: MessageContent[] = [{ type: "text", text: prompt }];
 
     if (images && images.length > 0) {
       for (const image of images) {
+        let imageStr: string;
+
+        if (typeof image === "string") {
+          imageStr = image;
+        } else if (Buffer.isBuffer(image)) {
+          imageStr = image.toString("base64");
+        } else if (image instanceof Uint8Array) {
+          imageStr = Buffer.from(image).toString("base64");
+        } else {
+          // This case should never happen due to type constraints
+          imageStr = String(image);
+        }
+
         content.push({
-          type: 'image',
-          image: image.startsWith('data:') ? image : `data:image/png;base64,${image}`,
+          type: "image",
+          image: imageStr.startsWith("data:")
+            ? imageStr
+            : `data:image/png;base64,${imageStr}`,
         });
       }
     }
 
-    return [{ role: 'user' as const, content }];
+    return [
+      {
+        id: randomUUID(),
+        role: "user" as const,
+        content: content as any,
+      },
+    ];
   }
 }

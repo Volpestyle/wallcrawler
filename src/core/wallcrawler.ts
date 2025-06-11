@@ -1,160 +1,116 @@
-import { Browser, BrowserContext, chromium, firefox, webkit } from 'playwright';
-import { WallCrawlerConfig, defaultConfig } from '../types/config';
+import { WallCrawlerConfig } from '../types/config';
 import { WallCrawlerPage } from '../types/page';
 import { createLogger } from '../utils/logger';
-import { DefaultCDPSessionManager } from './cdp-session-manager';
-import { DefaultNetworkMonitor } from './network-monitor';
-import { createWallCrawlerPage } from './wallcrawler-page';
 import { LLMClientFactory } from '../llm/client-factory';
 import { LLMClient } from '../types/llm';
+import { InfrastructureProvider, InterventionEvent, BrowserConfig } from '../types/infrastructure';
+import { SessionManager } from './session-manager';
+import { CacheManager } from './cache-manager';
 import { randomUUID } from 'crypto';
 
 const logger = createLogger('core');
 
+export interface CreatePageOptions extends BrowserConfig {
+  checkpointId?: string;
+}
+
 export class WallCrawler {
-  private browser: Browser | null = null;
-  private context: BrowserContext | null = null;
   private config: WallCrawlerConfig;
-  private cdpSessionManager: DefaultCDPSessionManager;
+  private provider: InfrastructureProvider;
+  private sessionManager: SessionManager;
+  private cacheManager: CacheManager;
   private llmClient: LLMClient;
   private sessionId: string;
 
-  constructor(config?: Partial<WallCrawlerConfig>) {
-    this.config = { ...defaultConfig, ...config };
+  constructor(config: WallCrawlerConfig) {
+    this.config = config;
+    this.provider = config.provider;
     this.sessionId = randomUUID();
-    this.cdpSessionManager = new DefaultCDPSessionManager();
+    this.sessionManager = new SessionManager();
+    this.cacheManager = new CacheManager(this.config.features.caching.maxSize);
     
     // Initialize LLM client
     this.llmClient = LLMClientFactory.create(this.config.llm);
     
+    // Set infrastructure provider
+    this.sessionManager.setProvider(this.provider);
+    this.cacheManager.setProvider(this.provider);
+    
     logger.info('WallCrawler initialized', {
-      mode: this.config.mode,
       provider: this.config.llm.provider,
       model: this.config.llm.model,
       sessionId: this.sessionId,
     });
   }
 
-  async launch(): Promise<void> {
-    if (this.browser) {
-      logger.warn('Browser already launched');
-      return;
-    }
 
+  async createPage(options?: CreatePageOptions): Promise<WallCrawlerPage> {
+    const config: BrowserConfig = {
+      sessionId: options?.sessionId || this.sessionId,
+      headless: options?.headless ?? this.config.browser.headless,
+      viewport: options?.viewport ?? this.config.browser.viewport,
+      userAgent: options?.userAgent ?? this.config.browser.userAgent,
+      locale: options?.locale ?? this.config.browser.locale,
+      timezone: options?.timezone ?? this.config.browser.timezone,
+      timeout: options?.timeout ?? this.config.browser.timeout,
+    };
+    
+    const page = await this.provider.createBrowser(config);
+    logger.info('Page created', { sessionId: page.sessionId });
+    return page;
+  }
+
+  async handleInterventionDetected(
+    page: WallCrawlerPage,
+    event: InterventionEvent
+  ): Promise<void> {
     try {
-      // Launch browser based on config
-      const browserType = process.env.BROWSER || 'chromium';
-      const launchOptions = {
-        headless: this.config.browser.headless,
-        timeout: this.config.browser.timeout,
-      };
-
-      switch (browserType) {
-        case 'firefox':
-          this.browser = await firefox.launch(launchOptions);
-          break;
-        case 'webkit':
-          this.browser = await webkit.launch(launchOptions);
-          break;
-        default:
-          this.browser = await chromium.launch(launchOptions);
+      // Save current state as checkpoint
+      const checkpoint = await this.sessionManager.saveCheckpoint(page);
+      if (!checkpoint) {
+        throw new Error('Failed to create checkpoint for intervention');
       }
+      
+      // Trigger intervention through provider
+      const session = await this.provider.handleIntervention({
+        ...event,
+        checkpointReference: checkpoint,
+      } as any);
 
-      // Create browser context with configuration
-      this.context = await this.browser.newContext({
-        viewport: this.config.browser.viewport,
-        userAgent: this.config.browser.userAgent,
-        locale: this.config.browser.locale,
-        timezoneId: this.config.browser.timezone,
+      logger.info('Intervention session created', { 
+        sessionId: session.sessionId,
+        interventionId: session.interventionId,
+        portalUrl: session.portalUrl
       });
 
-      // Set default timeout
-      this.context.setDefaultTimeout(this.config.browser.timeout);
-
-      logger.info('Browser launched successfully', {
-        browserType,
-        headless: this.config.browser.headless,
-      });
-    } catch (error) {
-      logger.error('Failed to launch browser', error);
-      throw error;
-    }
-  }
-
-  async newPage(): Promise<WallCrawlerPage> {
-    if (!this.context) {
-      throw new Error('Browser not launched. Call launch() first.');
-    }
-
-    try {
-      // Create new page
-      const page = await this.context.newPage();
+      // Wait for intervention completion
+      const result = await this.provider.waitForIntervention(session.sessionId);
       
-      // Create CDP session
-      const cdpSession = await this.cdpSessionManager.createSession(page);
-      
-      // Enable required CDP domains
-      await this.cdpSessionManager.enableDomains(cdpSession, [
-        'Runtime',
-        'Network',
-        'Page',
-        'DOM',
-        'Accessibility',
-      ]);
-
-      // Initialize network monitor
-      const networkMonitor = new DefaultNetworkMonitor();
-      await networkMonitor.initialize(cdpSession);
-
-      // Create enhanced page with proxy
-      const wallcrawlerPage = createWallCrawlerPage(
-        page,
-        cdpSession,
-        networkMonitor,
-        this.llmClient,
-        this.config,
-        this.sessionId
-      );
-
-      logger.info('New page created', { sessionId: this.sessionId });
-      
-      return wallcrawlerPage;
-    } catch (error) {
-      logger.error('Failed to create new page', error);
-      throw error;
-    }
-  }
-
-  async close(): Promise<void> {
-    try {
-      // Clean up CDP sessions
-      await this.cdpSessionManager.cleanup();
-
-      // Close context and browser
-      if (this.context) {
-        await this.context.close();
-        this.context = null;
+      if (result.completed) {
+        logger.info('Intervention completed successfully', {
+          sessionId: session.sessionId,
+          action: result.action
+        });
+        
+        // Resume is handled by provider during next createPage call
+        logger.info('Ready to resume from checkpoint on next page creation');
+      } else {
+        throw new Error('Intervention failed or was cancelled');
       }
-
-      if (this.browser) {
-        await this.browser.close();
-        this.browser = null;
-      }
-
-      logger.info('WallCrawler closed', { sessionId: this.sessionId });
     } catch (error) {
-      logger.error('Error during close', error);
+      logger.error('Failed to handle intervention', error);
       throw error;
     }
   }
 
-  // Getters for internal state
-  getBrowser(): Browser | null {
-    return this.browser;
-  }
-
-  getContext(): BrowserContext | null {
-    return this.context;
+  async destroySession(sessionId: string): Promise<void> {
+    try {
+      await this.provider.destroyBrowser(sessionId);
+      logger.info('Session destroyed', { sessionId });
+    } catch (error) {
+      logger.error('Error destroying session', error);
+      throw error;
+    }
   }
 
   getConfig(): WallCrawlerConfig {
@@ -165,7 +121,19 @@ export class WallCrawler {
     return this.sessionId;
   }
 
-  isConnected(): boolean {
-    return this.browser?.isConnected() ?? false;
+
+  // Cache access methods
+  getCache(): CacheManager {
+    return this.cacheManager;
+  }
+
+  // Session management access
+  getSessionManager(): SessionManager {
+    return this.sessionManager;
+  }
+
+  // Provider access
+  getProvider(): InfrastructureProvider {
+    return this.provider;
   }
 }

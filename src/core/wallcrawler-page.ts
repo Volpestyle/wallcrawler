@@ -1,17 +1,16 @@
-import { Page, CDPSession } from 'playwright';
-import { WallCrawlerPage } from '../types/page';
-import { WallCrawlerConfig } from '../types/config';
-import { NetworkMonitor } from '../types/cdp';
-import { LLMClient } from '../types/llm';
-import { ActOptions, ExtractOptions, ObserveResult } from '../types/handlers';
-import { createLogger } from '../utils/logger';
-import { ActHandler } from '../handlers/act-handler';
-import { ExtractHandler } from '../handlers/extract-handler';
-import { ObserveHandler } from '../handlers/observe-handler';
-import { SessionManager } from '../aws/session-manager';
-import { DebugManager } from '../utils/debug-manager';
+import { Page, CDPSession } from "playwright";
+import { WallCrawlerPage } from "../types/page";
+import { WallCrawlerConfig } from "../types/config";
+import { NetworkMonitor } from "../types/cdp";
+import { LLMClient } from "../types/llm";
+import { ActOptions, ExtractOptions } from "../types/handlers";
+import { createLogger } from "../utils/logger";
+import { ActHandler } from "../handlers/act-handler";
+import { ExtractHandler } from "../handlers/extract-handler";
+import { ObserveHandler } from "../handlers/observe-handler";
+import { DebugManager } from "../utils/debug-manager";
 
-const logger = createLogger('page');
+const logger = createLogger("page");
 
 export function createWallCrawlerPage(
   page: Page,
@@ -22,72 +21,82 @@ export function createWallCrawlerPage(
   sessionId: string
 ): WallCrawlerPage {
   // Create handlers
-  const actHandler = new ActHandler(page, cdpSession, networkMonitor, llmClient, config);
-  const extractHandler = new ExtractHandler(page, cdpSession, llmClient, config);
-  const observeHandler = new ObserveHandler(page, cdpSession, llmClient, config);
-  const sessionManager = new SessionManager(config, sessionId);
+  const actHandler = new ActHandler(
+    page,
+    cdpSession,
+    networkMonitor,
+    llmClient,
+    config
+  );
+  const extractHandler = new ExtractHandler(
+    page,
+    cdpSession,
+    llmClient,
+    config
+  );
+  const observeHandler = new ObserveHandler(
+    page,
+    cdpSession,
+    llmClient,
+    config
+  );
   const debugManager = new DebugManager(page, cdpSession);
 
   // Track action history
-  const actionHistory: Array<{ action: string; timestamp: number; details: any }> = [];
+  const actionHistory: Array<{
+    action: string;
+    timestamp: number;
+    details: any;
+  }> = [];
 
   // Create proxy handler
   const proxyHandler: ProxyHandler<Page> = {
-    get(target: Page, prop: string | symbol, receiver: any): any {
+    get(target: Page, prop: string | symbol): any {
       // Handle WallCrawlerPage-specific methods
       switch (prop) {
-        case 'act':
+        case "act":
           return async (instruction: string, options?: ActOptions) => {
-            logger.info('Executing act', { instruction, options });
+            logger.info("Executing act", { instruction, options });
             actionHistory.push({
-              action: 'act',
+              action: "act",
               timestamp: Date.now(),
               details: { instruction, options },
             });
             return actHandler.execute(instruction, options);
           };
 
-        case 'extract':
+        case "extract":
           return async <T>(options: ExtractOptions<T>) => {
-            logger.info('Executing extract', { instruction: options.instruction });
+            logger.info("Executing extract", {
+              instruction: options.instruction,
+            });
             actionHistory.push({
-              action: 'extract',
+              action: "extract",
               timestamp: Date.now(),
               details: options,
             });
             return extractHandler.extract(options);
           };
 
-        case 'observe':
+        case "observe":
           return async (instruction?: string) => {
-            logger.info('Executing observe', { instruction });
+            logger.info("Executing observe", { instruction });
             actionHistory.push({
-              action: 'observe',
+              action: "observe",
               timestamp: Date.now(),
               details: { instruction },
             });
             return observeHandler.observe(instruction);
           };
 
-        case 'checkpoint':
-          return async () => {
-            logger.info('Creating checkpoint');
-            return sessionManager.checkpoint(page);
-          };
 
-        case 'restore':
-          return async (checkpointId: string) => {
-            logger.info('Restoring from checkpoint', { checkpointId });
-            return sessionManager.restore(checkpointId, page);
-          };
-
-        case 'debugDom':
+        case "debugDom":
           return async (filepath: string) => {
-            logger.info('Exporting debug DOM', { filepath });
+            logger.info("Exporting debug DOM", { filepath });
             return debugManager.exportDom(filepath);
           };
 
-        case 'getMetrics':
+        case "getMetrics":
           return async () => {
             return debugManager.getMetrics();
           };
@@ -95,43 +104,62 @@ export function createWallCrawlerPage(
         // Default: pass through to original page
         default:
           const value = target[prop as keyof Page];
-          
+
           // If it's a function, wrap it to add settlement detection
-          if (typeof value === 'function') {
+          if (typeof value === "function") {
             return async (...args: any[]) => {
               const methodName = String(prop);
-              
+
               // List of methods that should trigger settlement detection
               const settlementMethods = [
-                'goto', 'click', 'fill', 'type', 'press', 'selectOption',
-                'check', 'uncheck', 'hover', 'tap', 'dragAndDrop'
+                "goto",
+                "click",
+                "fill",
+                "type",
+                "press",
+                "selectOption",
+                "check",
+                "uncheck",
+                "hover",
+                "tap",
+                "dragAndDrop",
               ];
-              
+
               if (settlementMethods.includes(methodName)) {
                 logger.debug(`Intercepted ${methodName} call`);
-                
+
                 // Execute the original method
-                const result = await value.apply(target, args);
-                
+                const boundMethod = Reflect.get(target, prop).bind(target);
+                const result = await boundMethod(...args);
+
                 // Wait for network settlement
-                if (config.features.requestInterception) {
-                  await networkMonitor.waitForSettlement();
+                if (
+                  config.features.requestInterception &&
+                  "waitForSettlement" in networkMonitor &&
+                  typeof (
+                    networkMonitor as { waitForSettlement: () => Promise<void> }
+                  ).waitForSettlement === "function"
+                ) {
+                  await (
+                    networkMonitor as { waitForSettlement: () => Promise<void> }
+                  ).waitForSettlement();
                 }
-                
+
                 actionHistory.push({
                   action: methodName,
                   timestamp: Date.now(),
                   details: { args },
                 });
-                
+
                 return result;
               }
-              
+
               // For other methods, just pass through
-              return value.apply(target, args);
+              const boundMethod = Reflect.get(target, prop).bind(target);
+              return boundMethod(...args);
             };
           }
-          
+
           return value;
       }
     },
@@ -144,8 +172,16 @@ export function createWallCrawlerPage(
 
     // Handle 'in' operator
     has(target: Page, prop: string | symbol): boolean {
-      return prop in target || 
-        ['act', 'extract', 'observe', 'checkpoint', 'restore', 'debugDom', 'getMetrics'].includes(String(prop));
+      return (
+        prop in target ||
+        [
+          "act",
+          "extract",
+          "observe",
+          "debugDom",
+          "getMetrics",
+        ].includes(String(prop))
+      );
     },
   };
 

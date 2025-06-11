@@ -52,6 +52,11 @@ class WallCrawlerLogger implements Logger {
   }
 
   private log(level: 0 | 1 | 2, message: string, auxiliary?: Record<string, any>): void {
+    // Skip all network logs except errors
+    if (this.category === 'network' && level > 0) {
+      return;
+    }
+    
     const entry: WallCrawlerLogEntry = {
       timestamp: new Date().toISOString(),
       level,
