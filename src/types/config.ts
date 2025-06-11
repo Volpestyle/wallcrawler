@@ -1,3 +1,5 @@
+import { InfrastructureProvider } from './infrastructure';
+
 export type ModelProvider = 
   | 'openai'
   | 'anthropic'
@@ -14,8 +16,8 @@ export type ModelProvider =
   | 'cerebras';
 
 export interface WallCrawlerConfig {
-  // Environment
-  mode: 'LOCAL' | 'AWS';
+  // Infrastructure Provider (required)
+  provider: InfrastructureProvider;
 
   // LLM Configuration
   llm: {
@@ -49,37 +51,4 @@ export interface WallCrawlerConfig {
     };
   };
 
-  // AWS-specific
-  aws?: {
-    region: string;
-    sessionTable: string;
-    artifactBucket: string;
-    checkpointInterval: number; // ms
-  };
 }
-
-// Default configuration
-export const defaultConfig: WallCrawlerConfig = {
-  mode: 'LOCAL',
-  llm: {
-    provider: 'openai',
-    model: 'gpt-4o',
-    timeout: 30000,
-    maxRetries: 3,
-  },
-  browser: {
-    headless: false,
-    viewport: { width: 1280, height: 720 },
-    timeout: 30000,
-  },
-  features: {
-    selfHeal: true,
-    captchaHandling: false,
-    requestInterception: true,
-    caching: {
-      enabled: true,
-      ttl: 300, // 5 minutes
-      maxSize: 1000,
-    },
-  },
-};

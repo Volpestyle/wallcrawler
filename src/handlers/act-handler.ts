@@ -13,10 +13,12 @@ import { retry } from '../utils/retry';
 const logger = createLogger('act');
 
 const ActionSchema = z.object({
-  action: z.enum(['click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover']),
-  selector: z.string().describe('The best selector for the target element'),
-  value: z.string().optional().describe('Value for fill/type/select actions'),
-  confidence: z.number().min(0).max(1).describe('Confidence score for this action'),
+  actions: z.array(z.object({
+    action: z.enum(['click', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'hover']),
+    selector: z.string().optional().describe('The selector for the target element (not needed for press)'),
+    value: z.string().optional().describe('Value for fill/type/select/press actions'),
+  })).describe('List of actions to perform in sequence'),
+  confidence: z.number().min(0).max(1).describe('Overall confidence score for this action plan'),
 });
 
 export class ActHandler implements IActHandler {
@@ -59,7 +61,10 @@ export class ActHandler implements IActHandler {
           // Take screenshot if requested
           let screenshotBase64: string | undefined;
           if (screenshot || this.config.llm.provider === 'anthropic') {
-            screenshotBase64 = await this.page.screenshot({ encoding: 'base64' });
+            const screenshotResult = await this.page.screenshot({ encoding: 'base64' });
+            screenshotBase64 = typeof screenshotResult === 'string' 
+              ? screenshotResult 
+              : screenshotResult.toString('base64');
           }
 
           // Generate action using LLM
@@ -72,10 +77,33 @@ export class ActHandler implements IActHandler {
             temperature: 0.1, // Low temperature for more deterministic actions
           });
 
-          logger.debug('Generated action', action);
+          logger.debug('Generated action plan', {
+            instruction,
+            url: this.page.url(),
+            actionCount: action.actions.length,
+            actions: action.actions.map(a => ({
+              action: a.action,
+              selector: a.selector?.substring(0, 50) + (a.selector && a.selector.length > 50 ? '...' : ''),
+              value: a.value
+            })),
+            confidence: action.confidence,
+            topCandidates: candidates.slice(0, 3).map(c => ({ 
+              selector: c.selector.substring(0, 50), 
+              text: c.text?.substring(0, 30), 
+              tagName: c.tagName 
+            }))
+          });
 
-          // Execute the action
-          await this.executeAction(action);
+          // Execute all actions in sequence
+          for (let i = 0; i < action.actions.length; i++) {
+            const singleAction = action.actions[i];
+            logger.debug(`Executing action ${i + 1} of ${action.actions.length}`, {
+              action: singleAction.action,
+              selector: singleAction.selector,
+              value: singleAction.value
+            });
+            await this.executeAction(singleAction);
+          }
 
           // Wait for settlement based on strategy
           if (settlementStrategy !== 'none') {
@@ -126,12 +154,17 @@ Page title: ${domState.title}
 Available elements (top ${candidates.length} candidates):
 ${candidates.map((el, i) => `${i + 1}. ${this.formatElement(el)}`).join('\n')}
 
-Analyze the elements and determine:
-1. Which element best matches the instruction
-2. What action to perform (click, fill, type, etc.)
-3. Any value needed for the action
+Analyze the instruction and determine what actions are needed to fulfill it.
 
-Return the most appropriate action to fulfill the instruction.`;
+Important guidelines:
+- You can return multiple actions that will be executed in sequence
+- For search operations, you might need both "fill" and "press" actions
+- Example: "type 'hello' and press enter" → [{action: "fill", selector: "...", value: "hello"}, {action: "press", value: "Enter"}]
+- For "press" actions without a specific element (like Enter, Escape), omit the selector
+- Common key names: "Enter", "Tab", "Escape", "ArrowDown", "ArrowUp"
+- Prefer "fill" over "type" for text input as it's more reliable
+
+Return a sequence of actions that will accomplish the user's instruction.`;
   }
 
   private formatElement(element: any): string {
@@ -148,50 +181,58 @@ Return the most appropriate action to fulfill the instruction.`;
     return parts.join(', ');
   }
 
-  private async executeAction(action: z.infer<typeof ActionSchema>): Promise<void> {
+  private async executeAction(action: { action: string; selector?: string; value?: string }): Promise<void> {
     const { action: actionType, selector, value } = action;
     
-    logger.debug('Executing action', { actionType, selector, value });
+    logger.debug('Executing single action', { actionType, selector, value, url: this.page.url() });
 
-    // Wait for selector with timeout
-    const element = await this.page.locator(selector).first();
-    await element.waitFor({ state: 'visible', timeout: 5000 });
+    // For press actions, we don't need a selector
+    let element;
+    if (selector) {
+      element = await this.page.locator(selector).first();
+      await element.waitFor({ state: 'visible', timeout: 5000 });
+    }
 
     switch (actionType) {
       case 'click':
-        await element.click();
+        await element!.click();
         break;
       
       case 'fill':
         if (!value) throw new Error('Fill action requires a value');
-        await element.fill(value);
+        await element!.fill(value);
         break;
       
       case 'type':
         if (!value) throw new Error('Type action requires a value');
-        await element.type(value);
+        await element!.type(value);
         break;
       
       case 'press':
         if (!value) throw new Error('Press action requires a value');
-        await element.press(value);
+        // Press can be global (like Enter) or on a specific element
+        if (element) {
+          await element.press(value);
+        } else {
+          await this.page.keyboard.press(value);
+        }
         break;
       
       case 'select':
         if (!value) throw new Error('Select action requires a value');
-        await element.selectOption(value);
+        await element!.selectOption(value);
         break;
       
       case 'check':
-        await element.check();
+        await element!.check();
         break;
       
       case 'uncheck':
-        await element.uncheck();
+        await element!.uncheck();
         break;
       
       case 'hover':
-        await element.hover();
+        await element!.hover();
         break;
       
       default:
