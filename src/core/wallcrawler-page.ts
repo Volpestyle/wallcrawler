@@ -8,6 +8,7 @@ import { ActHandler } from "../handlers/act-handler";
 import { ExtractHandler } from "../handlers/extract-handler";
 import { ObserveHandler } from "../handlers/observe-handler";
 import { DebugManager } from "../utils/debug-manager";
+import { InterventionDetector } from "./intervention-detector";
 import {
   WallCrawlerNotInitializedError,
   HandlerNotInitializedError,
@@ -75,12 +76,18 @@ export function createWallCrawlerPage(
   cdpSession: CDPSession,
   llmClient: LLMClient,
   config: WallCrawlerConfig,
-  sessionId: string
+  sessionId: string,
+  infrastructureProvider?: any
 ): WallCrawlerPage {
   // State management
   let initialized = false;
   const cdpClients = new WeakMap<Page | Frame, CDPSession>();
   const domSettleTimeoutMs = config.browser?.timeout || 30000;
+
+  // Intervention detection
+  const interventionDetector = infrastructureProvider ? 
+    new InterventionDetector(llmClient, sessionId) : 
+    null;
 
   // Store the main CDP session
   cdpClients.set(page, cdpSession);
@@ -90,7 +97,9 @@ export function createWallCrawlerPage(
     page,
     cdpSession,
     llmClient,
-    config
+    config,
+    sessionId,
+    infrastructureProvider
   );
   const extractHandler = new ExtractHandler(
     llmClient,
@@ -98,7 +107,9 @@ export function createWallCrawlerPage(
   );
   const observeHandler = new ObserveHandler(
     llmClient,
-    config
+    config,
+    sessionId,
+    infrastructureProvider
   );
   const debugManager = new DebugManager(page, cdpSession);
 
@@ -437,6 +448,39 @@ export function createWallCrawlerPage(
             return debugManager.getMetrics();
           };
 
+        case "checkForIntervention":
+          return async (errorContext?: string) => {
+            if (!interventionDetector || !infrastructureProvider) {
+              logger.debug("No intervention support available");
+              return false;
+            }
+
+            try {
+              const interventionEvent = await interventionDetector.detectIntervention(
+                target as any, // Will be converted to WallCrawlerPage interface
+                [], // No action history available at page level
+                errorContext
+              );
+
+              if (interventionEvent) {
+                logger.info("Intervention detected via checkForIntervention", {
+                  type: interventionEvent.type,
+                  confidence: interventionEvent.context.confidence,
+                });
+
+                await infrastructureProvider.handleIntervention(interventionEvent);
+                return true;
+              }
+
+              return false;
+            } catch (error) {
+              logger.error("Failed to check for intervention", {
+                error: (error as Error).message,
+              });
+              return false;
+            }
+          };
+
         case "goto":
           // Enhanced navigation: adds automatic DOM settlement waiting
           const originalGoto = Reflect.get(target, prop).bind(target);
@@ -529,6 +573,7 @@ export function createWallCrawlerPage(
           "disableCDP",
           "encodeWithFrameId",
           "waitForCaptchaSolve",
+          "checkForIntervention",
           "debugDom",
           "getMetrics",
         ].includes(String(prop))

@@ -39,6 +39,9 @@ export interface WallCrawlerPage extends Page {
   // Captcha support
   waitForCaptchaSolve(timeoutMs?: number): Promise<void>;
 
+  // Intervention support
+  checkForIntervention(errorContext?: string): Promise<boolean>;
+
   // Debugging
   debugDom(filepath: string): Promise<void>;
   getMetrics(): Promise<PageMetrics>;
