@@ -1,10 +1,10 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export interface LLMClient {
   generateObject<T>(options: {
     prompt: string;
     schema: z.ZodSchema<T>;
-    images?: string[]; // base64 encoded
+    images?: (string | Buffer | Uint8Array)[];
     temperature?: number;
     maxTokens?: number;
   }): Promise<T>;

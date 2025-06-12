@@ -1,298 +1,228 @@
-import { Page, CDPSession } from 'playwright';
-import { z } from 'zod';
-import { ExtractHandler as IExtractHandler, ExtractOptions } from '../types/handlers';
-import { LLMClient } from '../types/llm';
-import { WallCrawlerConfig } from '../types/config';
-import { createLogger } from '../utils/logger';
-import { DOMProcessor } from '../dom/processor';
-import { ValidationError } from '../types/errors';
+import { z, ZodTypeAny } from "zod";
+import {
+  ExtractHandler as IExtractHandler,
+  ExtractOptions,
+} from "../types/handlers";
+import { LLMClient } from "../types/llm";
+import { WallCrawlerConfig } from "../types/config";
+import { createLogger } from "../utils/logger";
+import { WallCrawlerPage } from "../types/page";
+import { DOMProcessor } from "../dom/processor";
+import { ValidationError, TimeoutError } from "../types/errors";
+import { transformSchema, injectUrls } from "../utils/schema-transform";
+import { pageTextSchema } from "../types/page";
 
-const logger = createLogger('extract');
+const logger = createLogger("extract");
 
 export class ExtractHandler implements IExtractHandler {
-  private domProcessor: DOMProcessor;
+  private domProcessor!: DOMProcessor;
+  private wallCrawlerPage!: WallCrawlerPage;
 
   constructor(
-    private page: Page,
-    private cdpSession: CDPSession,
     private llmClient: LLMClient,
     private config: WallCrawlerConfig
-  ) {
-    this.domProcessor = new DOMProcessor(page, cdpSession);
+  ) {}
+
+  init(wallCrawlerPage: WallCrawlerPage): void {
+    this.wallCrawlerPage = wallCrawlerPage;
+    this.domProcessor = new DOMProcessor(wallCrawlerPage);
   }
 
-  async extract<T>(options: ExtractOptions<T>): Promise<T> {
+  async extract<T>(options?: ExtractOptions<T>): Promise<T> {
+    // Handle no-arguments case like Stagehand - return page text
+    if (!options || (!options.instruction && !options.schema)) {
+      logger.info("Extracting entire page text");
+      return this.extractPageText() as T;
+    }
+
     const {
       instruction,
       schema,
-      mode = 'hybrid',
-      includeMetadata = false,
-      maxDomSize = 50000,
+      timeoutMs,
+      selector,
     } = options;
 
-    logger.info('Extracting data', { instruction, mode });
-
-    try {
-      // Transform schema to handle URL fields
-      const { transformedSchema, urlPaths } = this.transformSchema(schema);
-
-      // Get content based on mode
-      let content: string;
-      let images: string[] | undefined;
-
-      switch (mode) {
-        case 'text':
-          content = await this.getTextContent(maxDomSize);
-          break;
-        
-        case 'visual':
-          content = await this.getVisualContent();
-          const screenshot = await this.page.screenshot({ encoding: 'base64' });
-          images = [screenshot];
-          break;
-        
-        case 'hybrid':
-        default:
-          content = await this.getHybridContent(maxDomSize);
-          if (this.config.llm.provider === 'anthropic' || this.config.llm.provider === 'openai') {
-            const screenshot = await this.page.screenshot({ encoding: 'base64' });
-            images = [screenshot];
-          }
-          break;
-      }
-
-      // Build extraction prompt
-      const prompt = this.buildPrompt(instruction, content, includeMetadata);
-
-      // Extract data using LLM
-      const extracted = await this.llmClient.generateObject({
-        prompt,
-        schema: transformedSchema,
-        images,
-        temperature: 0.1, // Low temperature for consistent extraction
-      });
-
-      // Post-process to restore URLs
-      const result = this.restoreUrls(extracted, urlPaths, content);
-
-      // Validate against original schema
-      const validated = schema.parse(result);
-
-      logger.info('Data extracted successfully', {
-        instruction,
-        fields: Object.keys(validated as any),
-      });
-
-      return validated;
-    } catch (error) {
-      logger.error('Failed to extract data', error, { instruction });
-      
-      if (error instanceof z.ZodError) {
-        throw new ValidationError('Extracted data failed schema validation', error.errors);
-      }
-      
-      throw error;
-    }
-  }
-
-  private transformSchema(schema: z.ZodSchema<any>): {
-    transformedSchema: z.ZodSchema<any>;
-    urlPaths: string[];
-  } {
-    const urlPaths: string[] = [];
-    
-    // Deep clone and transform schema
-    const transformedSchema = this.transformZodSchema(schema, '', urlPaths);
-    
-    logger.debug('Schema transformed', { urlPaths });
-    
-    return { transformedSchema, urlPaths };
-  }
-
-  private transformZodSchema(
-    schema: any,
-    path: string,
-    urlPaths: string[]
-  ): any {
-    // Handle different Zod types
-    if (schema instanceof z.ZodString) {
-      // Check if it's a URL string
-      if (schema._def.checks?.some((check: any) => check.kind === 'url')) {
-        urlPaths.push(path);
-        // Transform to number for index reference
-        return z.number().describe(`URL reference index for ${path}`);
-      }
-      return schema;
-    }
-    
-    if (schema instanceof z.ZodObject) {
-      const shape: any = {};
-      const originalShape = schema._def.shape();
-      
-      for (const [key, value] of Object.entries(originalShape)) {
-        shape[key] = this.transformZodSchema(value, path ? `${path}.${key}` : key, urlPaths);
-      }
-      
-      return z.object(shape);
-    }
-    
-    if (schema instanceof z.ZodArray) {
-      return z.array(
-        this.transformZodSchema(schema._def.type, `${path}[]`, urlPaths)
+    if (!instruction || !schema) {
+      throw new ValidationError(
+        "Both instruction and schema are required for structured extraction",
+        []
       );
     }
-    
-    // Return schema unchanged for other types
-    return schema;
+
+    logger.info("Extracting structured data", { instruction });
+
+    const doExtract = async (): Promise<T> => {
+      try {
+        // Wait for DOM to settle
+        await this.wallCrawlerPage._waitForSettledDom();
+
+        // Transform schema to handle URL fields (Stagehand approach)
+        const [transformedSchema, urlPaths] = transformSchema(schema);
+
+        // Get accessibility tree content like Stagehand
+        const { content, urlMapping } = await this.getAccessibilityContent(selector);
+
+        // Build extraction prompt
+        const prompt = this.buildExtractionPrompt(instruction, content);
+
+        // Two-phase extraction like Stagehand
+        const extractedData = await this.performExtraction(prompt, transformedSchema);
+        const metadata = await this.extractMetadata(instruction, extractedData);
+
+        // Post-process to restore URLs
+        for (const { segments } of urlPaths) {
+          injectUrls(extractedData, segments, urlMapping);
+        }
+
+        // Validate against original schema
+        const validated = schema.parse(extractedData);
+
+        logger.info("Data extracted successfully", {
+          instruction,
+          completed: metadata.completed,
+          fields: Object.keys(validated as any),
+        });
+
+        return validated;
+      } catch (error) {
+        logger.error("Failed to extract data", error, { instruction });
+
+        if (error instanceof z.ZodError) {
+          throw new ValidationError(
+            "Extracted data failed schema validation",
+            error.errors
+          );
+        }
+
+        throw error;
+      }
+    };
+
+    // If no timeout specified, execute directly
+    if (!timeoutMs) {
+      return doExtract();
+    }
+
+    // Race extract against timeout
+    return await Promise.race([
+      doExtract(),
+      new Promise<T>((_, reject) => {
+        setTimeout(() => {
+          logger.error("Extract operation timed out", {
+            timeoutMs,
+            instruction,
+          });
+          reject(
+            new TimeoutError(
+              `Extract operation timed out after ${timeoutMs}ms`,
+              "extract",
+              timeoutMs
+            )
+          );
+        }, timeoutMs);
+      }),
+    ]);
   }
 
-  private async getTextContent(maxSize: number): Promise<string> {
+  private async extractPageText(): Promise<{ page_text: string }> {
+    await this.wallCrawlerPage._waitForSettledDom();
+    
     const dom = await this.domProcessor.getProcessedDOM({
       includeAccessibility: true,
       maxElements: 1000,
     });
 
-    // Build text representation
-    const content = [
-      `Page: ${dom.title}`,
-      `URL: ${dom.url}`,
-      '',
-      'Content:',
-      ...dom.elements
-        .filter(el => el.text && el.visible)
-        .map(el => {
-          const prefix = el.role ? `[${el.role}] ` : '';
-          return `${prefix}${el.text}`;
-        }),
-    ].join('\n');
+    logger.info("Getting accessibility tree data for page text extraction");
+    const outputString = dom.accessibility.simplified;
 
-    return content.substring(0, maxSize);
+    const result = { page_text: outputString };
+    return pageTextSchema.parse(result);
   }
 
-  private async getVisualContent(): Promise<string> {
-    // For visual mode, provide minimal context
-    const title = await this.page.title();
-    const url = this.page.url();
-    
-    return `Page: ${title}\nURL: ${url}\n\nAnalyze the screenshot to extract the requested information.`;
-  }
-
-  private async getHybridContent(maxSize: number): Promise<string> {
+  private async getAccessibilityContent(
+    selector?: string
+  ): Promise<{ content: string; urlMapping: Record<number, string> }> {
     const dom = await this.domProcessor.getProcessedDOM({
       includeAccessibility: true,
-      maxElements: 500, // Fewer elements for hybrid mode
+      maxElements: 1000,
     });
 
-    // Build structured representation
-    const content = [
-      `Page: ${dom.title}`,
-      `URL: ${dom.url}`,
-      '',
-      'Interactive Elements:',
-      ...dom.elements
-        .filter(el => el.interactive && el.visible)
-        .map(el => this.formatElementForExtraction(el)),
-      '',
-      'Text Content:',
-      ...dom.elements
-        .filter(el => el.text && !el.interactive && el.visible)
-        .slice(0, 50)
-        .map(el => el.text),
-    ].join('\n');
-
-    // Collect all URLs from the page
-    const urls = await this.page.evaluate(() => {
-      const urls: string[] = [];
-      document.querySelectorAll('a[href]').forEach((a: any) => {
-        if (a.href && !urls.includes(a.href)) {
-          urls.push(a.href);
-        }
+    // Collect URLs using DOM processor's built-in URL mapping
+    const urlMapping: Record<number, string> = {};
+    
+    // Get URLs from the DOM processor's URL map if available
+    if (dom.accessibility.idToUrl) {
+      Object.entries(dom.accessibility.idToUrl).forEach(([id, url], index) => {
+        urlMapping[index] = url;
       });
-      return urls;
-    });
+    }
 
-    const urlsSection = urls.length > 0 
-      ? `\n\nURLs found on page:\n${urls.map((url, i) => `${i}: ${url}`).join('\n')}`
-      : '';
+    // Build content using accessibility tree (like Stagehand)
+    const content = dom.accessibility.simplified;
 
-    return (content + urlsSection).substring(0, maxSize);
+    logger.info("Getting accessibility tree data for extraction");
+
+    return { content, urlMapping };
   }
 
-  private formatElementForExtraction(element: any): string {
-    const parts = [
-      element.tagName.toUpperCase(),
-      element.role && `role="${element.role}"`,
-      element.text && `"${element.text}"`,
-      element.value && `value="${element.value}"`,
-      element.name && `name="${element.name}"`,
-    ].filter(Boolean);
 
-    return `- ${parts.join(' ')}`;
-  }
-
-  private buildPrompt(
+  private buildExtractionPrompt(
     instruction: string,
-    content: string,
-    includeMetadata: boolean
+    content: string
   ): string {
-    let prompt = `Extract the following information from the page:\n\n${instruction}\n\n`;
-    
-    if (includeMetadata) {
-      prompt += 'Include any relevant metadata or context that might be useful.\n\n';
-    }
-    
-    prompt += `Page content:\n${content}`;
-    
-    return prompt;
+    return `Extract the following information from the page:\n\n${instruction}\n\nPage content:\n${content}`;
   }
 
-  private restoreUrls(data: any, urlPaths: string[], content: string): any {
-    if (urlPaths.length === 0) return data;
-
-    // Extract URLs from content
-    const urlMatches = content.match(/\d+: (https?:\/\/[^\s]+)/g) || [];
-    const urlMap = new Map<number, string>();
+  private async performExtraction<T>(
+    prompt: string,
+    schema: ZodTypeAny
+  ): Promise<T> {
+    const extractStartTime = Date.now();
     
-    urlMatches.forEach(match => {
-      const [index, url] = match.split(': ');
-      urlMap.set(parseInt(index), url);
+    const response = await this.llmClient.generateObject({
+      prompt,
+      schema,
+      temperature: 0.1, // Low temperature for consistent extraction
+    });
+    
+    const extractEndTime = Date.now();
+    logger.debug("Extraction inference completed", {
+      inferenceTimeMs: extractEndTime - extractStartTime,
+    });
+    
+    return response;
+  }
+
+  private async extractMetadata(
+    instruction: string,
+    extractedData: any
+  ): Promise<{ progress: string; completed: boolean }> {
+    const metadataSchema = z.object({
+      progress: z
+        .string()
+        .describe("progress of what has been extracted so far, as concise as possible"),
+      completed: z
+        .boolean()
+        .describe("true if the goal is now accomplished. Use this conservatively, only when sure that the goal has been completed."),
     });
 
-    // Deep clone and restore URLs
-    const result = JSON.parse(JSON.stringify(data));
-    
-    for (const path of urlPaths) {
-      const value = this.getValueByPath(result, path);
-      if (typeof value === 'number' && urlMap.has(value)) {
-        this.setValueByPath(result, path, urlMap.get(value)!);
-      }
-    }
+    const metadataPrompt = `Based on the instruction "${instruction}" and the extracted data below, provide metadata about the extraction:\n\nExtracted data: ${JSON.stringify(extractedData, null, 2)}`;
 
-    return result;
-  }
-
-  private getValueByPath(obj: any, path: string): any {
-    const parts = path.split(/[.\[\]]/).filter(Boolean);
-    let current = obj;
+    const metadataStartTime = Date.now();
     
-    for (const part of parts) {
-      if (current === null || current === undefined) return undefined;
-      current = current[part];
-    }
+    const metadata = await this.llmClient.generateObject({
+      prompt: metadataPrompt,
+      schema: metadataSchema,
+      temperature: 0.1,
+    });
     
-    return current;
-  }
-
-  private setValueByPath(obj: any, path: string, value: any): void {
-    const parts = path.split(/[.\[\]]/).filter(Boolean);
-    let current = obj;
+    const metadataEndTime = Date.now();
+    logger.debug("Metadata extraction completed", {
+      inferenceTimeMs: metadataEndTime - metadataStartTime,
+      progress: metadata.progress,
+      completed: metadata.completed,
+    });
     
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!current[part]) current[part] = {};
-      current = current[part];
-    }
-    
-    current[parts[parts.length - 1]] = value;
+    return metadata;
   }
 }

@@ -106,7 +106,7 @@ export class VercelAIClient implements LLMClient {
   async generateObject<T>(options: {
     prompt: string;
     schema: z.ZodSchema<T>;
-    images?: string[];
+    images?: (string | Buffer | Uint8Array)[];
     temperature?: number;
     maxTokens?: number;
   }): Promise<T> {

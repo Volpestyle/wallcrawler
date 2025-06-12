@@ -70,7 +70,7 @@ export class DefaultNetworkMonitor implements NetworkMonitor {
     // Don't log every request - too noisy
   }
 
-  isSettled(options?: Partial<SettlementOptions>): boolean {
+  isSettled(options: SettlementOptions): boolean {
     const opts = { ...this.options, ...options };
     const now = Date.now();
     const quietTime = now - this.lastActivityTime;
