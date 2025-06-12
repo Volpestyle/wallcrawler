@@ -9,6 +9,8 @@ import { createLogger } from "../utils/logger";
 import { WallCrawlerPage } from "../types/page";
 import { DOMProcessor } from "../dom/processor";
 import { drawObserveOverlay } from "../utils/overlay";
+import { InterventionDetector } from "../core/intervention-detector";
+import { ActionHistoryItem } from "../types/infrastructure";
 
 const logger = createLogger("observe");
 
@@ -45,11 +47,22 @@ const createObserveResultSchema = (returnAction: boolean) => z.object({
 export class ObserveHandler implements IObserveHandler {
   private domProcessor!: DOMProcessor;
   private wallCrawlerPage!: WallCrawlerPage;
+  private interventionDetector?: InterventionDetector;
+  private sessionId?: string;
+  private infrastructureProvider?: any;
 
   constructor(
     private llmClient: LLMClient,
-    private config: WallCrawlerConfig
-  ) {}
+    private config: WallCrawlerConfig,
+    sessionId?: string,
+    infrastructureProvider?: any
+  ) {
+    this.sessionId = sessionId;
+    this.infrastructureProvider = infrastructureProvider;
+    if (sessionId) {
+      this.interventionDetector = new InterventionDetector(this.llmClient, sessionId);
+    }
+  }
 
   init(wallCrawlerPage: WallCrawlerPage): void {
     this.wallCrawlerPage = wallCrawlerPage;
@@ -123,6 +136,31 @@ export class ObserveHandler implements IObserveHandler {
         error: (error as Error).message,
         instruction,
       });
+
+      // Check if the observation failure might indicate intervention needed
+      if (this.interventionDetector && this.infrastructureProvider?.handleIntervention) {
+        try {
+          const interventionEvent = await this.interventionDetector.detectIntervention(
+            this.wallCrawlerPage,
+            [], // No action history for observe
+            (error as Error).message
+          );
+
+          if (interventionEvent) {
+            logger.info("Intervention detected during observation failure", {
+              type: interventionEvent.type,
+              confidence: interventionEvent.context.confidence,
+            });
+
+            await this.infrastructureProvider.handleIntervention(interventionEvent);
+          }
+        } catch (interventionError) {
+          logger.warn("Failed to check for intervention during observation", {
+            error: (interventionError as Error).message,
+          });
+        }
+      }
+
       throw error;
     }
   }

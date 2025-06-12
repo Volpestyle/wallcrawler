@@ -44,7 +44,40 @@ export interface InterventionEvent {
   selector?: string;
   screenshot?: Buffer;
   description: string;
-  context: Record<string, any>;
+  context: InterventionContext;
+}
+
+export interface InterventionContext {
+  // Page context
+  pageTitle: string;
+  currentUrl: string;
+  accessibilityTree?: string;
+  
+  // Action context
+  actionHistory: ActionHistoryItem[];
+  lastAction?: ActionHistoryItem;
+  errorMessage?: string;
+  
+  // Detection context
+  confidence: number; // 0-1 confidence level
+  detectionReason: string;
+  suggestedAction?: string;
+  
+  // Technical context
+  timestamp: number;
+  userAgent?: string;
+  viewport?: { width: number; height: number };
+  
+  // Additional metadata
+  metadata: Record<string, any>;
+}
+
+export interface ActionHistoryItem {
+  action: string;
+  timestamp: number;
+  details: any;
+  success?: boolean;
+  error?: string;
 }
 
 export interface InterventionSession {

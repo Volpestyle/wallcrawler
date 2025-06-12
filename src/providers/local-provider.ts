@@ -99,7 +99,8 @@ export class LocalProvider implements InfrastructureProvider {
       cdpSession,
       llmClient,
       this.config,
-      sessionId
+      sessionId,
+      this // Pass this provider for intervention support
     );
 
     logger.info("Local browser created", { sessionId });
