@@ -1,4 +1,5 @@
 import { Cookie, ViewportSize } from 'playwright';
+import { WallCrawlerPage } from './page';
 
 export interface BrowserState {
   sessionId: string;
@@ -118,10 +119,4 @@ export interface InfrastructureProvider {
   // Optional cache support
   cacheGet?(key: string): Promise<any | null>;
   cacheSet?(key: string, value: any, ttl: number): Promise<void>;
-}
-
-// Forward declaration - will be imported from core
-export interface WallCrawlerPage {
-  sessionId: string;
-  // Other methods will be defined in the actual implementation
 }

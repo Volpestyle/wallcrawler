@@ -1,7 +1,7 @@
 // Main exports
-export { WallCrawler } from './core/wallcrawler';
-export { WallCrawlerPage } from './types/page';
-export { WallCrawlerConfig, ModelProvider, defaultConfig } from './types/config';
+export { WallCrawler } from "./core/wallcrawler";
+export { WallCrawlerPage } from "./types/page";
+export { WallCrawlerConfig, ModelProvider } from "./types/config";
 
 // Handler types
 export {
@@ -10,7 +10,7 @@ export {
   ObserveResult,
   AgentOptions,
   AgentResult,
-} from './types/handlers';
+} from "./types/handlers";
 
 // Error types
 export {
@@ -20,16 +20,13 @@ export {
   TimeoutError,
   ValidationError,
   ElementNotFoundError,
-} from './types/errors';
+} from "./types/errors";
 
 // Logging types
-export { WallCrawlerLogEntry, LogCategory } from './types/logging';
+export { WallCrawlerLogEntry } from "./types/logging";
 
 // Cache types
-export { CacheEntry, CacheManager } from './types/cache';
-
-// AWS types
-export { SessionState, AutomationEvent, AutomationResult } from './types/aws';
+export { CacheEntry, CacheManager } from "./types/cache";
 
 // Zod re-export for schema definitions
-export { z } from 'zod';
+export { z } from "zod";

@@ -120,11 +120,11 @@ export class SessionManager {
       };
 
       // Optionally capture screenshot
-      if (this.provider.saveArtifact) {
+      if (typeof this.provider.saveArtifact === 'function') {
         try {
           state.screenshot = await page.screenshot();
         } catch (error) {
-          logger.warn('Failed to capture screenshot for state', error);
+          logger.warn('Failed to capture screenshot for state', error as Record<string, any>);
         }
       }
 

@@ -1,15 +1,43 @@
-import { Page, Cookie } from 'playwright';
-import { ActOptions, ExtractOptions, ObserveResult } from './handlers';
+import { Page, Cookie, Frame, CDPSession } from "playwright";
+import {
+  ActOptions,
+  ExtractOptions,
+  ObserveResult,
+  ActResult,
+} from "./handlers";
+import z from "zod";
 
 export interface WallCrawlerPage extends Page {
+  // Session identifier
+  sessionId: string;
+
   // AI-powered methods
-  act(instruction: string, options?: ActOptions): Promise<void>;
+  act(instruction: string, options?: ActOptions): Promise<ActResult>;
+  act(options: ActOptions): Promise<ActResult>;
+  act(observeResult: ObserveResult): Promise<ActResult>;
   extract<T>(options: ExtractOptions<T>): Promise<T>;
   observe(instruction?: string): Promise<ObserveResult[]>;
 
   // Session management
   checkpoint(): Promise<void>;
   restore(checkpointId: string): Promise<void>;
+
+  // DOM settlement and CDP
+  _waitForSettledDom(timeoutMs?: number): Promise<void>;
+  getCDPClient(target?: Page | Frame): Promise<CDPSession>;
+  sendCDP<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    target?: Page | Frame
+  ): Promise<T>;
+  enableCDP(domain: string, target?: Page | Frame): Promise<void>;
+  disableCDP(domain: string, target?: Page | Frame): Promise<void>;
+
+  // Frame management
+  encodeWithFrameId(fid: string | undefined, backendId: number): string;
+
+  // Captcha support
+  waitForCaptchaSolve(timeoutMs?: number): Promise<void>;
 
   // Debugging
   debugDom(filepath: string): Promise<void>;
@@ -36,3 +64,7 @@ export interface SessionState {
   lastAction: string;
   checkpointTimestamp: number;
 }
+
+export const pageTextSchema = z.object({
+  page_text: z.string(),
+});
