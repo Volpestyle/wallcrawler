@@ -1,5 +1,3 @@
-import { InfrastructureProvider } from './infrastructure';
-
 export type ModelProvider = 
   | 'openai'
   | 'anthropic'
@@ -16,9 +14,6 @@ export type ModelProvider =
   | 'cerebras';
 
 export interface WallCrawlerConfig {
-  // Infrastructure Provider (required)
-  provider: InfrastructureProvider;
-
   // LLM Configuration
   llm: {
     provider: ModelProvider;
@@ -50,5 +45,4 @@ export interface WallCrawlerConfig {
       maxSize: number; // entries
     };
   };
-
 }

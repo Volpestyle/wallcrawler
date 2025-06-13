@@ -5,13 +5,10 @@ import {
   PortalCommand,
   PortalEvent,
   PortalConfig,
-  PortalStatus,
-  AutomationStatus,
   ActionInfo
 } from "../types/portal";
 import { 
   PortalTransport,
-  PortalTransportConfig,
   CreateSessionConfig,
   PortalAuthInfo
 } from "../types/portal-transport";
@@ -56,7 +53,7 @@ export class PortalManager extends EventEmitter {
       language: config.language || 'en',
       requireAuthentication: config.requireAuthentication !== false,
       allowedOrigins: config.allowedOrigins || ['*'],
-      csrfToken: config.csrfToken
+      ...(config.csrfToken && { csrfToken: config.csrfToken })
     };
   }
 
@@ -82,8 +79,7 @@ export class PortalManager extends EventEmitter {
    */
   async createSession(
     sessionId: string, 
-    userId?: string,
-    auth?: PortalAuthInfo
+    userId?: string
   ): Promise<PortalSession> {
     if (!this.isInitialized || !this.transport) {
       throw new Error("Portal manager not initialized");
@@ -92,7 +88,7 @@ export class PortalManager extends EventEmitter {
     try {
       const sessionConfig: CreateSessionConfig = {
         sessionId,
-        userId,
+        ...(userId && { userId }),
         timeoutMs: this.config.sessionTimeoutMs,
         maxInactivityMs: this.config.maxInactivityMs,
         config: this.config,
@@ -301,7 +297,7 @@ export class PortalManager extends EventEmitter {
   /**
    * Wait for intervention completion
    */
-  async waitForInterventionCompletion(interventionId: string, timeoutMs?: number): Promise<any> {
+  async waitForInterventionCompletion(_interventionId: string, timeoutMs?: number): Promise<any> {
     return new Promise((resolve, reject) => {
       const timeout = timeoutMs || this.config.sessionTimeoutMs;
       let timeoutTimer: NodeJS.Timeout;

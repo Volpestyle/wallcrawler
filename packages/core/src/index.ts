@@ -42,6 +42,7 @@ export { DefaultCDPSessionManager } from './lib/cdp-session-manager';
 export { LLMClientFactory } from './llm/client-factory';
 export { createLogger } from './utils/logger';
 export { PortalManager } from './lib/portal-manager';
+export { DOM_UTILS_SCRIPT } from './dom/dom-utils';
 
 // Zod re-export for schema definitions
 export { z } from 'zod';

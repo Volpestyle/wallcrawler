@@ -19,9 +19,9 @@ export class WallCrawler {
   private cacheManager: CacheManager;
   private sessionId: string;
 
-  constructor(config: WallCrawlerConfig) {
+  constructor(provider: InfrastructureProvider, config: WallCrawlerConfig) {
+    this.provider = provider;
     this.config = config;
-    this.provider = config.provider;
     this.sessionId = randomUUID();
     this.sessionManager = new SessionManager();
     this.cacheManager = new CacheManager(this.config.features.caching.maxSize);
@@ -51,7 +51,7 @@ export class WallCrawler {
       timeout: options?.timeout ?? this.config.browser.timeout,
     };
     
-    const page = await this.provider.createBrowser(config);
+    const page = await this.provider.createBrowser(config, this.config);
     logger.info('Page created', { sessionId: page.sessionId });
     return page;
   }

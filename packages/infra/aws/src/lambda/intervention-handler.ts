@@ -77,8 +77,8 @@ export async function handler(
       context: {
         url: request.interventionEvent.url,
         title: request.interventionEvent.title,
-        screenshot: request.interventionEvent.screenshot,
-        elements: request.interventionEvent.elements
+        elements: request.interventionEvent.elements,
+        ...(request.interventionEvent.screenshot && { screenshot: request.interventionEvent.screenshot })
       },
       priority: getPriorityForType(request.interventionEvent.type)
     };
