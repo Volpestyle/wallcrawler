@@ -18,6 +18,3 @@ export {
 
 // Export the main WallCrawler extension
 export { WallCrawlerAWSProvider } from './wallcrawler-aws-extension';
-
-// Export portal transport
-export { AWSPortalTransport } from './portal-transport';

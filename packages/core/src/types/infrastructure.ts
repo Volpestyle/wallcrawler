@@ -128,7 +128,7 @@ export interface BrowserConfig {
 
 export interface InfrastructureProvider {
   // Core browser operations
-  createBrowser(config: BrowserConfig): Promise<WallCrawlerPage>;
+  createBrowser(config: BrowserConfig, wallcrawlerConfig: import('./config').WallCrawlerConfig): Promise<WallCrawlerPage>;
   destroyBrowser(sessionId: string): Promise<void>;
   
   // State management

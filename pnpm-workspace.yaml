@@ -2,3 +2,4 @@ packages:
   - "packages/core"
   - "packages/infra/*"
   - "packages/deploy/*"
+  - "packages/demos/*"

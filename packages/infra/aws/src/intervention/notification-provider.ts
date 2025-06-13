@@ -33,18 +33,15 @@ export class AWSNotificationProvider implements NotificationProvider {
   private apiGatewayClient?: ApiGatewayManagementApiClient;
   private config?: NotificationConfig;
   private deviceTokensTable: string;
-  private notificationStatusTable: string;
 
   constructor(
     region: string = 'us-east-1',
     deviceTokensTable: string = 'wallcrawler-device-tokens',
-    notificationStatusTable: string = 'wallcrawler-notification-status'
   ) {
     this.snsClient = new SNSClient({ region });
     this.dynamoClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
     this.secretsClient = new SecretsManagerClient({ region });
     this.deviceTokensTable = deviceTokensTable;
-    this.notificationStatusTable = notificationStatusTable;
   }
 
   async initialize(config: NotificationConfig): Promise<void> {
@@ -90,17 +87,17 @@ export class AWSNotificationProvider implements NotificationProvider {
 
     for (const channel of channelPriority) {
       try {
-        const result = await this.sendViaChannel(channel, request, notificationId);
+        const result = await this.sendViaChannel(channel, request);
         channels.push(result);
         
         if (result.status === 'success') {
           // Update last used timestamp for the device
           if (result.deviceId) {
-            await this.updateDeviceLastUsed(request.userId, result.deviceId);
+            await this.updateDeviceLastUsed();
           }
           
           // Record notification status
-          await this.recordNotificationStatus(notificationId, result);
+          await this.recordNotificationStatus();
           
           // If at least one channel succeeds, we can return success
           return {
@@ -233,8 +230,7 @@ export class AWSNotificationProvider implements NotificationProvider {
 
   private async sendViaChannel(
     channel: { type: NotificationChannel['type']; device?: DeviceToken },
-    request: InterventionRequest,
-    notificationId: string
+    request: InterventionRequest
   ): Promise<NotificationChannel> {
     switch (channel.type) {
       case 'push':
@@ -315,7 +311,7 @@ export class AWSNotificationProvider implements NotificationProvider {
     }
 
     // Get active WebSocket connections for the user
-    const connections = await this.getActiveConnections(request.userId);
+    const connections = await this.getActiveConnections();
 
     for (const connectionId of connections) {
       await this.apiGatewayClient.send(new PostToConnectionCommand({
@@ -377,20 +373,17 @@ WallCrawler Team
     `;
   }
 
-  private async updateDeviceLastUsed(userId: string, deviceId: string): Promise<void> {
+  private async updateDeviceLastUsed(): Promise<void> {
     // Update the last used timestamp for the device
     // Implementation would update DynamoDB record
   }
 
-  private async recordNotificationStatus(
-    notificationId: string,
-    channel: NotificationChannel
-  ): Promise<void> {
+  private async recordNotificationStatus(): Promise<void> {
     // Record notification status in DynamoDB
     // Implementation would create a status record
   }
 
-  private async getActiveConnections(userId: string): Promise<string[]> {
+  private async getActiveConnections(): Promise<string[]> {
     // Query DynamoDB for active WebSocket connections
     // Implementation would return connection IDs
     return [];

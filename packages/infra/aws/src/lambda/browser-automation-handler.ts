@@ -1,4 +1,4 @@
-import { WallCrawler } from '@wallcrawler/core';
+import { WallCrawler } from 'wallcrawler';
 import { AWSInfrastructureProvider } from '../providers/aws-infrastructure-provider';
 import { createLogger } from '../utils/logger';
 
@@ -51,21 +51,22 @@ export async function handler(
 
   // Initialize WallCrawler with AWS provider (singleton pattern)
   if (!wallcrawler) {
-    const provider = new AWSInfrastructureProvider({
+    const awsConfig: import('../providers/aws-infrastructure-provider').AWSProviderConfig = {
       region: process.env.AWS_REGION!,
       artifactsBucket: process.env.ARTIFACTS_BUCKET!,
-      interventionFunctionName: process.env.INTERVENTION_FUNCTION,
-      sessionsTable: process.env.SESSIONS_TABLE,
-      checkpointsTable: process.env.CHECKPOINTS_TABLE,
-      cacheTable: process.env.CACHE_TABLE,
-    });
+    };
+    if (process.env.INTERVENTION_FUNCTION) awsConfig.interventionFunctionName = process.env.INTERVENTION_FUNCTION;
+    if (process.env.SESSIONS_TABLE) awsConfig.sessionsTable = process.env.SESSIONS_TABLE;
+    if (process.env.CHECKPOINTS_TABLE) awsConfig.checkpointsTable = process.env.CHECKPOINTS_TABLE;
+    if (process.env.CACHE_TABLE) awsConfig.cacheTable = process.env.CACHE_TABLE;
+    
+    const provider = new AWSInfrastructureProvider(awsConfig);
 
-    wallcrawler = new WallCrawler({
-      provider,
+    wallcrawler = new WallCrawler(provider, {
       llm: {
         provider: process.env.LLM_PROVIDER as any || 'bedrock',
         model: process.env.LLM_MODEL || 'anthropic.claude-3-sonnet-20240229-v1:0',
-        apiKey: process.env.LLM_API_KEY,
+        ...(process.env.LLM_API_KEY && { apiKey: process.env.LLM_API_KEY }),
       },
       browser: {
         headless: true,
@@ -181,16 +182,21 @@ export async function handler(
       taskType: event.task.type,
     });
 
-    return {
+    const response: AutomationResult = {
       success: true,
       sessionId,
       data: result,
       artifacts,
-      checkpoint: checkpointReference ? {
+    };
+    
+    if (checkpointReference) {
+      response.checkpoint = {
         reference: checkpointReference,
         timestamp: checkpointReference.timestamp,
-      } : undefined,
-    };
+      };
+    }
+    
+    return response;
 
   } catch (error: any) {
     logger.error('Task execution failed', {
@@ -209,7 +215,16 @@ export async function handler(
           sessionId,
           url: await page.url(),
           description: error.message,
-          context: { taskType: event.task.type },
+          context: {
+            pageTitle: await page.title(),
+            currentUrl: await page.url(),
+            actionHistory: [],
+            errorMessage: error.message,
+            confidence: 0.8,
+            detectionReason: 'Automation error detected',
+            timestamp: Date.now(),
+            metadata: { taskType: event.task.type }
+          },
         });
         
         // Retry the task after intervention

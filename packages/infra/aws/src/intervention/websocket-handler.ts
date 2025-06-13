@@ -138,23 +138,21 @@ export async function handleMessage(
       return { statusCode: 401, body: 'Connection not found' };
     }
 
-    const { sessionId, userId } = connectionInfo.Item;
+    const { sessionId } = connectionInfo.Item;
 
     // Handle different message types
     switch (validatedMessage.type) {
       case 'user-action':
         await handleUserAction(
           sessionId,
-          validatedMessage.payload.action as InterventionAction,
-          apiGatewayClient
+          validatedMessage.payload.action as InterventionAction
         );
         break;
 
       case 'complete':
         await handleInterventionComplete(
           sessionId,
-          validatedMessage.payload.success,
-          apiGatewayClient
+          validatedMessage.payload.success
         );
         break;
 
@@ -188,8 +186,7 @@ export async function handleMessage(
 
 async function handleUserAction(
   sessionId: string,
-  action: InterventionAction,
-  apiGatewayClient: ApiGatewayManagementApiClient
+  action: InterventionAction
 ): Promise<void> {
   logger.info('Handling user action', { sessionId, action });
 
@@ -223,8 +220,7 @@ async function handleUserAction(
 
 async function handleInterventionComplete(
   sessionId: string,
-  success: boolean,
-  apiGatewayClient: ApiGatewayManagementApiClient
+  success: boolean
 ): Promise<void> {
   logger.info('Intervention complete', { sessionId, success });
 

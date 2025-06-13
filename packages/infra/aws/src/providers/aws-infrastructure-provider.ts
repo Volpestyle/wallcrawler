@@ -1,4 +1,3 @@
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import {
   S3Client,
   PutObjectCommand,
@@ -24,8 +23,8 @@ import {
   InterventionResult,
   Metric,
   MetricQuery,
-} from '@wallcrawler/core/types/infrastructure';
-import { WallCrawlerPage } from '@wallcrawler/core/types/page';
+  WallCrawlerPage,
+} from 'wallcrawler';
 import { WallCrawlerAWSProvider } from '../wallcrawler-aws-extension';
 import { createLogger } from '../utils/logger';
 
@@ -42,7 +41,6 @@ export interface AWSProviderConfig {
 }
 
 export class AWSInfrastructureProvider implements InfrastructureProvider {
-  private lambdaClient: LambdaClient;
   private s3Client: S3Client;
   private dynamoClient: DynamoDBClient;
   private config: AWSProviderConfig;
@@ -57,7 +55,6 @@ export class AWSInfrastructureProvider implements InfrastructureProvider {
       ...config,
     };
 
-    this.lambdaClient = new LambdaClient({ region: config.region });
     this.s3Client = new S3Client({ region: config.region });
     this.dynamoClient = new DynamoDBClient({ region: config.region });
 
@@ -91,10 +88,10 @@ export class AWSInfrastructureProvider implements InfrastructureProvider {
       });
 
       const context = await browser.newContext({
-        viewport: config.viewport,
-        userAgent: config.userAgent,
-        locale: config.locale,
-        timezoneId: config.timezone,
+        viewport: config.viewport || null,
+        ...(config.userAgent && { userAgent: config.userAgent }),
+        ...(config.locale && { locale: config.locale }),
+        ...(config.timezone && { timezoneId: config.timezone }),
       });
 
       const page = await context.newPage();
@@ -366,7 +363,8 @@ export class AWSInfrastructureProvider implements InfrastructureProvider {
       sessionId: event.sessionId,
     });
 
-    return this.extension.handleIntervention(event);
+    // TODO: Implement intervention handling
+    throw new Error('Intervention handling not implemented');
   }
 
   async waitForIntervention(sessionId: string): Promise<InterventionResult> {
@@ -376,7 +374,8 @@ export class AWSInfrastructureProvider implements InfrastructureProvider {
 
     logger.info('Waiting for intervention completion', { sessionId });
 
-    return this.extension.waitForInterventionComplete(sessionId);
+    // TODO: Implement intervention waiting
+    throw new Error('Intervention waiting not implemented');
   }
 
   async recordMetric(metric: Metric): Promise<void> {

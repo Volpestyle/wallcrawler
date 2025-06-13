@@ -19,11 +19,16 @@ import {
   DefaultCDPSessionManager,
   LLMClientFactory,
   createLogger,
+  DOM_UTILS_SCRIPT,
 } from "wallcrawler";
 import * as fs from "fs/promises";
 import * as path from "path";
 
 const logger = createLogger("local-provider");
+
+export interface LocalProviderOptions {
+  storageDir?: string;
+}
 
 /**
  * Local development provider for WallCrawler
@@ -33,12 +38,10 @@ export class LocalProvider implements InfrastructureProvider {
   private browsers: Map<string, Browser> = new Map();
   private pages: Map<string, Page> = new Map();
   private cdpSessionManager = new DefaultCDPSessionManager();
-  private config: WallCrawlerConfig;
   private storageDir: string;
 
-  constructor(config: WallCrawlerConfig, storageDir: string = ".wallcrawler") {
-    this.config = config;
-    this.storageDir = storageDir;
+  constructor(options: LocalProviderOptions = {}) {
+    this.storageDir = options.storageDir || ".wallcrawler";
     this.ensureStorageDir();
   }
 
@@ -56,7 +59,7 @@ export class LocalProvider implements InfrastructureProvider {
     }
   }
 
-  async createBrowser(config: BrowserConfig): Promise<WallCrawlerPage> {
+  async createBrowser(config: BrowserConfig, wallcrawlerConfig: WallCrawlerConfig): Promise<WallCrawlerPage> {
     logger.info("Creating local browser", { sessionId: config.sessionId });
 
     const browser = await chromium.launch({
@@ -72,6 +75,9 @@ export class LocalProvider implements InfrastructureProvider {
     });
 
     const page = await context.newPage();
+
+    // Inject DOM utilities script into the page context
+    await page.addInitScript(DOM_UTILS_SCRIPT);
 
     // Store references
     const sessionId = config.sessionId || this.generateSessionId();
@@ -91,14 +97,14 @@ export class LocalProvider implements InfrastructureProvider {
     ]);
 
     // Create LLM client
-    const llmClient = LLMClientFactory.create(this.config.llm);
+    const llmClient = LLMClientFactory.create(wallcrawlerConfig.llm);
 
     // Create enhanced page with proxy
     const wallcrawlerPage = createWallCrawlerPage(
       page,
       cdpSession,
       llmClient,
-      this.config,
+      wallcrawlerConfig,
       sessionId,
       this // Pass this provider for intervention support
     );
