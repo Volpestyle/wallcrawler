@@ -1,0 +1,40 @@
+{
+  "name": "@wallcrawler/local",
+  "version": "0.1.0",
+  "description": "Local development infrastructure provider for WallCrawler",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Volpestyle/wallcrawler.git",
+    "directory": "packages/local"
+  },
+  "keywords": [
+    "wallcrawler",
+    "local",
+    "development",
+    "infrastructure",
+    "browser-automation"
+  ],
+  "author": "James Volpe",
+  "license": "MIT",
+  "dependencies": {
+    "wallcrawler": "workspace:*",
+    "playwright": "^1.52.0",
+    "pino": "^9.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "peerDependencies": {
+    "wallcrawler": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

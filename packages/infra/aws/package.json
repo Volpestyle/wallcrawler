@@ -1,0 +1,51 @@
+{
+  "name": "@wallcrawler/aws",
+  "version": "0.1.0",
+  "description": "AWS infrastructure package for WallCrawler browser automation framework",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Volpestyle/wallcrawler.git",
+    "directory": "packages/aws"
+  },
+  "keywords": [
+    "wallcrawler",
+    "aws",
+    "lambda",
+    "browser-automation",
+    "intervention"
+  ],
+  "author": "James Volpe",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.826.0",
+    "@aws-sdk/lib-dynamodb": "^3.826.0",
+    "@aws-sdk/client-s3": "^3.826.0",
+    "@aws-sdk/client-sns": "^3.826.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.826.0",
+    "@aws-sdk/client-secrets-manager": "^3.826.0",
+    "@aws-sdk/client-rekognition": "^3.826.0",
+    "@aws-sdk/client-lambda": "^3.826.0",
+    "@aws-sdk/client-eventbridge": "^3.826.0",
+    "wallcrawler": "workspace:*",
+    "aws-lambda": "^1.0.7",
+    "playwright": "^1.52.0",
+    "zod": "^3.25.57",
+    "pino": "^9.7.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.149"
+  },
+  "peerDependencies": {
+    "wallcrawler": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

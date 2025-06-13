@@ -145,3 +145,6 @@ Thumbs.db
 
 # Local storage
 .wallcrawler/
+
+# Internal documentation
+internal-docs/
