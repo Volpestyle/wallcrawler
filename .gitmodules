@@ -1,0 +1,3 @@
+[submodule "packages/stagehand"]
+	path = packages/stagehand
+	url = https://github.com/Volpestyle/stagehand.git

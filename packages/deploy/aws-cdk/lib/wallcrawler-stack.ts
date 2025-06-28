@@ -26,10 +26,11 @@ export class WallCrawlerStack extends cdk.Stack {
       },
     });
 
-    const pushNotificationSecrets = new secretsmanager.Secret(this, 'PushNotificationSecrets', {
-      secretName: 'wallcrawler/push-notifications',
-      description: 'APNS and FCM credentials for push notifications',
-    });
+    // TODO: Enable when push notifications are implemented
+    // const pushNotificationSecrets = new secretsmanager.Secret(this, 'PushNotificationSecrets', {
+    //   secretName: 'wallcrawler/push-notifications',
+    //   description: 'APNS and FCM credentials for push notifications',
+    // });
 
     // DynamoDB Tables
     const sessionsTable = new dynamodb.Table(this, 'SessionsTable', {
@@ -49,13 +50,14 @@ export class WallCrawlerStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
     });
 
-    const deviceTokensTable = new dynamodb.Table(this, 'DeviceTokensTable', {
-      tableName: 'wallcrawler-device-tokens',
-      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      timeToLiveAttribute: 'ttl',
-    });
+    // TODO: Enable when device tokens are needed
+    // const deviceTokensTable = new dynamodb.Table(this, 'DeviceTokensTable', {
+    //   tableName: 'wallcrawler-device-tokens',
+    //   partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+    //   sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+    //   billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    //   timeToLiveAttribute: 'ttl',
+    // });
 
     const wsConnectionsTable = new dynamodb.Table(this, 'WebSocketConnectionsTable', {
       tableName: 'wallcrawler-ws-connections',

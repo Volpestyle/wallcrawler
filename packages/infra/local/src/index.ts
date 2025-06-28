@@ -1,1 +1,0 @@
-export { LocalProvider } from './local-provider';

@@ -1,0 +1,28 @@
+{
+  "name": "@wallcrawler/infra-local",
+  "version": "1.0.0",
+  "description": "Local browser provider for Wallcrawler/Stagehand",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build"
+  },
+  "files": [
+    "dist/**"
+  ],
+  "keywords": ["stagehand", "browser", "automation", "local"],
+  "author": "Wallcrawler",
+  "license": "MIT",
+  "dependencies": {
+    "@wallcrawler/stagehand": "workspace:*",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2"
+  },
+  "peerDependencies": {
+    "@wallcrawler/stagehand": "^2.3.0"
+  }
+}
