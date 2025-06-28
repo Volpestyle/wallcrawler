@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { WallCrawler } from 'wallcrawler';
-import { LocalProvider } from '@wallcrawler/local';
+import { Stagehand } from '@wallcrawler/stagehand';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import StagehandConfig, {
+  validateModelConfig,
+} from '../../../../stagehand.config';
 
 // Use global sessions map
 declare global {
@@ -25,7 +27,15 @@ if (!global.wallcrawlerSessions) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { url, command, schema, model = 'openai', scenario } = body;
+    const {
+      url,
+      command,
+      schema,
+      model = 'openai',
+      scenario,
+      isAgent = false,
+      agentOptions,
+    } = body;
 
     // Validate input
     if (!url || !command) {
@@ -42,7 +52,15 @@ export async function POST(request: NextRequest) {
     });
 
     // Process in background
-    processAutomation(sessionId, { url, command, schema, model, scenario });
+    processAutomation(sessionId, {
+      url,
+      command,
+      schema,
+      model,
+      scenario,
+      isAgent,
+      agentOptions,
+    });
 
     return NextResponse.json({ sessionId });
   } catch (error) {
@@ -62,61 +80,41 @@ async function processAutomation(
     schema?: string;
     model: string;
     scenario: string;
+    isAgent?: boolean;
+    agentOptions?: any;
   }
 ) {
   const session = global.wallcrawlerSessions.get(sessionId)!;
 
   try {
     // Update status
-    session.message = 'Creating browser instance...';
+    session.message = 'Validating configuration...';
     session.progress = 10;
 
-    // Create local provider
-    const provider = new LocalProvider({ storageDir: '.wallcrawler/demo' });
+    // Validate model configuration - no defaults, must be properly configured
+    const { modelName, apiKey } = validateModelConfig(params.model);
 
-    // Create configuration object without provider
-    const config = {
-      llm: {
-        provider: params.model as 'openai' | 'anthropic' | 'ollama',
-        apiKey: process.env[`${params.model.toUpperCase()}_API_KEY`],
-        model:
-          params.model === 'openai'
-            ? 'gpt-4-turbo'
-            : params.model === 'anthropic'
-              ? 'claude-3-5-sonnet-latest'
-              : 'llama2',
-        timeout: 30000,
-        maxRetries: 3,
-      },
-      browser: {
-        headless: false,
-        viewport: { width: 1280, height: 720 },
-        timeout: 30000,
-      },
-      features: {
-        selfHeal: true,
-        captchaHandling: false,
-        requestInterception: false,
-        caching: {
-          enabled: true,
-          ttl: 3600, // 1 hour
-          maxSize: 1000, // max cache entries
-        },
-      },
-    };
+    session.message = 'Creating browser instance...';
+    session.progress = 20;
 
-    // Initialize WallCrawler with provider and config separately
-    const crawler = new WallCrawler(provider, config);
+    // Initialize Stagehand using our config
+    const stagehand = new Stagehand({
+      ...StagehandConfig,
+      modelName,
+      modelClientOptions: {
+        apiKey,
+      },
+    });
 
-    session.message = 'Creating page...';
+    session.message = 'Initializing browser...';
     session.progress = 30;
 
-    const page = await crawler.createPage();
+    await stagehand.init();
 
     session.message = 'Navigating to target URL...';
     session.progress = 50;
 
-    await page.goto(params.url);
+    await stagehand.page.goto(params.url);
 
     // Parse schema if provided
     let extractionSchema;
@@ -136,25 +134,48 @@ async function processAutomation(
 
     // Execute the command
     let result;
-    if (extractionSchema) {
-      result = await page.extract({
+    if (params.isAgent) {
+      // Validate agent provider
+      if (!['openai', 'anthropic'].includes(params.model)) {
+        throw new Error(
+          `Agent provider '${params.model}' not supported. Use 'openai' or 'anthropic'`
+        );
+      }
+
+      // Execute as agent task - Stagehand agent expects specific config structure
+      const agent = stagehand.agent({
+        provider: params.model as 'openai' | 'anthropic',
+        model: modelName,
+        instructions:
+          params.agentOptions?.instructions ||
+          `You are a helpful assistant that can use a web browser. 
+          You are currently on the page: ${stagehand.page.url()}. 
+          Do not ask follow up questions, the user will trust your judgement.`,
+        options: {
+          apiKey,
+          ...params.agentOptions?.options,
+        },
+      });
+      result = await agent.execute(params.command);
+    } else if (extractionSchema) {
+      result = await stagehand.page.extract({
         instruction: params.command,
         schema: extractionSchema,
       });
     } else {
-      result = await page.act(params.command);
+      result = await stagehand.page.act(params.command);
     }
 
     // Take screenshot
-    const screenshotPath = await page.screenshot({
+    session.message = 'Taking screenshot...';
+    session.progress = 90;
+
+    const screenshotPath = await stagehand.page.screenshot({
       path: `.wallcrawler/demo/screenshots/${sessionId}.png`,
     });
 
-    session.message = 'Saving artifacts...';
-    session.progress = 90;
-
     // Clean up
-    await crawler.destroySession(page.sessionId);
+    await stagehand.close();
 
     // Update session with results
     session.status = 'success';
@@ -166,7 +187,7 @@ async function processAutomation(
       screenshots: [
         `/api/wallcrawler/artifacts?type=screenshot&id=${sessionId}`,
       ],
-      logs: ['Automation completed successfully'], // Simplified logging for now
+      logs: ['Automation completed successfully'],
     };
   } catch (error) {
     console.error('Automation error:', error);

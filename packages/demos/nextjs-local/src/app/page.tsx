@@ -2,15 +2,21 @@
 
 import { useState } from 'react';
 import WallcrawlerDemo from '@/components/WallcrawlerDemo';
+import { WallcrawlerAgentDemo } from '@/components/WallcrawlerAgentDemo';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { Code2, Globe, Database, Zap } from 'lucide-react';
+import { Code2, Globe, Database, Zap, Bot } from 'lucide-react';
 
 export default function Home() {
-  const [activeDemo, setActiveDemo] = useState<'scraping' | 'form' | 'navigation' | 'extraction'>('scraping');
+  const [activeDemo, setActiveDemo] = useState<'agent' | 'scraping' | 'form' | 'navigation' | 'extraction'>('agent');
 
   const features = [
+    {
+      icon: <Bot className="w-5 h-5" />,
+      title: 'AI Agent',
+      description: 'Multi-step task automation with intelligent planning',
+    },
     {
       icon: <Globe className="w-5 h-5" />,
       title: 'Natural Language Commands',
@@ -47,7 +53,7 @@ export default function Home() {
       </div>
 
       {/* Features Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
         {features.map((feature, index) => (
           <Card key={index} className="demo-card">
             <CardHeader className="pb-4">
@@ -70,12 +76,17 @@ export default function Home() {
         </h2>
         
         <Tabs value={activeDemo} onValueChange={(value) => setActiveDemo(value as any)}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="agent">AI Agent</TabsTrigger>
             <TabsTrigger value="scraping">Web Scraping</TabsTrigger>
             <TabsTrigger value="form">Form Automation</TabsTrigger>
             <TabsTrigger value="navigation">Navigation</TabsTrigger>
             <TabsTrigger value="extraction">Data Extraction</TabsTrigger>
           </TabsList>
+          
+          <TabsContent value="agent" className="mt-6">
+            <WallcrawlerAgentDemo />
+          </TabsContent>
           
           <TabsContent value="scraping" className="mt-6">
             <WallcrawlerDemo scenario="scraping" />

@@ -4,7 +4,13 @@ import { useState } from 'react';
 import ActionForm from './ActionForm';
 import ResultsDisplay from './ResultsDisplay';
 import StatusIndicator from './StatusIndicator';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { getDemoScenario } from '@/lib/demo-scenarios';
 
 interface WallcrawlerDemoProps {
@@ -48,7 +54,6 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
-          scenario,
         }),
       });
 
@@ -62,7 +67,9 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
       // Poll for status updates
       const pollInterval = setInterval(async () => {
         try {
-          const statusResponse = await fetch(`/api/wallcrawler/status?sessionId=${newSessionId}`);
+          const statusResponse = await fetch(
+            `/api/wallcrawler/status?sessionId=${newSessionId}`
+          );
           const statusData = await statusResponse.json();
 
           setTaskStatus({
@@ -71,13 +78,18 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
             progress: statusData.progress,
           });
 
-          if (statusData.status === 'success' || statusData.status === 'error') {
+          if (
+            statusData.status === 'success' ||
+            statusData.status === 'error'
+          ) {
             clearInterval(pollInterval);
-            
+
             // Get final results
-            const resultsResponse = await fetch(`/api/wallcrawler/artifacts?sessionId=${newSessionId}`);
+            const resultsResponse = await fetch(
+              `/api/wallcrawler/artifacts?sessionId=${newSessionId}`
+            );
             const resultsData = await resultsResponse.json();
-            
+
             setTaskResult(resultsData);
           }
         } catch (error) {
@@ -91,9 +103,9 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
       setTimeout(() => clearInterval(pollInterval), 300000);
     } catch (error) {
       console.error('Task submission error:', error);
-      setTaskStatus({ 
-        status: 'error', 
-        message: error instanceof Error ? error.message : 'Unknown error' 
+      setTaskStatus({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error',
       });
       setTaskResult({
         success: false,
@@ -117,7 +129,7 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
               isRunning={taskStatus.status === 'running'}
               showSchema={scenario === 'extraction'}
             />
-            
+
             <div className="flex items-center justify-between">
               <StatusIndicator status={taskStatus} />
               {sessionId && (
@@ -130,9 +142,7 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
         </CardContent>
       </Card>
 
-      {taskResult && (
-        <ResultsDisplay result={taskResult} scenario={scenario} />
-      )}
+      {taskResult && <ResultsDisplay result={taskResult} scenario={scenario} />}
 
       {/* Example Commands */}
       <Card>
