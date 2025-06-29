@@ -1,6 +1,26 @@
 node_modules
 dist
+build
 coverage
 *.lock
 pnpm-lock.yaml
 .git
+.next
+.cache
+*.generated.*
+*.min.*
+.changeset
+CHANGELOG.md
+# Generated content
+packages/*/dist/
+packages/*/build/
+packages/*/coverage/
+packages/*/node_modules/
+# Build artifacts
+*.bundle.js
+*.chunk.js
+*.map
+# Logs
+*.log
+# Dependency directories
+.pnpm-store/
