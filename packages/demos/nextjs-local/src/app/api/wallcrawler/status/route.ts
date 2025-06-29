@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Import shared sessions map (in production, use a proper store)
-declare global {
-  var wallcrawlerSessions: Map<string, {
-    status: 'running' | 'success' | 'error';
-    message?: string;
-    progress?: number;
-    result?: any;
-  }>;
-}
+// Import shared provider and instances
+import { Stagehand } from '@wallcrawler/stagehand';
 
-// Initialize global sessions if not exists
-if (!global.wallcrawlerSessions) {
-  global.wallcrawlerSessions = new Map();
+declare global {
+  var wallcrawlerProvider: any;
+  var wallcrawlerInstances: Map<string, { stagehand: Stagehand; lastUsed: number; }>;
 }
 
 export async function GET(request: NextRequest) {
@@ -27,20 +20,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const session = global.wallcrawlerSessions.get(sessionId);
+    const provider = global.wallcrawlerProvider;
     
-    if (!session) {
+    try {
+      const providerSession = await provider.resumeSession(sessionId);
+      return NextResponse.json({
+        sessionId: providerSession.sessionId,
+        status: 'active',
+        provider: providerSession.provider,
+        metadata: providerSession.metadata,
+      });
+    } catch (error) {
       return NextResponse.json(
         { error: 'Session not found' },
         { status: 404 }
       );
     }
-
-    return NextResponse.json({
-      status: session.status,
-      message: session.message,
-      progress: session.progress,
-    });
   } catch (error) {
     console.error('Status API error:', error);
     return NextResponse.json(

@@ -2,14 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
 import path from 'path';
 
-// Import shared sessions map
+// Import shared provider and instances
+import { Stagehand } from '@wallcrawler/stagehand';
+
 declare global {
-  var wallcrawlerSessions: Map<string, {
-    status: 'running' | 'success' | 'error';
-    message?: string;
-    progress?: number;
-    result?: any;
-  }>;
+  var wallcrawlerProvider: any;
+  var wallcrawlerInstances: Map<string, { stagehand: Stagehand; lastUsed: number; }>;
 }
 
 export async function GET(request: NextRequest) {
@@ -39,7 +37,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Otherwise return session results
+    // Otherwise return session artifacts
     if (!sessionId) {
       return NextResponse.json(
         { error: 'Session ID is required' },
@@ -47,26 +45,24 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const session = global.wallcrawlerSessions.get(sessionId);
+    const provider = global.wallcrawlerProvider;
     
-    if (!session) {
+    try {
+      // Get artifacts from provider (this will also validate session exists)
+      const artifactsList = await provider.getArtifacts(sessionId);
+      
+      return NextResponse.json({
+        sessionId,
+        artifacts: artifactsList.artifacts,
+        hasMore: artifactsList.hasMore,
+        cursor: artifactsList.cursor,
+      });
+    } catch (error) {
       return NextResponse.json(
-        { error: 'Session not found' },
+        { error: 'Session not found or no artifacts available' },
         { status: 404 }
       );
     }
-
-    if (session.status !== 'success' && session.status !== 'error') {
-      return NextResponse.json(
-        { error: 'Results not ready yet' },
-        { status: 202 }
-      );
-    }
-
-    return NextResponse.json(session.result || {
-      success: false,
-      error: 'No results available',
-    });
   } catch (error) {
     console.error('Artifacts API error:', error);
     return NextResponse.json(

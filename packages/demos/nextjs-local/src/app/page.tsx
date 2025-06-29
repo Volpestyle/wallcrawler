@@ -1,21 +1,22 @@
 'use client';
 
-import { useState } from 'react';
-import WallcrawlerDemo from '@/components/WallcrawlerDemo';
-import { WallcrawlerAgentDemo } from '@/components/WallcrawlerAgentDemo';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import WorkflowBuilder from '@/components/WorkflowBuilder';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Code2, Globe, Database, Zap, Bot } from 'lucide-react';
+import { Code2, Globe, Database, Zap, Bot, Workflow } from 'lucide-react';
 
 export default function Home() {
-  const [activeDemo, setActiveDemo] = useState<'agent' | 'scraping' | 'form' | 'navigation' | 'extraction'>('agent');
-
   const features = [
     {
-      icon: <Bot className="w-5 h-5" />,
-      title: 'AI Agent',
-      description: 'Multi-step task automation with intelligent planning',
+      icon: <Workflow className="w-5 h-5" />,
+      title: 'Multi-Step Workflows',
+      description: 'Build complex automation sequences with multiple steps',
     },
     {
       icon: <Globe className="w-5 h-5" />,
@@ -35,7 +36,7 @@ export default function Home() {
     {
       icon: <Zap className="w-5 h-5" />,
       title: 'Real-time Updates',
-      description: 'Live status updates and intervention handling',
+      description: 'Live status updates and visual workflow progress',
     },
   ];
 
@@ -44,11 +45,12 @@ export default function Home() {
       {/* Hero Section */}
       <div className="text-center mb-12">
         <h1 className="text-4xl font-bold text-gray-900 mb-4">
-          WallCrawler Demo with Local Provider
+          WallCrawler Workflow Builder
         </h1>
         <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-          Experience AI-powered browser automation using natural language commands.
-          This demo showcases WallCrawler with a local filesystem provider.
+          Build and execute multi-step browser automation workflows using
+          natural language commands. Create complex sequences that navigate,
+          interact, observe, and extract data from web pages.
         </p>
       </div>
 
@@ -69,77 +71,13 @@ export default function Home() {
         ))}
       </div>
 
-      {/* Demo Section */}
+      {/* Workflow Builder Section */}
       <div className="mb-12">
         <h2 className="text-2xl font-semibold text-gray-900 mb-6">
-          Try It Out
+          Build Your Workflow
         </h2>
-        
-        <Tabs value={activeDemo} onValueChange={(value) => setActiveDemo(value as any)}>
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="agent">AI Agent</TabsTrigger>
-            <TabsTrigger value="scraping">Web Scraping</TabsTrigger>
-            <TabsTrigger value="form">Form Automation</TabsTrigger>
-            <TabsTrigger value="navigation">Navigation</TabsTrigger>
-            <TabsTrigger value="extraction">Data Extraction</TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="agent" className="mt-6">
-            <WallcrawlerAgentDemo />
-          </TabsContent>
-          
-          <TabsContent value="scraping" className="mt-6">
-            <WallcrawlerDemo scenario="scraping" />
-          </TabsContent>
-          
-          <TabsContent value="form" className="mt-6">
-            <WallcrawlerDemo scenario="form" />
-          </TabsContent>
-          
-          <TabsContent value="navigation" className="mt-6">
-            <WallcrawlerDemo scenario="navigation" />
-          </TabsContent>
-          
-          <TabsContent value="extraction" className="mt-6">
-            <WallcrawlerDemo scenario="extraction" />
-          </TabsContent>
-        </Tabs>
-      </div>
 
-      {/* Configuration Section */}
-      <div className="mb-12">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-6">
-          Configuration
-        </h2>
-        
-        <Card>
-          <CardHeader>
-            <CardTitle>Environment Variables</CardTitle>
-            <CardDescription>
-              Configure these environment variables to use WallCrawler
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
-                <code className="text-sm font-mono">OPENAI_API_KEY</code>
-                <Badge variant="outline">Required for OpenAI</Badge>
-              </div>
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
-                <code className="text-sm font-mono">ANTHROPIC_API_KEY</code>
-                <Badge variant="outline">Required for Claude</Badge>
-              </div>
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
-                <code className="text-sm font-mono">WALLCRAWLER_DEBUG</code>
-                <Badge variant="secondary">Optional</Badge>
-              </div>
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-md">
-                <code className="text-sm font-mono">WALLCRAWLER_CACHE_DIR</code>
-                <Badge variant="secondary">Optional</Badge>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <WorkflowBuilder />
       </div>
 
       {/* Local Storage Info */}
@@ -147,18 +85,19 @@ export default function Home() {
         <h2 className="text-2xl font-semibold text-gray-900 mb-6">
           Local Storage
         </h2>
-        
+
         <Card>
           <CardHeader>
             <CardTitle>Artifacts Directory</CardTitle>
             <CardDescription>
-              WallCrawler stores screenshots and data in the <code className="font-mono">.wallcrawler</code> directory
+              WallCrawler stores screenshots and data in the{' '}
+              <code className="font-mono">.wallcrawler</code> directory
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="bg-gray-50 p-4 rounded-md">
               <pre className="text-sm font-mono overflow-x-auto">
-{`.wallcrawler/
+                {`.wallcrawler/
 ├── cache/
 │   ├── screenshots/
 │   └── data/

@@ -1,5 +1,5 @@
 {
-  "name": "@wallcrawler/infra-local",
+  "name": "@wallcrawler/infra/local",
   "version": "1.0.0",
   "description": "Local browser provider for Wallcrawler/Stagehand",
   "main": "./dist/index.js",

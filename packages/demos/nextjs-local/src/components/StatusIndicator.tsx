@@ -35,21 +35,33 @@ export default function StatusIndicator({ status }: StatusIndicatorProps) {
   };
 
   return (
-    <div className="flex items-center space-x-2">
-      <span className={`status-indicator ${getStatusClass()}`}>
-        {getStatusIcon()}
-        <span className="ml-1.5">
-          {status.status === 'idle' && 'Ready'}
-          {status.status === 'running' && 'Running'}
-          {status.status === 'success' && 'Complete'}
-          {status.status === 'error' && 'Error'}
+    <div className="space-y-3">
+      <div className="flex items-center space-x-2">
+        <span className={`status-indicator ${getStatusClass()}`}>
+          {getStatusIcon()}
+          <span className="ml-1.5">
+            {status.status === 'idle' && 'Ready'}
+            {status.status === 'running' && 'Running'}
+            {status.status === 'success' && 'Complete'}
+            {status.status === 'error' && 'Error'}
+          </span>
         </span>
-      </span>
-      {status.message && (
-        <span className="text-sm text-gray-600">{status.message}</span>
-      )}
+        {status.message && (
+          <span className="text-sm text-gray-600">{status.message}</span>
+        )}
+        {status.progress !== undefined && status.status === 'running' && (
+          <span className="text-sm text-gray-500">({status.progress}%)</span>
+        )}
+      </div>
+      
+      {/* Progress Bar */}
       {status.progress !== undefined && status.status === 'running' && (
-        <span className="text-sm text-gray-500">({status.progress}%)</span>
+        <div className="w-full bg-gray-200 rounded-full h-2">
+          <div
+            className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
+            style={{ width: `${status.progress}%` }}
+          />
+        </div>
       )}
     </div>
   );

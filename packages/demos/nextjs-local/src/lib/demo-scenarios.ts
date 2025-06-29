@@ -11,72 +11,80 @@ export interface DemoScenario {
 
 const scenarios: Record<string, DemoScenario> = {
   scraping: {
-    title: 'Web Scraping',
-    description: 'Extract information from web pages using natural language commands',
+    title: 'Act Method Demo',
+    description:
+      'Perform actions on web pages using natural language - clicking, typing, navigation',
     defaultValues: {
-      url: 'https://books.toscrape.com',
-      command: 'Navigate to the first book and extract its title, price, and availability',
+      url: 'https://www.saucedemo.com',
+      command: 'login with username standard_user and password secret_sauce',
     },
     exampleCommands: [
-      'Extract all book titles and prices from the page',
-      'Find the most expensive book and get its details',
-      'Navigate to the "Travel" category and list all books',
-      'Get the rating and stock information for each book',
+      'Click on the first product in the list',
+      'Type "hello world" in the search box and press enter',
+      'Click the "Add to cart" button for the backpack',
+      'Navigate to the shopping cart page',
+      'Scroll down to the bottom of the page',
     ],
   },
   form: {
-    title: 'Form Automation',
-    description: 'Automatically fill and submit forms with structured data',
+    title: 'Observe Method Demo',
+    description:
+      'Observe and describe elements on the page without taking actions',
     defaultValues: {
-      url: 'https://www.saucedemo.com',
-      command: 'Login with username "standard_user" and password "secret_sauce", then add the first product to cart',
+      url: 'https://books.toscrape.com',
+      command:
+        'Describe all the books visible on the page and their properties',
     },
     exampleCommands: [
-      'Fill the login form with the provided credentials',
-      'Complete the checkout process with test information',
-      'Add multiple items to cart and proceed to checkout',
-      'Filter products by price and select the cheapest one',
+      'Describe all the books visible on the page',
+      'Find all the navigation links and describe them',
+      'Observe the page structure and identify key sections',
+      'Look for any error messages or notifications',
+      'Identify all interactive elements on the page',
     ],
   },
   navigation: {
-    title: 'Multi-Step Navigation',
-    description: 'Navigate through multiple pages and perform complex workflows',
+    title: 'Act + Extract Combo Demo',
+    description: 'Combine actions with data extraction for complex workflows',
     defaultValues: {
       url: 'https://www.wikipedia.org',
-      command: 'Search for "Artificial Intelligence", navigate to the page, and extract the first paragraph of the article',
+      command:
+        'Search for "Artificial Intelligence", click the first result, and extract the main article summary',
     },
     exampleCommands: [
-      'Navigate through multiple links and collect information',
-      'Follow a specific path: Home -> Category -> Product -> Details',
-      'Search for a term and navigate to the most relevant result',
-      'Complete a multi-step wizard or form process',
+      'Search for "Machine Learning" and extract the key concepts from the article',
+      'Navigate to "Random article" and extract the title and first paragraph',
+      'Search for "Web scraping" and get the definition',
+      'Find the "Today\'s featured article" and extract its summary',
     ],
   },
   extraction: {
-    title: 'Structured Data Extraction',
-    description: 'Extract data that matches a specific schema using Zod validation',
+    title: 'Extract Method Demo',
+    description: 'Extract structured data that matches a specific Zod schema',
     defaultValues: {
-      url: 'https://hacker-news.firebaseio.com/v0/topstories.json',
-      command: 'Extract the top 5 stories with their titles, scores, and authors',
+      url: 'https://books.toscrape.com',
+      command:
+        'Extract all books on the page with their titles, prices, and ratings',
       schema: `z.object({
-  stories: z.array(z.object({
+  books: z.array(z.object({
     title: z.string(),
-    score: z.number(),
-    author: z.string(),
-    url: z.string().optional(),
-    comments: z.number().optional()
-  })).max(5)
+    price: z.string(),
+    rating: z.string(),
+    availability: z.string().optional()
+  }))
 })`,
     },
     exampleCommands: [
-      'Extract product data matching the provided schema',
-      'Get structured data from tables or lists',
-      'Parse and validate API responses',
-      'Extract nested data structures with relationships',
+      'Extract all books with title, price, and rating',
+      'Get only the books that are "In stock"',
+      'Extract the navigation categories available',
+      'Get books with 4 or 5-star ratings only',
     ],
   },
 };
 
-export function getDemoScenario(scenario: keyof typeof scenarios): DemoScenario {
+export function getDemoScenario(
+  scenario: keyof typeof scenarios
+): DemoScenario {
   return scenarios[scenario] || scenarios.scraping;
 }
