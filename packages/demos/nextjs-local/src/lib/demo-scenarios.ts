@@ -12,8 +12,7 @@ export interface DemoScenario {
 const scenarios: Record<string, DemoScenario> = {
   scraping: {
     title: 'Act Method Demo',
-    description:
-      'Perform actions on web pages using natural language - clicking, typing, navigation',
+    description: 'Perform actions on web pages using natural language - clicking, typing, navigation',
     defaultValues: {
       url: 'https://www.saucedemo.com',
       command: 'login with username standard_user and password secret_sauce',
@@ -28,12 +27,10 @@ const scenarios: Record<string, DemoScenario> = {
   },
   form: {
     title: 'Observe Method Demo',
-    description:
-      'Observe and describe elements on the page without taking actions',
+    description: 'Observe and describe elements on the page without taking actions',
     defaultValues: {
       url: 'https://books.toscrape.com',
-      command:
-        'Describe all the books visible on the page and their properties',
+      command: 'Describe all the books visible on the page and their properties',
     },
     exampleCommands: [
       'Describe all the books visible on the page',
@@ -48,8 +45,7 @@ const scenarios: Record<string, DemoScenario> = {
     description: 'Combine actions with data extraction for complex workflows',
     defaultValues: {
       url: 'https://www.wikipedia.org',
-      command:
-        'Search for "Artificial Intelligence", click the first result, and extract the main article summary',
+      command: 'Search for "Artificial Intelligence", click the first result, and extract the main article summary',
     },
     exampleCommands: [
       'Search for "Machine Learning" and extract the key concepts from the article',
@@ -63,8 +59,7 @@ const scenarios: Record<string, DemoScenario> = {
     description: 'Extract structured data that matches a specific Zod schema',
     defaultValues: {
       url: 'https://books.toscrape.com',
-      command:
-        'Extract all books on the page with their titles, prices, and ratings',
+      command: 'Extract all books on the page with their titles, prices, and ratings',
       schema: `z.object({
   books: z.array(z.object({
     title: z.string(),
@@ -83,8 +78,6 @@ const scenarios: Record<string, DemoScenario> = {
   },
 };
 
-export function getDemoScenario(
-  scenario: keyof typeof scenarios
-): DemoScenario {
+export function getDemoScenario(scenario: keyof typeof scenarios): DemoScenario {
   return scenarios[scenario] || scenarios.scraping;
 }

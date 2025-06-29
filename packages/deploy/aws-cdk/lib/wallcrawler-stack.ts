@@ -98,10 +98,12 @@ export class WallCrawlerStack extends cdk.Stack {
     const artifactsBucket = new s3.Bucket(this, 'ArtifactsBucket', {
       bucketName: `wallcrawler-artifacts-${this.account}`,
       versioned: true,
-      lifecycleRules: [{
-        id: 'cleanup',
-        expiration: cdk.Duration.days(30),
-      }],
+      lifecycleRules: [
+        {
+          id: 'cleanup',
+          expiration: cdk.Duration.days(30),
+        },
+      ],
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
@@ -200,24 +202,15 @@ export class WallCrawlerStack extends cdk.Stack {
 
     // WebSocket routes
     webSocketApi.addRoute('$connect', {
-      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
-        'ConnectIntegration',
-        wsConnectFn
-      ),
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration('ConnectIntegration', wsConnectFn),
     });
 
     webSocketApi.addRoute('$disconnect', {
-      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
-        'DisconnectIntegration',
-        wsDisconnectFn
-      ),
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration('DisconnectIntegration', wsDisconnectFn),
     });
 
     webSocketApi.addRoute('$default', {
-      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
-        'MessageIntegration',
-        wsMessageFn
-      ),
+      integration: new apigatewayv2Integrations.WebSocketLambdaIntegration('MessageIntegration', wsMessageFn),
     });
 
     // WebSocket Stage
@@ -228,10 +221,12 @@ export class WallCrawlerStack extends cdk.Stack {
     });
 
     // Grant execute-api permissions to Lambda functions
-    wsMessageFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['execute-api:ManageConnections'],
-      resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
-    }));
+    wsMessageFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['execute-api:ManageConnections'],
+        resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
+      })
+    );
 
     // CloudFront distribution for portal
     const portalDistribution = new cloudfront.Distribution(this, 'PortalDistribution', {
@@ -241,18 +236,18 @@ export class WallCrawlerStack extends cdk.Stack {
       },
       additionalBehaviors: {
         '/api/*': {
-          origin: new cloudfrontOrigins.HttpOrigin(
-            `${wsStage.url.replace('wss://', '').replace('/prod', '')}`
-          ),
+          origin: new cloudfrontOrigins.HttpOrigin(`${wsStage.url.replace('wss://', '').replace('/prod', '')}`),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
         },
       },
       defaultRootObject: 'index.html',
-      errorResponses: [{
-        httpStatus: 404,
-        responseHttpStatus: 200,
-        responsePagePath: '/index.html',
-      }],
+      errorResponses: [
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+        },
+      ],
     });
 
     // Browser automation Lambda container
@@ -266,10 +261,12 @@ export class WallCrawlerStack extends cdk.Stack {
     });
 
     // Grant WebSocket API permissions to browser automation Lambda
-    browserAutomationLambda.function.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['execute-api:ManageConnections'],
-      resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
-    }));
+    browserAutomationLambda.function.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['execute-api:ManageConnections'],
+        resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
+      })
+    );
 
     // Outputs
     new cdk.CfnOutput(this, 'InterventionHandlerArn', {

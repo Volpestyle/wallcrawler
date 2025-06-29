@@ -4,10 +4,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import StagehandConfig, {
-  validateModelConfig,
-  createLocalProvider,
-} from '../../../../stagehand.config';
+import StagehandConfig, { validateModelConfig, createLocalProvider } from '../../../../stagehand.config';
 
 // Global provider instance
 declare global {
@@ -39,16 +36,16 @@ function initLogDir() {
 
 function logToFile(message: string, sessionId?: string) {
   if (!ENABLE_FILE_LOGGING) return;
-  
+
   initLogDir();
   const timestamp = new Date().toISOString();
   const sessionPrefix = sessionId ? `[${sessionId}] ` : '';
   const logMessage = `${timestamp} ${sessionPrefix}${message}\n`;
-  
+
   // Log to both general log and session-specific log if sessionId provided
   const generalLogFile = join(LOG_DIR, 'wallcrawler.log');
   appendFileSync(generalLogFile, logMessage);
-  
+
   if (sessionId) {
     const sessionLogFile = join(LOG_DIR, `session-${sessionId}.log`);
     appendFileSync(sessionLogFile, logMessage);
@@ -63,46 +60,43 @@ function enhancedLog(message: string, sessionId?: string) {
 
 export async function POST(request: NextRequest) {
   let currentSessionId: string | undefined;
-  
+
   try {
     const body = await request.json();
-    const {
-      type,
-      config,
-      sessionId,
-      model = 'openai',
-      includeUsage = false,
-    } = body;
+    const { type, config, sessionId, model = 'openai', includeUsage = false } = body;
 
     currentSessionId = sessionId;
-    enhancedLog(`[DEBUG] API Request - Type: ${type}, SessionId: ${sessionId || 'null'}, HasConfig: ${!!config}, Model: ${model}`, sessionId);
+    enhancedLog(
+      `[DEBUG] API Request - Type: ${type}, SessionId: ${sessionId || 'null'}, HasConfig: ${!!config}, Model: ${model}`,
+      sessionId
+    );
 
     // Validate input
     if (!type || !config) {
-      return NextResponse.json(
-        { error: 'Type and config are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Type and config are required' }, { status: 400 });
     }
     let stagehand: Stagehand;
 
     // Get or create Stagehand instance for session management
     const provider = global.wallcrawlerProvider;
-    
+
     if (sessionId && provider.hasSessionState(sessionId)) {
       // Reuse existing Stagehand instance
       enhancedLog(`[DEBUG] Reusing existing Stagehand instance for session: ${sessionId}`, sessionId);
       const instanceData = provider.getSessionState(sessionId)!;
       stagehand = instanceData.stagehand;
       currentSessionId = sessionId;
-      
+
       // Debug the instance data structure
-      enhancedLog(`[DEBUG] Instance data: ${JSON.stringify({
-        hasCurrentModel: 'currentModel' in instanceData,
-        currentModel: instanceData.currentModel,
-        requestModel: model
-      })}`, sessionId);
-      
+      enhancedLog(
+        `[DEBUG] Instance data: ${JSON.stringify({
+          hasCurrentModel: 'currentModel' in instanceData,
+          currentModel: instanceData.currentModel,
+          requestModel: model,
+        })}`,
+        sessionId
+      );
+
       // Only update model if a different one is provided
       if (model && model !== instanceData.currentModel) {
         enhancedLog(`[DEBUG] Updating model from ${instanceData.currentModel} to ${model}`, sessionId);
@@ -114,7 +108,7 @@ export async function POST(request: NextRequest) {
         if (modelConfig.baseURL) {
           modelClientOptions.baseURL = modelConfig.baseURL;
         }
-        
+
         // Update the LLM client
         stagehand.llmClient = stagehand.llmProvider.getClient(modelConfig.modelName, modelClientOptions);
         provider.updateSessionModel(sessionId, model);
@@ -136,7 +130,7 @@ export async function POST(request: NextRequest) {
           enhancedLog(`[DEBUG] Reconfigured LLM client for model: ${modelConfig.modelName}`, sessionId);
         }
       }
-      
+
       // Verify the instance is still connected
       try {
         const currentUrl = stagehand.page.url();
@@ -155,11 +149,11 @@ export async function POST(request: NextRequest) {
     } else {
       // Create new Stagehand instance
       currentSessionId = sessionId; // Use provided sessionId or let Stagehand create new one
-      
+
       enhancedLog(`[DEBUG] Validating model config for: ${model}`, sessionId);
       const modelConfig = validateModelConfig(model);
       enhancedLog(`[DEBUG] Model config: ${JSON.stringify(modelConfig)}`, sessionId);
-      
+
       const modelClientOptions: any = {};
       if (modelConfig.apiKey) {
         modelClientOptions.apiKey = modelConfig.apiKey;
@@ -167,7 +161,7 @@ export async function POST(request: NextRequest) {
       if (modelConfig.baseURL) {
         modelClientOptions.baseURL = modelConfig.baseURL;
       }
-      
+
       enhancedLog(`[DEBUG] Model client options: ${JSON.stringify(modelClientOptions)}`, sessionId);
 
       stagehand = new Stagehand({
@@ -183,19 +177,22 @@ export async function POST(request: NextRequest) {
       } else {
         enhancedLog(`[DEBUG] Creating new Stagehand instance with new session...`, sessionId);
       }
-      
+
       await stagehand.init();
-      
+
       // Get the actual sessionId after init (in case Stagehand created a new one)
       currentSessionId = stagehand.sessionId;
       if (!currentSessionId) {
         throw new Error('Failed to get session ID from Stagehand after initialization');
       }
       enhancedLog(`[DEBUG] Stagehand initialized successfully with session: ${currentSessionId}`, currentSessionId);
-      
+
       // Store the instance for reuse
       provider.setSessionState(currentSessionId, stagehand, model);
-      enhancedLog(`[DEBUG] Stored Stagehand instance for session: ${currentSessionId} with model: ${model}`, currentSessionId);
+      enhancedLog(
+        `[DEBUG] Stored Stagehand instance for session: ${currentSessionId} with model: ${model}`,
+        currentSessionId
+      );
     }
 
     // Execute the step
@@ -208,16 +205,16 @@ export async function POST(request: NextRequest) {
         prompt_tokens: result.usage.prompt_tokens || 0,
         completion_tokens: result.usage.completion_tokens || 0,
         total_tokens: result.usage.total_tokens || 0,
-        inference_time_ms: result.usage.inference_time_ms || 0
+        inference_time_ms: result.usage.inference_time_ms || 0,
       };
     }
 
     enhancedLog(`[DEBUG] Extracted usage data: ${JSON.stringify(usage)}`, currentSessionId);
 
-    const response: any = { 
+    const response: any = {
       sessionId: currentSessionId,
       result,
-      success: true 
+      success: true,
     };
 
     if (includeUsage) {
@@ -225,13 +222,12 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(response);
-
   } catch (error) {
     enhancedLog(`API error: ${error}`, currentSessionId);
     return NextResponse.json(
-      { 
+      {
         error: error instanceof Error ? error.message : 'Failed to execute step',
-        success: false 
+        success: false,
       },
       { status: 500 }
     );
@@ -248,7 +244,7 @@ async function executeWorkflowStep(
   // Add debugging info about current page state
   enhancedLog(`[DEBUG] Executing step: ${type}`, sessionId);
   enhancedLog(`[DEBUG] Current URL: ${stagehand.page.url()}`, sessionId);
-  
+
   switch (type) {
     case 'navigate':
       if (!config.url) {
@@ -264,11 +260,11 @@ async function executeWorkflowStep(
         throw new Error('Instruction is required for act step');
       }
       enhancedLog(`[DEBUG] Acting with instruction: ${config.instruction}`, sessionId);
-      
+
       // Check if page is still loaded
       const pageTitle = await stagehand.page.title();
       enhancedLog(`[DEBUG] Current page title: ${pageTitle}`, sessionId);
-      
+
       const actResult = await stagehand.page.act(config.instruction);
       enhancedLog(`[DEBUG] Act result: ${JSON.stringify(actResult)}`, sessionId);
       return actResult;
@@ -278,27 +274,24 @@ async function executeWorkflowStep(
         throw new Error('Instruction is required for observe step');
       }
       enhancedLog(`[DEBUG] Observing with instruction: ${config.instruction}`, sessionId);
-      
+
       // Check if page is still loaded
       const pageTitle2 = await stagehand.page.title();
       enhancedLog(`[DEBUG] Current page title: ${pageTitle2}`, sessionId);
-      
+
       const observeResult = await stagehand.page.observe(config.instruction);
       enhancedLog(`[DEBUG] Observe result: ${JSON.stringify(observeResult)}`, sessionId);
-      
+
       // Type guard for observe result with elements
       function hasElementsProperty(result: unknown): result is { elements: unknown } {
-        return result !== null && 
-               typeof result === 'object' && 
-               !Array.isArray(result) && 
-               'elements' in result;
+        return result !== null && typeof result === 'object' && !Array.isArray(result) && 'elements' in result;
       }
-      
+
       // Type guard for observe result with both elements and usage
       function hasUsageData(result: unknown): result is { elements: unknown; usage: unknown } {
         return hasElementsProperty(result) && 'usage' in result;
       }
-      
+
       if (!includeUsage) {
         // If usage not requested, return just the elements/result
         if (hasElementsProperty(observeResult)) {
@@ -306,38 +299,38 @@ async function executeWorkflowStep(
         }
         return observeResult;
       }
-      
+
       if (hasUsageData(observeResult)) {
         return {
           result: observeResult.elements,
-          usage: observeResult.usage
+          usage: observeResult.usage,
         };
       }
-      
+
       // Fallback for old format (direct array) - no usage data available
       return {
         result: observeResult,
-        usage: undefined
+        usage: undefined,
       };
 
     case 'extract':
       if (!config.instruction) {
         throw new Error('Instruction is required for extract step');
       }
-      
+
       enhancedLog(`[DEBUG] Extracting with instruction: ${config.instruction}`, sessionId);
-      
+
       // Check if page is still loaded and has content
       const pageTitle3 = await stagehand.page.title();
       const pageContent = await stagehand.page.textContent('body');
       enhancedLog(`[DEBUG] Current page title: ${pageTitle3}`, sessionId);
       enhancedLog(`[DEBUG] Page has content: ${pageContent ? pageContent.length > 0 : false}`, sessionId);
-      
+
       // If page seems empty, log but continue (Stagehand handles DOM settling)
       if (!pageTitle3 || pageTitle3.trim() === '' || !pageContent || pageContent.trim().length < 100) {
         enhancedLog(`[DEBUG] Page seems empty, but continuing (Stagehand will handle DOM settling)`, sessionId);
       }
-      
+
       let extractOptions: any = {
         instruction: config.instruction,
       };
@@ -361,7 +354,7 @@ async function executeWorkflowStep(
       if (!config.instruction) {
         throw new Error('Instruction is required for agent step');
       }
-      
+
       // For now, use a simple agent approach
       const agent = stagehand.agent();
       const agentResult = await agent.execute(config.instruction);
@@ -379,7 +372,7 @@ function createZodSchemaFromObject(obj: any): z.ZodSchema {
   }
 
   const shape: { [key: string]: z.ZodSchema } = {};
-  
+
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value === 'string') {
       if (value === 'string') {
@@ -410,14 +403,11 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get('sessionId');
 
     if (!sessionId) {
-      return NextResponse.json(
-        { error: 'Session ID is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
     const instances = global.wallcrawlerInstances;
-    
+
     // Check if we have an active Stagehand instance
     if (instances.has(sessionId)) {
       const instanceData = instances.get(sessionId)!;
@@ -434,13 +424,10 @@ export async function GET(request: NextRequest) {
       } catch (error) {
         // Instance is corrupted, remove it
         instances.delete(sessionId);
-        return NextResponse.json(
-          { error: 'Session found but browser connection lost' },
-          { status: 404 }
-        );
+        return NextResponse.json({ error: 'Session found but browser connection lost' }, { status: 404 });
       }
     }
-    
+
     // Fall back to checking provider session
     const provider = global.wallcrawlerProvider;
     try {
@@ -452,37 +439,28 @@ export async function GET(request: NextRequest) {
         metadata: providerSession.metadata,
       });
     } catch (error) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
   } catch (error) {
     enhancedLog(`GET API error: ${error}`);
-    return NextResponse.json(
-      { error: 'Failed to get session status' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to get session status' }, { status: 500 });
   }
 }
 
 // DELETE endpoint to cleanup session
 export async function DELETE(request: NextRequest) {
   let sessionId: string | null = null;
-  
+
   try {
     const { searchParams } = new URL(request.url);
     sessionId = searchParams.get('sessionId');
 
     if (!sessionId) {
-      return NextResponse.json(
-        { error: 'Session ID is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
     const provider = global.wallcrawlerProvider;
-    
+
     // Clean up Stagehand instance if it exists
     if (provider.hasSessionState(sessionId)) {
       try {
@@ -496,7 +474,7 @@ export async function DELETE(request: NextRequest) {
       }
       provider.removeSessionState(sessionId);
     }
-    
+
     // Clean up provider session
     try {
       await provider.endSession(sessionId);
@@ -512,10 +490,6 @@ export async function DELETE(request: NextRequest) {
     });
   } catch (error) {
     enhancedLog(`DELETE API error: ${error}`, sessionId || undefined);
-    return NextResponse.json(
-      { error: 'Failed to cleanup session' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to cleanup session' }, { status: 500 });
   }
 }
-

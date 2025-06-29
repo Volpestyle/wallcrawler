@@ -1,6 +1,6 @@
-import { chromium } from "playwright";
-import { ECSClient, RunTaskCommand, StopTaskCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
-import { S3Client, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
+import { chromium } from 'playwright';
+import { ECSClient, RunTaskCommand, StopTaskCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
+import { S3Client, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import {
   IBrowserProvider,
   ProviderType,
@@ -10,7 +10,7 @@ import {
   Artifact,
   ArtifactList,
   LogLine,
-} from "@wallcrawler/stagehand";
+} from '@wallcrawler/stagehand';
 
 export interface AwsProviderConfig {
   /** AWS region */
@@ -39,8 +39,8 @@ export interface AwsProviderConfig {
  * Handles ECS task management and S3 artifact storage
  */
 export class AwsProvider implements IBrowserProvider {
-  public readonly type: ProviderType = "aws";
-  public readonly name: string = "AWS Browser Provider";
+  public readonly type: ProviderType = 'aws';
+  public readonly name: string = 'AWS Browser Provider';
 
   private readonly config: AwsProviderConfig;
   private readonly ecsClient: ECSClient;
@@ -49,35 +49,36 @@ export class AwsProvider implements IBrowserProvider {
 
   constructor(config: AwsProviderConfig) {
     this.config = config;
-    
+
     const awsConfig = {
-      region: config.region || process.env.AWS_REGION || "us-east-1",
-      ...(config.accessKeyId && config.secretAccessKey && {
-        credentials: {
-          accessKeyId: config.accessKeyId,
-          secretAccessKey: config.secretAccessKey,
-        },
-      }),
+      region: config.region || process.env.AWS_REGION || 'us-east-1',
+      ...(config.accessKeyId &&
+        config.secretAccessKey && {
+          credentials: {
+            accessKeyId: config.accessKeyId,
+            secretAccessKey: config.secretAccessKey,
+          },
+        }),
     };
 
     this.ecsClient = new ECSClient(awsConfig);
     this.s3Client = new S3Client(awsConfig);
 
     if (!config.artifactsBucket) {
-      throw new Error("artifactsBucket is required for AWS provider");
+      throw new Error('artifactsBucket is required for AWS provider');
     }
     if (!config.ecsCluster) {
-      throw new Error("ecsCluster is required for AWS provider");
+      throw new Error('ecsCluster is required for AWS provider');
     }
     if (!config.browserImageUri) {
-      throw new Error("browserImageUri is required for AWS provider");
+      throw new Error('browserImageUri is required for AWS provider');
     }
   }
 
-  private log(logLine: Omit<LogLine, "category">): void {
+  private log(logLine: Omit<LogLine, 'category'>): void {
     if (this.config.logger) {
       this.config.logger({
-        category: "aws-provider",
+        category: 'aws-provider',
         ...logLine,
       });
     }
@@ -90,11 +91,11 @@ export class AwsProvider implements IBrowserProvider {
     const sessionId = this.generateSessionId();
 
     this.log({
-      message: "creating new AWS browser session",
+      message: 'creating new AWS browser session',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
-        cluster: { value: this.config.ecsCluster!, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
+        cluster: { value: this.config.ecsCluster!, type: 'string' },
       },
     });
 
@@ -102,21 +103,21 @@ export class AwsProvider implements IBrowserProvider {
     const runTaskCommand = new RunTaskCommand({
       cluster: this.config.ecsCluster,
       taskDefinition: await this.getOrCreateTaskDefinition(),
-      launchType: "FARGATE",
+      launchType: 'FARGATE',
       networkConfiguration: {
         awsvpcConfiguration: {
           subnets: this.config.vpcConfig?.subnets || [],
           securityGroups: this.config.vpcConfig?.securityGroups || [],
-          assignPublicIp: "ENABLED",
+          assignPublicIp: 'ENABLED',
         },
       },
       overrides: {
-        containerOverrides: [{
-          name: "browser",
-          environment: [
-            { name: "SESSION_ID", value: sessionId },
-          ],
-        }],
+        containerOverrides: [
+          {
+            name: 'browser',
+            environment: [{ name: 'SESSION_ID', value: sessionId }],
+          },
+        ],
       },
     });
 
@@ -124,7 +125,7 @@ export class AwsProvider implements IBrowserProvider {
     const taskArn = taskResult.tasks?.[0]?.taskArn;
 
     if (!taskArn) {
-      throw new Error("Failed to launch ECS task");
+      throw new Error('Failed to launch ECS task');
     }
 
     // Wait for task to be running and get public IP
@@ -147,12 +148,12 @@ export class AwsProvider implements IBrowserProvider {
     this.sessions.set(sessionId, session);
 
     this.log({
-      message: "AWS browser session created",
+      message: 'AWS browser session created',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
-        taskArn: { value: taskArn, type: "string" },
-        connectUrl: { value: connectUrl, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
+        taskArn: { value: taskArn, type: 'string' },
+        connectUrl: { value: connectUrl, type: 'string' },
       },
     });
 
@@ -178,17 +179,17 @@ export class AwsProvider implements IBrowserProvider {
 
       const result = await this.ecsClient.send(describeTasksCommand);
       const task = result.tasks?.[0];
-      
-      if (!task || task.lastStatus !== "RUNNING") {
+
+      if (!task || task.lastStatus !== 'RUNNING') {
         throw new Error(`Session ${sessionId} task is not running`);
       }
     }
 
     this.log({
-      message: "resuming AWS browser session",
+      message: 'resuming AWS browser session',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
       },
     });
 
@@ -200,15 +201,15 @@ export class AwsProvider implements IBrowserProvider {
    */
   async connectToBrowser(session: ProviderSession): Promise<BrowserConnectionResult> {
     if (!session.connectUrl) {
-      throw new Error("No connect URL available for session");
+      throw new Error('No connect URL available for session');
     }
 
     this.log({
-      message: "connecting to AWS browser instance",
+      message: 'connecting to AWS browser instance',
       level: 1,
       auxiliary: {
-        sessionId: { value: session.sessionId, type: "string" },
-        connectUrl: { value: session.connectUrl, type: "string" },
+        sessionId: { value: session.sessionId, type: 'string' },
+        connectUrl: { value: session.connectUrl, type: 'string' },
       },
     });
 
@@ -216,10 +217,10 @@ export class AwsProvider implements IBrowserProvider {
     const browser = await chromium.connectOverCDP(session.connectUrl);
 
     this.log({
-      message: "connected to AWS browser instance",
+      message: 'connected to AWS browser instance',
       level: 1,
       auxiliary: {
-        sessionId: { value: session.sessionId, type: "string" },
+        sessionId: { value: session.sessionId, type: 'string' },
       },
     });
 
@@ -239,10 +240,10 @@ export class AwsProvider implements IBrowserProvider {
     }
 
     this.log({
-      message: "ending AWS browser session",
+      message: 'ending AWS browser session',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
       },
     });
 
@@ -260,10 +261,10 @@ export class AwsProvider implements IBrowserProvider {
     this.sessions.delete(sessionId);
 
     this.log({
-      message: "AWS browser session ended",
+      message: 'AWS browser session ended',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
       },
     });
   }
@@ -276,13 +277,13 @@ export class AwsProvider implements IBrowserProvider {
     const key = `${sessionId}/${artifactId}/${filePath}`;
 
     this.log({
-      message: "saving artifact to S3",
+      message: 'saving artifact to S3',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
-        artifactId: { value: artifactId, type: "string" },
-        bucket: { value: this.config.artifactsBucket!, type: "string" },
-        key: { value: key, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
+        artifactId: { value: artifactId, type: 'string' },
+        bucket: { value: this.config.artifactsBucket!, type: 'string' },
+        key: { value: key, type: 'string' },
       },
     });
 
@@ -314,11 +315,11 @@ export class AwsProvider implements IBrowserProvider {
     };
 
     this.log({
-      message: "artifact saved to S3",
+      message: 'artifact saved to S3',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
-        artifactId: { value: artifactId, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
+        artifactId: { value: artifactId, type: 'string' },
       },
     });
 
@@ -330,11 +331,11 @@ export class AwsProvider implements IBrowserProvider {
    */
   async getArtifacts(sessionId: string, cursor?: string): Promise<ArtifactList> {
     this.log({
-      message: "listing artifacts from S3",
+      message: 'listing artifacts from S3',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
-        bucket: { value: this.config.artifactsBucket!, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
+        bucket: { value: this.config.artifactsBucket!, type: 'string' },
       },
     });
 
@@ -350,9 +351,9 @@ export class AwsProvider implements IBrowserProvider {
     if (result.Contents) {
       for (const object of result.Contents) {
         if (object.Key && object.Size && object.LastModified) {
-          const keyParts = object.Key.split("/");
+          const keyParts = object.Key.split('/');
           const artifactId = keyParts[1];
-          const fileName = keyParts.slice(2).join("/");
+          const fileName = keyParts.slice(2).join('/');
 
           artifacts.push({
             id: artifactId,
@@ -382,17 +383,17 @@ export class AwsProvider implements IBrowserProvider {
    */
   async downloadArtifact(sessionId: string, artifactId: string): Promise<Buffer> {
     this.log({
-      message: "downloading artifact from S3",
+      message: 'downloading artifact from S3',
       level: 1,
       auxiliary: {
-        sessionId: { value: sessionId, type: "string" },
-        artifactId: { value: artifactId, type: "string" },
+        sessionId: { value: sessionId, type: 'string' },
+        artifactId: { value: artifactId, type: 'string' },
       },
     });
 
     // List objects to find the artifact
     const artifacts = await this.getArtifacts(sessionId);
-    const artifact = artifacts.artifacts.find(a => a.id === artifactId);
+    const artifact = artifacts.artifacts.find((a) => a.id === artifactId);
 
     if (!artifact) {
       throw new Error(`Artifact ${artifactId} not found for session ${sessionId}`);
@@ -404,7 +405,7 @@ export class AwsProvider implements IBrowserProvider {
     });
 
     const result = await this.s3Client.send(getObjectCommand);
-    
+
     if (!result.Body) {
       throw new Error(`No content found for artifact ${artifactId}`);
     }
@@ -412,7 +413,7 @@ export class AwsProvider implements IBrowserProvider {
     // Convert stream to buffer
     const chunks: Buffer[] = [];
     const reader = result.Body as any;
-    
+
     return new Promise((resolve, reject) => {
       reader.on('data', (chunk: Buffer) => chunks.push(chunk));
       reader.on('error', reject);
@@ -425,7 +426,7 @@ export class AwsProvider implements IBrowserProvider {
    */
   async cleanup(): Promise<void> {
     this.log({
-      message: "cleaning up AWS provider resources",
+      message: 'cleaning up AWS provider resources',
       level: 1,
     });
 
@@ -444,7 +445,7 @@ export class AwsProvider implements IBrowserProvider {
             message: `Error stopping task ${taskArn}`,
             level: 0,
             auxiliary: {
-              error: { value: (error as Error).message, type: "string" },
+              error: { value: (error as Error).message, type: 'string' },
             },
           });
         }
@@ -470,23 +471,23 @@ export class AwsProvider implements IBrowserProvider {
       const result = await this.ecsClient.send(describeTasksCommand);
       const task = result.tasks?.[0];
 
-      if (task?.lastStatus === "RUNNING") {
+      if (task?.lastStatus === 'RUNNING') {
         // Extract public IP from task
-        const attachment = task.attachments?.find(a => a.type === "NetworkInterface");
-        const detail = attachment?.details?.find(d => d.name === "networkInterfaceId");
-        
+        const attachment = task.attachments?.find((a) => a.type === 'NetworkInterface');
+        const detail = attachment?.details?.find((d) => d.name === 'networkInterfaceId');
+
         if (detail?.value) {
           // In a real implementation, you'd use EC2 to get the public IP
           // For now, we'll simulate it
-          return "placeholder-public-ip";
+          return 'placeholder-public-ip';
         }
       }
 
-      if (task?.lastStatus === "STOPPED") {
+      if (task?.lastStatus === 'STOPPED') {
         throw new Error(`Task ${taskArn} stopped unexpectedly`);
       }
 
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
 
     throw new Error(`Task ${taskArn} did not start within ${maxWaitTime}ms`);
@@ -498,7 +499,7 @@ export class AwsProvider implements IBrowserProvider {
   private async getOrCreateTaskDefinition(): Promise<string> {
     // In a real implementation, this would check if the task definition exists
     // and create it if it doesn't
-    return "browser-task-definition";
+    return 'browser-task-definition';
   }
 
   /**

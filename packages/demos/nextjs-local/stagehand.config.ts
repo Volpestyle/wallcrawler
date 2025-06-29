@@ -17,11 +17,7 @@ export function createLocalProvider() {
         height: 720,
       },
       // Additional security and performance options
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-web-security',
-        '--disable-dev-shm-usage',
-      ],
+      args: ['--disable-blink-features=AutomationControlled', '--disable-web-security', '--disable-dev-shm-usage'],
       bypassCSP: true,
       ignoreHTTPSErrors: true,
     },
@@ -69,8 +65,7 @@ export function validateModelConfig(modelProvider: string): {
 
     if (!modelName) {
       throw new Error(
-        `Missing OLLAMA_MODEL environment variable. ` +
-          `Please specify the model name (e.g., llama3, qwen, mistral).`
+        `Missing OLLAMA_MODEL environment variable. ` + `Please specify the model name (e.g., llama3, qwen, mistral).`
       );
     }
 
@@ -88,16 +83,12 @@ export function validateModelConfig(modelProvider: string): {
   const modelName = process.env[modelEnvVar];
 
   if (!apiKey) {
-    throw new Error(
-      `Missing ${apiKeyEnvVar} environment variable. ` +
-        `Please set your ${modelProvider} API key.`
-    );
+    throw new Error(`Missing ${apiKeyEnvVar} environment variable. ` + `Please set your ${modelProvider} API key.`);
   }
 
   if (!modelName) {
     throw new Error(
-      `Missing ${modelEnvVar} environment variable. ` +
-        `Please specify the model name for ${modelProvider}.`
+      `Missing ${modelEnvVar} environment variable. ` + `Please specify the model name for ${modelProvider}.`
     );
   }
 

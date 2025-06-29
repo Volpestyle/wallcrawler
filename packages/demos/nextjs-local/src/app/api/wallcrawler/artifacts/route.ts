@@ -7,7 +7,7 @@ import { Stagehand } from '@wallcrawler/stagehand';
 
 declare global {
   var wallcrawlerProvider: any;
-  var wallcrawlerInstances: Map<string, { stagehand: Stagehand; lastUsed: number; }>;
+  var wallcrawlerInstances: Map<string, { stagehand: Stagehand; lastUsed: number }>;
 }
 
 export async function GET(request: NextRequest) {
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       try {
         const screenshotPath = path.join(process.cwd(), '.wallcrawler/demo/screenshots', `${id}.png`);
         const imageBuffer = await readFile(screenshotPath);
-        
+
         return new NextResponse(imageBuffer, {
           headers: {
             'Content-Type': 'image/png',
@@ -30,27 +30,21 @@ export async function GET(request: NextRequest) {
           },
         });
       } catch (error) {
-        return NextResponse.json(
-          { error: 'Screenshot not found' },
-          { status: 404 }
-        );
+        return NextResponse.json({ error: 'Screenshot not found' }, { status: 404 });
       }
     }
 
     // Otherwise return session artifacts
     if (!sessionId) {
-      return NextResponse.json(
-        { error: 'Session ID is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
     const provider = global.wallcrawlerProvider;
-    
+
     try {
       // Get artifacts from provider (this will also validate session exists)
       const artifactsList = await provider.getArtifacts(sessionId);
-      
+
       return NextResponse.json({
         sessionId,
         artifacts: artifactsList.artifacts,
@@ -58,16 +52,10 @@ export async function GET(request: NextRequest) {
         cursor: artifactsList.cursor,
       });
     } catch (error) {
-      return NextResponse.json(
-        { error: 'Session not found or no artifacts available' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Session not found or no artifacts available' }, { status: 404 });
     }
   } catch (error) {
     console.error('Artifacts API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to get artifacts' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to get artifacts' }, { status: 500 });
   }
 }

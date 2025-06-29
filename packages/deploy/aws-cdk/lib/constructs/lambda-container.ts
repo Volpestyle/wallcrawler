@@ -28,10 +28,12 @@ export class WallCrawlerLambdaContainer extends Construct {
     // Create ECR repository for container images
     this.repository = new ecr.Repository(this, 'Repository', {
       repositoryName: 'wallcrawler-lambda',
-      lifecycleRules: [{
-        maxImageCount: 10,
-        description: 'Keep only 10 most recent images',
-      }],
+      lifecycleRules: [
+        {
+          maxImageCount: 10,
+          description: 'Keep only 10 most recent images',
+        },
+      ],
       removalPolicy: RemovalPolicy.DESTROY,
       emptyOnDelete: true,
     });
@@ -57,11 +59,11 @@ export class WallCrawlerLambdaContainer extends Construct {
         CHECKPOINTS_TABLE: props.checkpointsTable.tableName,
         SESSIONS_TABLE: props.sessionsTable.tableName,
         METRICS_TABLE: props.metricsTable?.tableName || '',
-        
+
         // LLM Configuration
         LLM_PROVIDER: props.llmProvider || 'bedrock',
         LLM_MODEL: props.llmModel || 'anthropic.claude-3-sonnet-20240229-v1:0',
-        
+
         // Feature flags
         SAVE_DOM: 'false',
         NODE_ENV: 'production',
@@ -75,42 +77,38 @@ export class WallCrawlerLambdaContainer extends Construct {
     props.checkpointsTable.grantReadWriteData(this.function);
     props.sessionsTable.grantReadWriteData(this.function);
     props.interventionHandler.grantInvoke(this.function);
-    
+
     if (props.metricsTable) {
       props.metricsTable.grantReadWriteData(this.function);
     }
 
     // Add Bedrock permissions if using Bedrock
     if (!props.llmProvider || props.llmProvider === 'bedrock') {
-      this.function.addToRolePolicy(new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          'bedrock:InvokeModel',
-          'bedrock:InvokeModelWithResponseStream',
-        ],
-        resources: ['arn:aws:bedrock:*:*:model/*'],
-      }));
+      this.function.addToRolePolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+          resources: ['arn:aws:bedrock:*:*:model/*'],
+        })
+      );
     }
 
     // Add CloudWatch Logs permissions
-    this.function.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'logs:CreateLogGroup',
-        'logs:CreateLogStream',
-        'logs:PutLogEvents',
-      ],
-      resources: ['arn:aws:logs:*:*:*'],
-    }));
+    this.function.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
+        resources: ['arn:aws:logs:*:*:*'],
+      })
+    );
 
     // Add X-Ray permissions for tracing
-    this.function.addToRolePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'xray:PutTraceSegments',
-        'xray:PutTelemetryRecords',
-      ],
-      resources: ['*'],
-    }));
+    this.function.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+        resources: ['*'],
+      })
+    );
   }
 }

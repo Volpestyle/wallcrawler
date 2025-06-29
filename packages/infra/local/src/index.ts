@@ -1,1 +1,1 @@
-export { LocalProvider, LocalProviderConfig } from "./LocalProvider";
+export { LocalProvider, LocalProviderConfig } from './LocalProvider';

@@ -50,21 +50,11 @@ export default function ResultsDisplay({ result, scenario }: ResultsDisplayProps
           <div className="flex items-center space-x-2">
             {result.data && (
               <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleCopyData}
-                  className="text-xs"
-                >
+                <Button size="sm" variant="outline" onClick={handleCopyData} className="text-xs">
                   <Copy className="w-3 h-3 mr-1" />
                   {copiedData ? 'Copied!' : 'Copy'}
                 </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleDownloadData}
-                  className="text-xs"
-                >
+                <Button size="sm" variant="outline" onClick={handleDownloadData} className="text-xs">
                   <Download className="w-3 h-3 mr-1" />
                   Download
                 </Button>
@@ -72,9 +62,7 @@ export default function ResultsDisplay({ result, scenario }: ResultsDisplayProps
             )}
           </div>
         </CardTitle>
-        <CardDescription>
-          {result.success ? 'Task completed successfully' : 'Task failed with error'}
-        </CardDescription>
+        <CardDescription>{result.success ? 'Task completed successfully' : 'Task failed with error'}</CardDescription>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="data" className="w-full">
@@ -92,9 +80,7 @@ export default function ResultsDisplay({ result, scenario }: ResultsDisplayProps
               </div>
             ) : result.data ? (
               <div className="bg-gray-50 p-4 rounded-md overflow-x-auto">
-                <pre className="text-sm font-mono">
-                  {JSON.stringify(result.data, null, 2)}
-                </pre>
+                <pre className="text-sm font-mono">{JSON.stringify(result.data, null, 2)}</pre>
               </div>
             ) : (
               <p className="text-gray-500">No data extracted</p>
@@ -125,12 +111,7 @@ export default function ResultsDisplay({ result, scenario }: ResultsDisplayProps
           <TabsContent value="logs" className="space-y-4">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm text-gray-600">Execution logs</p>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowLogs(!showLogs)}
-                className="text-xs"
-              >
+              <Button size="sm" variant="ghost" onClick={() => setShowLogs(!showLogs)} className="text-xs">
                 {showLogs ? (
                   <>
                     <EyeOff className="w-3 h-3 mr-1" />
@@ -146,9 +127,7 @@ export default function ResultsDisplay({ result, scenario }: ResultsDisplayProps
             </div>
             {showLogs && result.logs && result.logs.length > 0 ? (
               <div className="bg-gray-900 text-gray-100 p-4 rounded-md overflow-x-auto">
-                <pre className="text-xs font-mono">
-                  {result.logs.join('\n')}
-                </pre>
+                <pre className="text-xs font-mono">{result.logs.join('\n')}</pre>
               </div>
             ) : showLogs ? (
               <p className="text-gray-500">No logs available</p>

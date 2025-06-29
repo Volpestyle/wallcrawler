@@ -4,31 +4,32 @@ import { validateModelConfig } from '../../../../../stagehand.config';
 // Available model providers
 const MODEL_PROVIDERS = {
   openai: {
-    displayName: 'OpenAI GPT-4o'
+    displayName: 'OpenAI',
   },
   anthropic: {
-    displayName: 'Anthropic Claude-3.5-Sonnet'
+    displayName: 'Anthropic',
   },
   gemini: {
-    displayName: 'Google Gemini-1.5-Pro'
+    displayName: 'Gemini',
   },
   ollama: {
-    displayName: 'Ollama (Local)'
-  }
+    displayName: 'Ollama',
+  },
 };
 
 export async function GET() {
   try {
     const availableModels = [];
-    
+
     // Check each model provider
     for (const [provider, config] of Object.entries(MODEL_PROVIDERS)) {
       try {
-        validateModelConfig(provider);
+        const modelConfig = validateModelConfig(provider);
         availableModels.push({
           provider,
           ...config,
-          available: true
+          modelName: modelConfig.modelName,
+          available: true,
         });
       } catch (error) {
         // Model not configured, skip it
@@ -37,14 +38,10 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      models: availableModels
+      models: availableModels,
     });
-
   } catch (error) {
     console.error('Error checking model availability:', error);
-    return NextResponse.json(
-      { error: 'Failed to check model availability' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to check model availability' }, { status: 500 });
   }
 }
