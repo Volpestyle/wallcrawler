@@ -35,7 +35,7 @@ export function WallcrawlerAgentDemo() {
     setStatusMessage('Initializing agent...');
 
     try {
-      const scenario = agentDemoScenarios.find(s => s.id === selectedScenario);
+      const scenario = agentDemoScenarios.find((s) => s.id === selectedScenario);
       const task = scenario ? scenario.task : customTask;
       const url = scenario ? 'https://www.google.com' : customUrl;
       const agentOptions = scenario?.agentOptions || {
@@ -70,17 +70,15 @@ export function WallcrawlerAgentDemo() {
 
       // Poll for results
       const pollInterval = setInterval(async () => {
-        const statusResponse = await fetch(
-          `/api/wallcrawler/status?sessionId=${sessionId}`
-        );
-        
+        const statusResponse = await fetch(`/api/wallcrawler/status?sessionId=${sessionId}`);
+
         if (statusResponse.ok) {
           const status = await statusResponse.json();
-          
+
           if (status.message) {
             setStatusMessage(status.message);
           }
-          
+
           if (status.progress) {
             setProgress(status.progress);
           }
@@ -111,31 +109,25 @@ export function WallcrawlerAgentDemo() {
     }
   };
 
-  const selectedScenarioData = agentDemoScenarios.find(
-    s => s.id === selectedScenario
-  );
+  const selectedScenarioData = agentDemoScenarios.find((s) => s.id === selectedScenario);
 
   return (
     <div className="max-w-4xl mx-auto p-6">
       <h1 className="text-3xl font-bold mb-8">WallCrawler Agent Demo</h1>
-      
+
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-        <h2 className="text-lg font-semibold text-blue-900 mb-2">
-          What is the WallCrawler Agent?
-        </h2>
+        <h2 className="text-lg font-semibold text-blue-900 mb-2">What is the WallCrawler Agent?</h2>
         <p className="text-blue-800">
-          The WallCrawler Agent can execute complex multi-step tasks by breaking them
-          down into individual actions. It uses AI to plan and execute sequences of
-          navigation, interaction, and data extraction operations automatically.
+          The WallCrawler Agent can execute complex multi-step tasks by breaking them down into individual actions. It
+          uses AI to plan and execute sequences of navigation, interaction, and data extraction operations
+          automatically.
         </p>
       </div>
 
       <div className="space-y-6">
         {/* Scenario Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Select a Demo Scenario
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Select a Demo Scenario</label>
           <select
             value={selectedScenario}
             onChange={(e) => setSelectedScenario(e.target.value)}
@@ -155,16 +147,12 @@ export function WallcrawlerAgentDemo() {
         {selectedScenarioData && (
           <div className="bg-gray-50 rounded-lg p-4">
             <h3 className="font-semibold mb-2">{selectedScenarioData.name}</h3>
-            <p className="text-sm text-gray-600 mb-2">
-              {selectedScenarioData.description}
-            </p>
-            <div className="bg-white rounded p-3 font-mono text-sm">
-              {selectedScenarioData.task}
-            </div>
+            <p className="text-sm text-gray-600 mb-2">{selectedScenarioData.description}</p>
+            <div className="bg-white rounded p-3 font-mono text-sm">{selectedScenarioData.task}</div>
             {selectedScenarioData.agentOptions && (
               <div className="mt-2 text-sm text-gray-500">
-                Max Steps: {selectedScenarioData.agentOptions.maxSteps} |
-                Strategy: {selectedScenarioData.agentOptions.planningStrategy}
+                Max Steps: {selectedScenarioData.agentOptions.maxSteps} | Strategy:{' '}
+                {selectedScenarioData.agentOptions.planningStrategy}
               </div>
             )}
           </div>
@@ -174,9 +162,7 @@ export function WallcrawlerAgentDemo() {
         {!selectedScenario && (
           <>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Starting URL
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Starting URL</label>
               <input
                 type="url"
                 value={customUrl}
@@ -188,9 +174,7 @@ export function WallcrawlerAgentDemo() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Task Description
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Task Description</label>
               <textarea
                 value={customTask}
                 onChange={(e) => setCustomTask(e.target.value)}
@@ -242,19 +226,14 @@ export function WallcrawlerAgentDemo() {
         {/* Results */}
         {result && (
           <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-            <h3 className="text-lg font-semibold text-green-900 mb-3">
-              Task Completed Successfully
-            </h3>
-            
+            <h3 className="text-lg font-semibold text-green-900 mb-3">Task Completed Successfully</h3>
+
             {/* Steps Summary */}
             <div className="mb-4">
               <h4 className="font-medium mb-2">Execution Steps:</h4>
               <div className="space-y-2">
                 {result.steps.map((step, index) => (
-                  <div
-                    key={index}
-                    className="bg-white rounded p-3 text-sm"
-                  >
+                  <div key={index} className="bg-white rounded p-3 text-sm">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <span className="font-medium text-green-700">
@@ -262,15 +241,9 @@ export function WallcrawlerAgentDemo() {
                         </span>
                         <span className="ml-2">{step.instruction}</span>
                       </div>
-                      <span className="text-gray-500 text-xs">
-                        {step.duration}ms
-                      </span>
+                      <span className="text-gray-500 text-xs">{step.duration}ms</span>
                     </div>
-                    {step.result?.error && (
-                      <div className="text-red-600 text-xs mt-1">
-                        Error: {step.result.error}
-                      </div>
-                    )}
+                    {step.result?.error && <div className="text-red-600 text-xs mt-1">Error: {step.result.error}</div>}
                   </div>
                 ))}
               </div>

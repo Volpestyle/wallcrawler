@@ -5,7 +5,7 @@ import { Stagehand } from '@wallcrawler/stagehand';
 
 declare global {
   var wallcrawlerProvider: any;
-  var wallcrawlerInstances: Map<string, { stagehand: Stagehand; lastUsed: number; }>;
+  var wallcrawlerInstances: Map<string, { stagehand: Stagehand; lastUsed: number }>;
 }
 
 export async function GET(request: NextRequest) {
@@ -14,14 +14,11 @@ export async function GET(request: NextRequest) {
     const sessionId = searchParams.get('sessionId');
 
     if (!sessionId) {
-      return NextResponse.json(
-        { error: 'Session ID is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Session ID is required' }, { status: 400 });
     }
 
     const provider = global.wallcrawlerProvider;
-    
+
     try {
       const providerSession = await provider.resumeSession(sessionId);
       return NextResponse.json({
@@ -31,16 +28,10 @@ export async function GET(request: NextRequest) {
         metadata: providerSession.metadata,
       });
     } catch (error) {
-      return NextResponse.json(
-        { error: 'Session not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
   } catch (error) {
     console.error('Status API error:', error);
-    return NextResponse.json(
-      { error: 'Failed to get status' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to get status' }, { status: 500 });
   }
 }

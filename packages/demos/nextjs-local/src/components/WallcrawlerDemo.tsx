@@ -4,13 +4,7 @@ import { useState } from 'react';
 import ActionForm from './ActionForm';
 import ResultsDisplay from './ResultsDisplay';
 import StatusIndicator from './StatusIndicator';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { getDemoScenario } from '@/lib/demo-scenarios';
 
 interface WallcrawlerDemoProps {
@@ -38,12 +32,7 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
 
   const scenarioInfo = getDemoScenario(scenario);
 
-  const handleSubmit = async (formData: {
-    url: string;
-    command: string;
-    schema?: string;
-    model?: string;
-  }) => {
+  const handleSubmit = async (formData: { url: string; command: string; schema?: string; model?: string }) => {
     setTaskStatus({ status: 'running', message: 'Initializing browser...' });
     setTaskResult(null);
 
@@ -67,9 +56,7 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
       // Poll for status updates
       const pollInterval = setInterval(async () => {
         try {
-          const statusResponse = await fetch(
-            `/api/wallcrawler/status?sessionId=${newSessionId}`
-          );
+          const statusResponse = await fetch(`/api/wallcrawler/status?sessionId=${newSessionId}`);
           const statusData = await statusResponse.json();
 
           setTaskStatus({
@@ -78,16 +65,11 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
             progress: statusData.progress,
           });
 
-          if (
-            statusData.status === 'success' ||
-            statusData.status === 'error'
-          ) {
+          if (statusData.status === 'success' || statusData.status === 'error') {
             clearInterval(pollInterval);
 
             // Get final results
-            const resultsResponse = await fetch(
-              `/api/wallcrawler/artifacts?sessionId=${newSessionId}`
-            );
+            const resultsResponse = await fetch(`/api/wallcrawler/artifacts?sessionId=${newSessionId}`);
             const resultsData = await resultsResponse.json();
 
             setTaskResult(resultsData);
@@ -132,11 +114,7 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
 
             <div className="flex items-center justify-between">
               <StatusIndicator status={taskStatus} />
-              {sessionId && (
-                <span className="text-xs text-gray-500">
-                  Session: {sessionId.slice(0, 8)}...
-                </span>
-              )}
+              {sessionId && <span className="text-xs text-gray-500">Session: {sessionId.slice(0, 8)}...</span>}
             </div>
           </div>
         </CardContent>
@@ -148,18 +126,14 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
       <Card>
         <CardHeader>
           <CardTitle>Example Commands</CardTitle>
-          <CardDescription>
-            Try these natural language commands for this scenario
-          </CardDescription>
+          <CardDescription>Try these natural language commands for this scenario</CardDescription>
         </CardHeader>
         <CardContent>
           <ul className="space-y-2">
             {scenarioInfo.exampleCommands.map((command, index) => (
               <li key={index} className="flex items-start">
                 <span className="text-gray-400 mr-2">•</span>
-                <code className="text-sm bg-gray-50 px-2 py-1 rounded">
-                  {command}
-                </code>
+                <code className="text-sm bg-gray-50 px-2 py-1 rounded">{command}</code>
               </li>
             ))}
           </ul>

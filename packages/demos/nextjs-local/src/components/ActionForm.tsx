@@ -14,22 +14,12 @@ interface ActionFormProps {
     command?: string;
     schema?: string;
   };
-  onSubmit: (data: {
-    url: string;
-    command: string;
-    schema?: string;
-    model?: string;
-  }) => void;
+  onSubmit: (data: { url: string; command: string; schema?: string; model?: string }) => void;
   isRunning: boolean;
   showSchema?: boolean;
 }
 
-export default function ActionForm({ 
-  defaultValues, 
-  onSubmit, 
-  isRunning,
-  showSchema = false 
-}: ActionFormProps) {
+export default function ActionForm({ defaultValues, onSubmit, isRunning, showSchema = false }: ActionFormProps) {
   const [url, setUrl] = useState(defaultValues?.url || '');
   const [command, setCommand] = useState(defaultValues?.command || '');
   const [schema, setSchema] = useState(defaultValues?.schema || '');
@@ -102,11 +92,7 @@ export default function ActionForm({
         </Select>
       </div>
 
-      <Button 
-        type="submit" 
-        disabled={isRunning || !url || !command}
-        className="w-full"
-      >
+      <Button type="submit" disabled={isRunning || !url || !command} className="w-full">
         {isRunning ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

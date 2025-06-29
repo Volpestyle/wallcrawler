@@ -1,1 +1,1 @@
-export { AwsProvider, AwsProviderConfig } from "./AwsProvider";
+export { AwsProvider, AwsProviderConfig } from './AwsProvider';

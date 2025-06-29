@@ -10,10 +10,10 @@ const nextConfig = {
       tls: false,
       dns: false,
       child_process: false,
-      perf_hooks: false
+      perf_hooks: false,
     };
     return config;
-  }
+  },
 };
 
 module.exports = nextConfig;

@@ -1,15 +1,9 @@
 'use client';
 
-import WorkflowBuilder from '@/components/WorkflowBuilder';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Code2, Globe, Database, Zap, Bot, Workflow } from 'lucide-react';
+import WorkflowBuilder from '@/components/WorkflowBuilder';
 
 export default function Home() {
   const features = [
@@ -44,13 +38,10 @@ export default function Home() {
     <div className="container mx-auto px-4 py-8 max-w-7xl">
       {/* Hero Section */}
       <div className="text-center mb-12">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">
-          WallCrawler Workflow Builder
-        </h1>
+        <h1 className="text-4xl font-bold text-gray-900 mb-4">WallCrawler Workflow Builder</h1>
         <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-          Build and execute multi-step browser automation workflows using
-          natural language commands. Create complex sequences that navigate,
-          interact, observe, and extract data from web pages.
+          Build and execute multi-step browser automation workflows using natural language commands. Create complex
+          sequences that navigate, interact, observe, and extract data from web pages.
         </p>
       </div>
 
@@ -73,25 +64,20 @@ export default function Home() {
 
       {/* Workflow Builder Section */}
       <div className="mb-12">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-6">
-          Build Your Workflow
-        </h2>
+        <h2 className="text-2xl font-semibold text-gray-900 mb-6">Build Your Workflow</h2>
 
         <WorkflowBuilder />
       </div>
 
       {/* Local Storage Info */}
       <div className="mb-12">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-6">
-          Local Storage
-        </h2>
+        <h2 className="text-2xl font-semibold text-gray-900 mb-6">Local Storage</h2>
 
         <Card>
           <CardHeader>
             <CardTitle>Artifacts Directory</CardTitle>
             <CardDescription>
-              WallCrawler stores screenshots and data in the{' '}
-              <code className="font-mono">.wallcrawler</code> directory
+              WallCrawler stores screenshots and data in the <code className="font-mono">.wallcrawler</code> directory
             </CardDescription>
           </CardHeader>
           <CardContent>

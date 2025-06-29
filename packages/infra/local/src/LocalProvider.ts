@@ -35,12 +35,11 @@ export class LocalProvider implements IBrowserProvider {
   private readonly config: LocalProviderConfig;
   private readonly artifactsPath: string;
   private readonly sessions: Map<string, ProviderSession> = new Map();
-  private readonly sessionState: Map<string, { stagehand?: any; lastUsed: number; currentModel?: string; }> = new Map();
+  private readonly sessionState: Map<string, { stagehand?: any; lastUsed: number; currentModel?: string }> = new Map();
 
   constructor(config: LocalProviderConfig = {}) {
     this.config = config;
-    this.artifactsPath =
-      config.artifactsPath || path.join(os.tmpdir(), 'wallcrawler-artifacts');
+    this.artifactsPath = config.artifactsPath || path.join(os.tmpdir(), 'wallcrawler-artifacts');
 
     // Ensure artifacts directory exists
     if (!fs.existsSync(this.artifactsPath)) {
@@ -123,9 +122,7 @@ export class LocalProvider implements IBrowserProvider {
   /**
    * Connect to a browser instance
    */
-  async connectToBrowser(
-    session: ProviderSession
-  ): Promise<BrowserConnectionResult> {
+  async connectToBrowser(session: ProviderSession): Promise<BrowserConnectionResult> {
     this.log({
       message: 'launching local browser',
       level: 1,
@@ -138,10 +135,7 @@ export class LocalProvider implements IBrowserProvider {
       },
     });
 
-    const userDataDir = path.join(
-      os.tmpdir(),
-      `wallcrawler-${session.sessionId}`
-    );
+    const userDataDir = path.join(os.tmpdir(), `wallcrawler-${session.sessionId}`);
 
     // Launch browser with stealth options
     const context = await chromium.launchPersistentContext(userDataDir, {
@@ -200,18 +194,11 @@ export class LocalProvider implements IBrowserProvider {
   /**
    * Save an artifact to local storage
    */
-  async saveArtifact(
-    sessionId: string,
-    filePath: string,
-    data: Buffer
-  ): Promise<Artifact> {
+  async saveArtifact(sessionId: string, filePath: string, data: Buffer): Promise<Artifact> {
     const artifactId = this.generateArtifactId();
     const fileName = path.basename(filePath);
     const sessionArtifactsPath = path.join(this.artifactsPath, sessionId);
-    const artifactPath = path.join(
-      sessionArtifactsPath,
-      `${artifactId}_${fileName}`
-    );
+    const artifactPath = path.join(sessionArtifactsPath, `${artifactId}_${fileName}`);
 
     // Ensure session artifacts directory exists
     if (!fs.existsSync(sessionArtifactsPath)) {
@@ -261,10 +248,7 @@ export class LocalProvider implements IBrowserProvider {
   /**
    * List artifacts for a session
    */
-  async getArtifacts(
-    sessionId: string,
-    _cursor?: string
-  ): Promise<ArtifactList> {
+  async getArtifacts(sessionId: string, _cursor?: string): Promise<ArtifactList> {
     const sessionArtifactsPath = path.join(this.artifactsPath, sessionId);
 
     if (!fs.existsSync(sessionArtifactsPath)) {
@@ -309,17 +293,12 @@ export class LocalProvider implements IBrowserProvider {
   /**
    * Download a specific artifact
    */
-  async downloadArtifact(
-    sessionId: string,
-    artifactId: string
-  ): Promise<Buffer> {
+  async downloadArtifact(sessionId: string, artifactId: string): Promise<Buffer> {
     const artifacts = await this.getArtifacts(sessionId);
     const artifact = artifacts.artifacts.find((a) => a.id === artifactId);
 
     if (!artifact) {
-      throw new Error(
-        `Artifact ${artifactId} not found for session ${sessionId}`
-      );
+      throw new Error(`Artifact ${artifactId} not found for session ${sessionId}`);
     }
 
     return fs.readFileSync(artifact.path);
@@ -374,11 +353,11 @@ export class LocalProvider implements IBrowserProvider {
           query: (parameters: PermissionDescriptor) => Promise<PermissionStatus>;
         };
       };
-      
+
       const originalQuery = extendedNavigator.permissions.query;
       extendedNavigator.permissions.query = (parameters: PermissionDescriptor) =>
         parameters.name === 'notifications'
-          ? Promise.resolve({ 
+          ? Promise.resolve({
               state: (window as ExtendedWindow).Notification.permission,
               name: parameters.name,
               onchange: null,
@@ -407,7 +386,7 @@ export class LocalProvider implements IBrowserProvider {
   /**
    * Session state management for Stagehand instances
    */
-  
+
   setSessionState(sessionId: string, stagehand: any, model?: string): void {
     this.sessionState.set(sessionId, {
       stagehand,
@@ -416,7 +395,7 @@ export class LocalProvider implements IBrowserProvider {
     });
   }
 
-  getSessionState(sessionId: string): { stagehand?: any; lastUsed: number; currentModel?: string; } | undefined {
+  getSessionState(sessionId: string): { stagehand?: any; lastUsed: number; currentModel?: string } | undefined {
     const state = this.sessionState.get(sessionId);
     if (state) {
       state.lastUsed = Date.now(); // Update last used time
@@ -451,7 +430,7 @@ export class LocalProvider implements IBrowserProvider {
           message: `Cleaning up expired session state: ${sessionId}`,
           level: 1,
         });
-        
+
         // Close stagehand instance if it exists
         if (state.stagehand && typeof state.stagehand.close === 'function') {
           try {
@@ -463,7 +442,7 @@ export class LocalProvider implements IBrowserProvider {
             });
           }
         }
-        
+
         this.sessionState.delete(sessionId);
       }
     }

@@ -9,11 +9,7 @@ export const metadata: Metadata = {
   description: 'AI-powered browser automation with WallCrawler using local infrastructure',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={inter.className}>
@@ -22,12 +18,8 @@ export default function RootLayout({
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex items-center justify-between h-16">
                 <div className="flex items-center">
-                  <h1 className="text-xl font-semibold text-gray-900">
-                    WallCrawler Demo
-                  </h1>
-                  <span className="ml-3 text-sm text-gray-500">
-                    Local Provider
-                  </span>
+                  <h1 className="text-xl font-semibold text-gray-900">WallCrawler Demo</h1>
+                  <span className="ml-3 text-sm text-gray-500">Local Provider</span>
                 </div>
                 <nav className="flex space-x-4">
                   <a href="#features" className="text-gray-600 hover:text-gray-900">
@@ -36,9 +28,9 @@ export default function RootLayout({
                   <a href="#docs" className="text-gray-600 hover:text-gray-900">
                     Documentation
                   </a>
-                  <a 
-                    href="https://github.com/Volpestyle/wallcrawler" 
-                    target="_blank" 
+                  <a
+                    href="https://github.com/Volpestyle/wallcrawler"
+                    target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-600 hover:text-gray-900"
                   >

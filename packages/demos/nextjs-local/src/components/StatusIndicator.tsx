@@ -46,14 +46,12 @@ export default function StatusIndicator({ status }: StatusIndicatorProps) {
             {status.status === 'error' && 'Error'}
           </span>
         </span>
-        {status.message && (
-          <span className="text-sm text-gray-600">{status.message}</span>
-        )}
+        {status.message && <span className="text-sm text-gray-600">{status.message}</span>}
         {status.progress !== undefined && status.status === 'running' && (
           <span className="text-sm text-gray-500">({status.progress}%)</span>
         )}
       </div>
-      
+
       {/* Progress Bar */}
       {status.progress !== undefined && status.status === 'running' && (
         <div className="w-full bg-gray-200 rounded-full h-2">
