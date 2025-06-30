@@ -21,12 +21,16 @@ export interface WorkflowStep {
 }
 
 export interface ModelInfo {
-  provider: string;
-  displayName: string;
-  modelName: string;
-  input: number;
-  output: number;
-  available: boolean;
+  id: string; // New: unique identifier like "openai/gpt-4o"
+  name: string; // Model name like "gpt-4o"
+  displayName: string; // Display name like "GPT-4O (OpenAI)"
+  provider: string; // Provider like "openai"
+  pricing: ModelPricing; // Pricing information
+  type: 'cloud' | 'local'; // Model type
+  note?: string; // Optional note (for free models)
+  available?: boolean; // Deprecated: kept for compatibility
+  hasApiKey?: boolean; // Whether API key is configured
+  apiKeyStatus?: 'configured' | 'missing' | 'not_required'; // API key status
 }
 
 export interface WorkflowStats {
@@ -49,7 +53,22 @@ export interface PricingResponse {
   available: boolean;
   note?: string;
   reason?: string;
-  lastFetched?: string;
+  lastFetched: string;
+  sources?: string[];
+  models: ModelInfo[]; // New: comprehensive model list
+  modelsCount?: {
+    openai: number;
+    anthropic: number;
+    gemini: number;
+  };
+  openai?: ProviderPricing;
+  anthropic?: ProviderPricing;
+  gemini?: ProviderPricing;
+  ollama?: {
+    input: number;
+    output: number;
+    note: string;
+  };
   [provider: string]: any;
 }
 

@@ -5,7 +5,6 @@ import ActionForm from './ActionForm';
 import ResultsDisplay from './ResultsDisplay';
 import StatusIndicator from './StatusIndicator';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { getDemoScenario } from '@/lib/demo-scenarios';
 
 interface WallcrawlerDemoProps {
   scenario: 'scraping' | 'form' | 'navigation' | 'extraction';
@@ -30,7 +29,13 @@ export default function WallcrawlerDemo({ scenario }: WallcrawlerDemoProps) {
   const [taskResult, setTaskResult] = useState<TaskResult | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
-  const scenarioInfo = getDemoScenario(scenario);
+  // Placeholder scenario info - was previously using getDemoScenario
+  const scenarioInfo = {
+    title: `${scenario.charAt(0).toUpperCase() + scenario.slice(1)} Demo`,
+    description: `Demo for ${scenario} functionality`,
+    url: 'https://example.com',
+    instruction: 'Demo scenario placeholder',
+  };
 
   const handleSubmit = async (formData: { url: string; command: string; schema?: string; model?: string }) => {
     setTaskStatus({ status: 'running', message: 'Initializing browser...' });

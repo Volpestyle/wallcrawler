@@ -29,9 +29,11 @@ export default function WorkflowBuilder() {
   const [isRunning, setIsRunning] = useState(false);
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState<string>('');
+  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [modelPricing, setModelPricing] = useState<Record<string, ProviderPricing>>({});
+  const [pricingStatus, setPricingStatus] = useState<PricingResponse | null>(null);
   const [workflowStats, setWorkflowStats] = useState<WorkflowStatsType>({
     totalTokens: 0,
     totalCost: 0,
@@ -49,7 +51,18 @@ export default function WorkflowBuilder() {
 
         if (modelsData.models && modelsData.models.length > 0) {
           setAvailableModels(modelsData.models);
-          setSelectedModel(modelsData.models[0].provider);
+          
+          // Auto-select first provider and its first model
+          const providers = [...new Set(modelsData.models.map((m: ModelInfo) => m.provider))];
+          if (providers.length > 0) {
+            const firstProvider = providers[0] as string;
+            setSelectedProvider(firstProvider);
+            
+            const firstProviderModels = modelsData.models.filter((m: ModelInfo) => m.provider === firstProvider);
+            if (firstProviderModels.length > 0) {
+              setSelectedModel(firstProviderModels[0]);
+            }
+          }
         }
 
         // Load real-time pricing
@@ -57,11 +70,15 @@ export default function WorkflowBuilder() {
           const pricingResponse = await fetch('/api/pricing');
           const pricingData: PricingResponse = await pricingResponse.json();
 
+          // Store the full pricing response for status display
+          setPricingStatus(pricingData);
+
           if (pricingData.available === true) {
-            setModelPricing(pricingData);
-            console.log('Real-time pricing loaded successfully');
+            // Extract only the provider pricing data (for backward compatibility)
+            const { available, note, reason, lastFetched, sources, modelsCount, models, ...providerPricing } =
+              pricingData;
+            setModelPricing(providerPricing);
           } else {
-            console.warn('Real-time pricing unavailable:', pricingData.note || pricingData.reason);
             setModelPricing({});
           }
         } catch (pricingError) {
@@ -88,19 +105,62 @@ export default function WorkflowBuilder() {
 
   // Get the currently selected model info
   const getSelectedModelInfo = (): ModelInfo | null => {
-    return availableModels.find((model) => model.provider === selectedModel) || null;
+    return selectedModel;
   };
 
-  // Calculate cost for a step using fuzzy matching
-  const calculateStepCost = (
-    tokens: { prompt_tokens: number; completion_tokens: number },
-    modelProvider: string
-  ): number => {
-    const modelInfo = availableModels.find((model) => model.provider === modelProvider);
-    const actualModelName = modelInfo?.modelName || modelProvider;
+  // Calculate cost for a step using the selected model
+  const calculateStepCost = (tokens: { prompt_tokens: number; completion_tokens: number }, modelId: string): number => {
+    const model = availableModels.find((m) => m.id === modelId) || selectedModel;
+    if (!model || !model.pricing) return 0;
 
-    const result = calculateStepCostWithFuzzyMatch(tokens, actualModelName, modelPricing);
-    return result.cost;
+    const inputCost = (tokens.prompt_tokens / 1000000) * model.pricing.input;
+    const outputCost = (tokens.completion_tokens / 1000000) * model.pricing.output;
+    return inputCost + outputCost;
+  };
+
+  // Get available providers
+  const getAvailableProviders = (): Array<{ value: string; label: string; count: number; hasApiKey: boolean }> => {
+    const providers = new Map<string, { count: number; hasApiKey: boolean }>();
+    
+    availableModels.forEach(model => {
+      const existing = providers.get(model.provider) || { count: 0, hasApiKey: false };
+      providers.set(model.provider, {
+        count: existing.count + 1,
+        hasApiKey: existing.hasApiKey || model.apiKeyStatus === 'configured'
+      });
+    });
+    
+    return Array.from(providers.entries()).map(([provider, info]) => ({
+      value: provider,
+      label: provider.charAt(0).toUpperCase() + provider.slice(1),
+      count: info.count,
+      hasApiKey: info.hasApiKey
+    }));
+  };
+
+  // Get models for selected provider
+  const getModelsForProvider = (provider: string): ModelInfo[] => {
+    return availableModels.filter(model => model.provider === provider);
+  };
+
+  // Handle provider selection
+  const handleProviderChange = (provider: string) => {
+    setSelectedProvider(provider);
+    setSelectedModel(null); // Reset model when provider changes
+    
+    // Auto-select first available model for the provider
+    const providerModels = getModelsForProvider(provider);
+    if (providerModels.length > 0) {
+      setSelectedModel(providerModels[0]);
+    }
+  };
+
+  // Handle model selection
+  const handleModelChange = (modelId: string) => {
+    const model = availableModels.find(m => m.id === modelId);
+    if (model) {
+      setSelectedModel(model);
+    }
   };
 
   const generateStepId = () => `step_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -111,7 +171,7 @@ export default function WorkflowBuilder() {
       type,
       title: `${stepTypes.find((t) => t.value === type)?.label} Step`,
       config: {},
-      status: 'pending',
+      status: 'pending' as const,
     };
     setSteps([...steps, newStep]);
   };
@@ -137,7 +197,7 @@ export default function WorkflowBuilder() {
   };
 
   const loadPreset = (preset: (typeof presets)[0]) => {
-    const newSteps = preset.steps.map((step, index) => ({
+    const newSteps = preset.steps.map((step) => ({
       id: generateStepId(),
       type: step.type as WorkflowStepType['type'],
       title: step.title,
@@ -160,7 +220,7 @@ export default function WorkflowBuilder() {
       setSteps(
         steps.map((step) => ({
           ...step,
-          status: 'pending',
+          status: 'pending' as const,
           result: undefined,
           error: undefined,
         }))
@@ -171,7 +231,7 @@ export default function WorkflowBuilder() {
         const step = steps[i];
 
         // Update step status to running
-        setSteps((prevSteps) => prevSteps.map((s, index) => (index === i ? { ...s, status: 'running' } : s)));
+        setSteps((prevSteps) => prevSteps.map((s, index) => (index === i ? { ...s, status: 'running' as const } : s)));
 
         try {
           // Use workflowSessionId for this step, will be null for first step
@@ -186,7 +246,7 @@ export default function WorkflowBuilder() {
               type: step.type,
               config: step.config,
               sessionId: currentSessionId,
-              model: selectedModel,
+              model: selectedModel?.id || 'openai/gpt-4o', // Use model ID
               includeUsage: true,
             }),
           });
@@ -205,7 +265,7 @@ export default function WorkflowBuilder() {
           }
 
           // Calculate tokens and cost for this step
-          let stepTokens = undefined;
+          let stepTokens: WorkflowStepType['tokens'] | undefined = undefined;
 
           // Check for usage data in the API response (now at top level)
           if (result.usage) {
@@ -214,7 +274,7 @@ export default function WorkflowBuilder() {
               const prompt_tokens = usage.prompt_tokens;
               const completion_tokens = usage.completion_tokens;
               const total_tokens = usage.total_tokens || prompt_tokens + completion_tokens;
-              const cost = calculateStepCost({ prompt_tokens, completion_tokens }, selectedModel);
+              const cost = calculateStepCost({ prompt_tokens, completion_tokens }, selectedModel?.id || '');
 
               stepTokens = {
                 prompt_tokens,
@@ -232,7 +292,7 @@ export default function WorkflowBuilder() {
               index === i
                 ? {
                     ...s,
-                    status: 'completed',
+                    status: 'completed' as const,
                     result: result.result,
                     tokens: stepTokens,
                   }
@@ -272,7 +332,7 @@ export default function WorkflowBuilder() {
               index === i
                 ? {
                     ...s,
-                    status: 'error',
+                    status: 'error' as const,
                     error: errorMessage,
                   }
                 : s
@@ -335,7 +395,7 @@ export default function WorkflowBuilder() {
     setSteps(
       steps.map((step) => ({
         ...step,
-        status: 'pending',
+        status: 'pending' as const,
         result: undefined,
         error: undefined,
       }))
@@ -409,7 +469,11 @@ export default function WorkflowBuilder() {
                       Stop
                     </Button>
                   ) : (
-                    <Button onClick={runWorkflow} size="sm" disabled={steps.length === 0}>
+                    <Button
+                      onClick={runWorkflow}
+                      size="sm"
+                      disabled={steps.length === 0 || selectedModel?.apiKeyStatus === 'missing'}
+                    >
                       <Play className="w-4 h-4 mr-1" />
                       Run Workflow
                     </Button>
@@ -421,37 +485,44 @@ export default function WorkflowBuilder() {
 
           {/* Model Selection and Stats */}
           <div className="mt-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <Label htmlFor="model-select">LLM Provider:</Label>
+            {/* Model Selection Row */}
+            <div className="flex items-center gap-4">
+              {/* Provider Selection */}
+              <div className="flex items-center gap-2">
+                <Label htmlFor="provider-select">Provider:</Label>
                 <Select
-                  value={selectedModel}
-                  onValueChange={setSelectedModel}
+                  value={selectedProvider}
+                  onValueChange={handleProviderChange}
                   disabled={isRunning || availableModels.length === 0}
                 >
-                  <SelectTrigger className="w-64">
+                  <SelectTrigger className="w-40" id="provider-select">
                     <SelectValue
-                      placeholder={availableModels.length === 0 ? 'No models configured' : 'Select a model'}
+                      placeholder={availableModels.length === 0 ? 'No providers' : 'Select provider'}
                     />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableModels.map((model) => (
-                      <SelectItem key={model.provider} value={model.provider}>
+                    {getAvailableProviders().map((provider) => (
+                      <SelectItem key={provider.value} value={provider.value}>
                         <div className="flex items-center gap-2">
                           <div
                             className={cn(
                               'w-2 h-2 rounded-full',
-                              model.provider === 'ollama'
+                              provider.value === 'ollama'
                                 ? 'bg-blue-500'
-                                : model.provider === 'openai'
+                                : provider.value === 'openai'
                                   ? 'bg-green-500'
-                                  : 'bg-orange-500'
+                                  : provider.value === 'anthropic'
+                                    ? 'bg-orange-500'
+                                    : 'bg-purple-500'
                             )}
                           ></div>
-                          <span>{model.displayName}</span>
-                          {model.input === 0 && model.output === 0 && (
-                            <Badge variant="secondary" className="text-xs ml-1">
-                              FREE
+                          <span>{provider.label}</span>
+                          <Badge variant="secondary" className="text-xs ml-1">
+                            {provider.count}
+                          </Badge>
+                          {!provider.hasApiKey && provider.value !== 'ollama' && (
+                            <Badge variant="destructive" className="text-[8px] px-1 py-0 ml-1 h-4">
+                              !
                             </Badge>
                           )}
                         </div>
@@ -459,96 +530,121 @@ export default function WorkflowBuilder() {
                     ))}
                   </SelectContent>
                 </Select>
-
-                {/* Display current model name */}
-                {(() => {
-                  const currentModel = getSelectedModelInfo();
-                  return currentModel ? (
-                    <div className="flex items-center gap-2 px-3 py-1 bg-gray-100 rounded-md">
-                      <span className="text-xs text-gray-500">Model:</span>
-                      <code className="text-xs font-mono text-gray-700 bg-white px-2 py-1 rounded">
-                        {currentModel.modelName}
-                      </code>
-                    </div>
-                  ) : null;
-                })()}
               </div>
 
+              {/* Model Selection - only show if provider is selected */}
+              {selectedProvider && (
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="model-select">Model:</Label>
+                  <Select
+                    value={selectedModel?.id || ''}
+                    onValueChange={handleModelChange}
+                    disabled={isRunning || getModelsForProvider(selectedProvider).length === 0}
+                  >
+                    <SelectTrigger className="w-60" id="model-select">
+                      <SelectValue
+                        placeholder={getModelsForProvider(selectedProvider).length === 0 ? 'No models' : 'Select model'}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getModelsForProvider(selectedProvider).map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          <div className="flex items-center gap-2">
+                            <span className="truncate">{model.displayName}</span>
+                            {model.type === 'local' && (
+                              <Badge variant="secondary" className="text-xs ml-1">
+                                FREE
+                              </Badge>
+                            )}
+                            {model.apiKeyStatus === 'missing' && (
+                              <Badge variant="destructive" className="text-[8px] px-1 py-0 ml-1 h-4">
+                                !
+                              </Badge>
+                            )}
+                            {model.pricing && (
+                              <span className="text-xs text-gray-500 ml-1 truncate">
+                                ${model.pricing.input.toFixed(3)}/${model.pricing.output.toFixed(3)}
+                              </span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Display current model info */}
+              {selectedModel && (
+                <div className="flex items-center gap-2 px-3 py-1 bg-gray-100 rounded-md">
+                  <span className="text-xs text-gray-500">Model:</span>
+                  <code className="text-xs font-mono text-gray-700 bg-white px-2 py-1 rounded">
+                    {selectedModel.name}
+                  </code>
+                  {selectedModel.pricing && (
+                    <span className="text-xs text-gray-500">
+                      (${selectedModel.pricing.input.toFixed(3)} in / ${selectedModel.pricing.output.toFixed(3)} out per
+                      1M)
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Usage Stats Row */}
+            <div className="flex justify-center">
               <WorkflowStats stats={workflowStats} isRunning={isRunning} currentStepIndex={currentStepIndex} />
             </div>
 
-            {/* Full-width Pricing display for selected provider */}
+            {/* API Key Missing Alert */}
+            {selectedModel && selectedModel.apiKeyStatus === 'missing' && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
+                    <span className="text-white text-xs font-bold">!</span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-red-800">API Key Required</div>
+                    <div className="text-xs text-red-600">
+                      Add <code className="bg-red-100 px-1 rounded">{selectedModel.provider.toUpperCase()}_API_KEY</code> to your .env.local file to use this model
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Selected Model Pricing Display */}
             {selectedModel && (
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                {(() => {
-                  // Find pricing data for the selected provider
-                  const providerPricing = modelPricing[selectedModel];
-                  if (!providerPricing || typeof providerPricing !== 'object') {
-                    return selectedModel === 'ollama' ? (
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="w-4 h-4 text-green-600" />
-                        <span className="text-sm font-medium text-green-700">Free (local model)</span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-blue-600" />
+                    <span className="text-sm font-semibold text-blue-800">{selectedModel.displayName}</span>
+                    {selectedModel.type === 'local' && (
+                      <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
+                        FREE
+                      </Badge>
+                    )}
+                  </div>
+                  {selectedModel.pricing && (
+                    <div className="flex items-center gap-3 text-xs">
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">Input:</span>
+                        <span className="font-mono font-medium text-gray-800">
+                          ${selectedModel.pricing.input.toFixed(6)}/1M
+                        </span>
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="w-4 h-4 text-gray-500" />
-                        <span className="text-sm text-gray-600">Pricing not available</span>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="w-4 h-4 text-blue-600" />
-                        <span className="text-sm font-semibold text-blue-800">Pricing (per 1M tokens)</span>
-                      </div>
-                      <div className="grid gap-2">
-                        {Object.entries(providerPricing).map(([model, pricing]) => {
-                          if (
-                            typeof pricing !== 'object' ||
-                            !pricing ||
-                            !('input' in pricing) ||
-                            !('output' in pricing)
-                          ) {
-                            return (
-                              <div
-                                key={model}
-                                className="flex items-center justify-between p-2 bg-white rounded border"
-                              >
-                                <span className="text-sm font-medium text-gray-700">{model}</span>
-                                <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
-                                  Free
-                                </Badge>
-                              </div>
-                            );
-                          }
-                          const modelPricingData = pricing as ModelPricing;
-                          return (
-                            <div key={model} className="flex items-center justify-between p-2 bg-white rounded border">
-                              <span className="text-sm font-medium text-gray-700">{model}</span>
-                              <div className="flex items-center gap-3 text-xs">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-gray-500">Input:</span>
-                                  <span className="font-mono font-medium text-gray-800">
-                                    ${modelPricingData.input.toFixed(3)}
-                                  </span>
-                                </div>
-                                <div className="w-px h-4 bg-gray-300"></div>
-                                <div className="flex items-center gap-1">
-                                  <span className="text-gray-500">Output:</span>
-                                  <span className="font-mono font-medium text-gray-800">
-                                    ${modelPricingData.output.toFixed(3)}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
+                      <div className="w-px h-4 bg-gray-300"></div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">Output:</span>
+                        <span className="font-mono font-medium text-gray-800">
+                          ${selectedModel.pricing.output.toFixed(6)}/1M
+                        </span>
                       </div>
                     </div>
-                  );
-                })()}
+                  )}
+                </div>
+                {selectedModel.note && <div className="mt-2 text-xs text-gray-600">{selectedModel.note}</div>}
               </div>
             )}
           </div>
