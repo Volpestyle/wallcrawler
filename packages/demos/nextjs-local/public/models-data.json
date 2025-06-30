@@ -1,0 +1,733 @@
+{
+  "lastUpdated": "2025-06-30T04:18:36.502Z",
+  "sources": [
+    "https://platform.openai.com/docs/pricing",
+    "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+    "https://www.anthropic.com/pricing",
+    "https://ai.google.dev/gemini-api/docs/models"
+  ],
+  "models": [
+    {
+      "id": "openai/gpt-4.1-2025-04-14",
+      "name": "gpt-4.1-2025-04-14",
+      "displayName": "gpt-4.1",
+      "provider": "openai",
+      "pricing": {
+        "input": 2,
+        "output": 8
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-mini-2025-04-14",
+      "name": "gpt-4.1-mini-2025-04-14",
+      "displayName": "gpt-4.1-mini",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.4,
+        "output": 1.6
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-nano-2025-04-14",
+      "name": "gpt-4.1-nano-2025-04-14",
+      "displayName": "gpt-4.1-nano",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.1,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "openai/gpt-4.5-preview-2025-02-27",
+      "name": "gpt-4.5-preview-2025-02-27",
+      "displayName": "gpt-4.5-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 75,
+        "output": 150
+      }
+    },
+    {
+      "id": "openai/gpt-4o-2024-08-06",
+      "name": "gpt-4o-2024-08-06",
+      "displayName": "gpt-4o",
+      "provider": "openai",
+      "pricing": {
+        "input": 2.5,
+        "output": 10
+      }
+    },
+    {
+      "id": "openai/gpt-4o-audio-preview-2024-12-17",
+      "name": "gpt-4o-audio-preview-2024-12-17",
+      "displayName": "gpt-4o-audio-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 2.5,
+        "output": 10
+      }
+    },
+    {
+      "id": "openai/gpt-4o-realtime-preview-2025-06-03",
+      "name": "gpt-4o-realtime-preview-2025-06-03",
+      "displayName": "gpt-4o-realtime-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 5,
+        "output": 20
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-2024-07-18",
+      "name": "gpt-4o-mini-2024-07-18",
+      "displayName": "gpt-4o-mini",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.15,
+        "output": 0.6
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-audio-preview-2024-12-17",
+      "name": "gpt-4o-mini-audio-preview-2024-12-17",
+      "displayName": "gpt-4o-mini-audio-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.15,
+        "output": 0.6
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-realtime-preview-2024-12-17",
+      "name": "gpt-4o-mini-realtime-preview-2024-12-17",
+      "displayName": "gpt-4o-mini-realtime-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.6,
+        "output": 2.4
+      }
+    },
+    {
+      "id": "openai/o1-2024-12-17",
+      "name": "o1-2024-12-17",
+      "displayName": "o1",
+      "provider": "openai",
+      "pricing": {
+        "input": 15,
+        "output": 60
+      }
+    },
+    {
+      "id": "openai/o1-pro-2025-03-19",
+      "name": "o1-pro-2025-03-19",
+      "displayName": "o1-pro",
+      "provider": "openai",
+      "pricing": {
+        "input": 150,
+        "output": 600
+      }
+    },
+    {
+      "id": "openai/o3-pro-2025-06-10",
+      "name": "o3-pro-2025-06-10",
+      "displayName": "o3-pro",
+      "provider": "openai",
+      "pricing": {
+        "input": 20,
+        "output": 80
+      }
+    },
+    {
+      "id": "openai/o3-2025-04-16",
+      "name": "o3-2025-04-16",
+      "displayName": "o3",
+      "provider": "openai",
+      "pricing": {
+        "input": 2,
+        "output": 8
+      }
+    },
+    {
+      "id": "openai/o3-deep-research-2025-06-26",
+      "name": "o3-deep-research-2025-06-26",
+      "displayName": "o3-deep-research",
+      "provider": "openai",
+      "pricing": {
+        "input": 10,
+        "output": 40
+      }
+    },
+    {
+      "id": "openai/o4-mini-2025-04-16",
+      "name": "o4-mini-2025-04-16",
+      "displayName": "o4-mini",
+      "provider": "openai",
+      "pricing": {
+        "input": 1.1,
+        "output": 4.4
+      }
+    },
+    {
+      "id": "openai/o4-mini-deep-research-2025-06-26",
+      "name": "o4-mini-deep-research-2025-06-26",
+      "displayName": "o4-mini-deep-research",
+      "provider": "openai",
+      "pricing": {
+        "input": 2,
+        "output": 8
+      }
+    },
+    {
+      "id": "openai/o3-mini-2025-01-31",
+      "name": "o3-mini-2025-01-31",
+      "displayName": "o3-mini",
+      "provider": "openai",
+      "pricing": {
+        "input": 1.1,
+        "output": 4.4
+      }
+    },
+    {
+      "id": "openai/o1-mini-2024-09-12",
+      "name": "o1-mini-2024-09-12",
+      "displayName": "o1-mini",
+      "provider": "openai",
+      "pricing": {
+        "input": 1.1,
+        "output": 4.4
+      }
+    },
+    {
+      "id": "openai/codex-mini-latest",
+      "name": "codex-mini-latest",
+      "displayName": "codex-mini-latest",
+      "provider": "openai",
+      "pricing": {
+        "input": 1.5,
+        "output": 6
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-search-preview-2025-03-11",
+      "name": "gpt-4o-mini-search-preview-2025-03-11",
+      "displayName": "gpt-4o-mini-search-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.15,
+        "output": 0.6
+      }
+    },
+    {
+      "id": "openai/gpt-4o-search-preview-2025-03-11",
+      "name": "gpt-4o-search-preview-2025-03-11",
+      "displayName": "gpt-4o-search-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 2.5,
+        "output": 10
+      }
+    },
+    {
+      "id": "openai/computer-use-preview-2025-03-11",
+      "name": "computer-use-preview-2025-03-11",
+      "displayName": "computer-use-preview",
+      "provider": "openai",
+      "pricing": {
+        "input": 3,
+        "output": 12
+      }
+    },
+    {
+      "id": "openai/gpt-image-1",
+      "name": "gpt-image-1",
+      "displayName": "gpt-image-1",
+      "provider": "openai",
+      "pricing": {
+        "input": 5,
+        "output": 40
+      }
+    },
+    {
+      "id": "openai/chatgpt-4o-latest",
+      "name": "chatgpt-4o-latest",
+      "displayName": "chatgpt-4o-latest",
+      "provider": "openai",
+      "pricing": {
+        "input": 5,
+        "output": 15
+      }
+    },
+    {
+      "id": "openai/gpt-4-turbo-2024-04-09",
+      "name": "gpt-4-turbo-2024-04-09",
+      "displayName": "gpt-4-turbo",
+      "provider": "openai",
+      "pricing": {
+        "input": 10,
+        "output": 30
+      }
+    },
+    {
+      "id": "openai/gpt-4-0613",
+      "name": "gpt-4-0613",
+      "displayName": "gpt-4",
+      "provider": "openai",
+      "pricing": {
+        "input": 30,
+        "output": 60
+      }
+    },
+    {
+      "id": "openai/gpt-4-32k",
+      "name": "gpt-4-32k",
+      "displayName": "gpt-4-32k",
+      "provider": "openai",
+      "pricing": {
+        "input": 60,
+        "output": 120
+      }
+    },
+    {
+      "id": "openai/gpt-3.5-turbo-0125",
+      "name": "gpt-3.5-turbo-0125",
+      "displayName": "gpt-3.5-turbo",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.5,
+        "output": 1.5
+      }
+    },
+    {
+      "id": "openai/gpt-3.5-turbo-instruct",
+      "name": "gpt-3.5-turbo-instruct",
+      "displayName": "gpt-3.5-turbo-instruct",
+      "provider": "openai",
+      "pricing": {
+        "input": 1.5,
+        "output": 2
+      }
+    },
+    {
+      "id": "openai/gpt-3.5-turbo-16k-0613",
+      "name": "gpt-3.5-turbo-16k-0613",
+      "displayName": "gpt-3.5-turbo-16k-0613",
+      "provider": "openai",
+      "pricing": {
+        "input": 3,
+        "output": 4
+      }
+    },
+    {
+      "id": "openai/davinci-002",
+      "name": "davinci-002",
+      "displayName": "davinci-002",
+      "provider": "openai",
+      "pricing": {
+        "input": 2,
+        "output": 2
+      }
+    },
+    {
+      "id": "openai/babbage-002",
+      "name": "babbage-002",
+      "displayName": "babbage-002",
+      "provider": "openai",
+      "pricing": {
+        "input": 0.4,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4-20250514",
+      "name": "claude-opus-4-20250514",
+      "displayName": "Claude Opus 4",
+      "provider": "anthropic",
+      "pricing": {
+        "input": 15,
+        "output": 75
+      },
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-20250514",
+      "name": "claude-sonnet-4-20250514",
+      "displayName": "Claude Sonnet 4",
+      "provider": "anthropic",
+      "pricing": {
+        "input": 3,
+        "output": 15
+      },
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-5-haiku-20241022",
+      "name": "claude-3-5-haiku-20241022",
+      "displayName": "Claude Haiku 3.5",
+      "provider": "anthropic",
+      "pricing": {
+        "input": 0.8,
+        "output": 4
+      },
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-opus-20240229",
+      "name": "claude-3-opus-20240229",
+      "displayName": "Claude Opus 3",
+      "provider": "anthropic",
+      "pricing": {
+        "input": 15,
+        "output": 75
+      },
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-7-sonnet-20250219",
+      "name": "claude-3-7-sonnet-20250219",
+      "displayName": "Claude Sonnet 3.7",
+      "provider": "anthropic",
+      "pricing": {
+        "input": 3,
+        "output": 15
+      },
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-haiku-20240307",
+      "name": "claude-3-haiku-20240307",
+      "displayName": "Claude Haiku 3",
+      "provider": "anthropic",
+      "pricing": {
+        "input": 0.25,
+        "output": 1.25
+      },
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-5-sonnet-20241022",
+      "name": "claude-3-5-sonnet-20241022",
+      "displayName": "Claude Sonnet 3.5 v2",
+      "provider": "anthropic",
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-5-sonnet-20240620",
+      "name": "claude-3-5-sonnet-20240620",
+      "displayName": "Claude Sonnet 3.5",
+      "provider": "anthropic",
+      "type": "cloud"
+    },
+    {
+      "id": "anthropic/claude-3-sonnet-20240229",
+      "name": "claude-3-sonnet-20240229",
+      "displayName": "Claude Sonnet 3",
+      "provider": "anthropic",
+      "type": "cloud"
+    },
+    {
+      "id": "gemini/gemini-2.5-pro",
+      "name": "gemini-2.5-pro",
+      "displayName": "Gemini 2.5 Pro",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text",
+        "PDF"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more"
+    },
+    {
+      "id": "gemini/gemini-2.5-flash",
+      "name": "gemini-2.5-flash",
+      "displayName": "Gemini 2.5 Flash",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Adaptive thinking, cost efficiency"
+    },
+    {
+      "id": "gemini/gemini-2.5-flash-lite-preview-06-17",
+      "name": "gemini-2.5-flash-lite-preview-06-17",
+      "displayName": "Gemini 2.5 Flash-Lite Preview",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text",
+        "image",
+        "video",
+        "audio"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Most cost-efficient model supporting high throughput"
+    },
+    {
+      "id": "gemini/gemini-2.5-flash-preview-native-audio-dialog & gemini-2.5-flash-exp-native-audio-thinking-dialog",
+      "name": "gemini-2.5-flash-preview-native-audio-dialog & gemini-2.5-flash-exp-native-audio-thinking-dialog",
+      "displayName": "Gemini 2.5 Flash Native Audio",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text",
+        "audio"
+      ],
+      "optimizedFor": "High quality, natural conversational audio outputs, with or without thinking"
+    },
+    {
+      "id": "gemini/gemini-2.5-flash-preview-tts",
+      "name": "gemini-2.5-flash-preview-tts",
+      "displayName": "Gemini 2.5 Flash Preview TTS",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text"
+      ],
+      "outputTypes": [
+        "Audio"
+      ],
+      "optimizedFor": "Low latency, controllable, single- and multi-speaker text-to-speech audio generation"
+    },
+    {
+      "id": "gemini/gemini-2.5-pro-preview-tts",
+      "name": "gemini-2.5-pro-preview-tts",
+      "displayName": "Gemini 2.5 Pro Preview TTS",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text"
+      ],
+      "outputTypes": [
+        "Audio"
+      ],
+      "optimizedFor": "Low latency, controllable, single- and multi-speaker text-to-speech audio generation"
+    },
+    {
+      "id": "gemini/gemini-2.0-flash",
+      "name": "gemini-2.0-flash",
+      "displayName": "Gemini 2.0 Flash",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Next generation features, speed, and realtime streaming."
+    },
+    {
+      "id": "gemini/gemini-2.0-flash-preview-image-generation",
+      "name": "gemini-2.0-flash-preview-image-generation",
+      "displayName": "Gemini 2.0 Flash Preview Image Generation",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text",
+        "images"
+      ],
+      "optimizedFor": "Conversational image generation and editing"
+    },
+    {
+      "id": "gemini/gemini-2.0-flash-lite",
+      "name": "gemini-2.0-flash-lite",
+      "displayName": "Gemini 2.0 Flash-Lite",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Cost efficiency and low latency"
+    },
+    {
+      "id": "gemini/gemini-1.5-flash",
+      "name": "gemini-1.5-flash",
+      "displayName": "Gemini 1.5 Flash",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Fast and versatile performance across a diverse variety of tasks"
+    },
+    {
+      "id": "gemini/gemini-1.5-flash-8b",
+      "name": "gemini-1.5-flash-8b",
+      "displayName": "Gemini 1.5 Flash-8B",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "High volume and lower intelligence tasks"
+    },
+    {
+      "id": "gemini/gemini-1.5-pro",
+      "name": "gemini-1.5-pro",
+      "displayName": "Gemini 1.5 Pro",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "images",
+        "videos",
+        "text"
+      ],
+      "outputTypes": [
+        "Text"
+      ],
+      "optimizedFor": "Complex reasoning tasks requiring more intelligence"
+    },
+    {
+      "id": "gemini/gemini-embedding-exp",
+      "name": "gemini-embedding-exp",
+      "displayName": "Gemini Embedding",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text"
+      ],
+      "outputTypes": [
+        "Text embeddings"
+      ],
+      "optimizedFor": "Measuring the relatedness of text strings"
+    },
+    {
+      "id": "gemini/imagen-4.0-generate-preview-06-06 imagen-4.0-ultra-generate-preview-06-06",
+      "name": "imagen-4.0-generate-preview-06-06 imagen-4.0-ultra-generate-preview-06-06",
+      "displayName": "Imagen 4",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text"
+      ],
+      "outputTypes": [
+        "Images"
+      ],
+      "optimizedFor": "Our most up-to-date image generation model"
+    },
+    {
+      "id": "gemini/imagen-3.0-generate-002",
+      "name": "imagen-3.0-generate-002",
+      "displayName": "Imagen 3",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text"
+      ],
+      "outputTypes": [
+        "Images"
+      ],
+      "optimizedFor": "High quality image generation model"
+    },
+    {
+      "id": "gemini/veo-2.0-generate-001",
+      "name": "veo-2.0-generate-001",
+      "displayName": "Veo 2",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Text",
+        "images"
+      ],
+      "outputTypes": [
+        "Video"
+      ],
+      "optimizedFor": "High quality video generation"
+    },
+    {
+      "id": "gemini/gemini-live-2.5-flash-preview",
+      "name": "gemini-live-2.5-flash-preview",
+      "displayName": "Gemini 2.5 Flash Live",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "video",
+        "text"
+      ],
+      "outputTypes": [
+        "Text",
+        "audio"
+      ],
+      "optimizedFor": "Low-latency bidirectional voice and video interactions"
+    },
+    {
+      "id": "gemini/gemini-2.0-flash-live-001",
+      "name": "gemini-2.0-flash-live-001",
+      "displayName": "Gemini 2.0 Flash Live",
+      "provider": "gemini",
+      "type": "cloud",
+      "inputTypes": [
+        "Audio",
+        "video",
+        "text"
+      ],
+      "outputTypes": [
+        "Text",
+        "audio"
+      ],
+      "optimizedFor": "Low-latency bidirectional voice and video interactions"
+    }
+  ],
+  "metadata": {
+    "openai": {
+      "count": 33,
+      "source": "https://platform.openai.com/docs/pricing"
+    },
+    "anthropic": {
+      "count": 9,
+      "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+    },
+    "gemini": {
+      "count": 18,
+      "source": "https://ai.google.dev/gemini-api/docs/models"
+    }
+  }
+}

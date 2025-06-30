@@ -44,30 +44,32 @@ const StagehandConfig: Omit<ConstructorParams, 'provider'> = {
 
 /**
  * Validate required environment variables for the given model
- * Handles Ollama's different configuration requirements (no API key needed)
+ * Handles both old provider format and new model ID format (provider/model)
  */
-export function validateModelConfig(modelProvider: string): {
+export function validateModelConfig(modelIdOrProvider: string): {
   modelName: string;
   apiKey?: string;
   baseURL?: string;
 } {
+  let provider: string;
+  let specificModel: string | null = null;
+
+  // Check if it's a new format model ID (provider/model)
+  if (modelIdOrProvider.includes('/')) {
+    const parts = modelIdOrProvider.split('/');
+    provider = parts[0];
+    specificModel = parts[1];
+  } else {
+    // Legacy format - just the provider name
+    provider = modelIdOrProvider;
+  }
+
   // Ollama has different requirements than cloud providers
-  if (modelProvider === 'ollama') {
-    const baseURL = process.env.OLLAMA_BASE_URL;
-    const modelName = process.env.OLLAMA_MODEL;
-
-    if (!baseURL) {
-      throw new Error(
-        `Missing OLLAMA_BASE_URL environment variable. ` +
-          `Please set your Ollama server URL (e.g., http://localhost:11434).`
-      );
-    }
-
-    if (!modelName) {
-      throw new Error(
-        `Missing OLLAMA_MODEL environment variable. ` + `Please specify the model name (e.g., llama3, qwen, mistral).`
-      );
-    }
+  if (provider === 'ollama') {
+    const baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    
+    // Use specific model from ID if provided, otherwise fall back to env var
+    const modelName = specificModel || process.env.OLLAMA_MODEL || 'llama3';
 
     return {
       modelName: `ollama/${modelName}`, // Proper format for AI SDK
@@ -76,20 +78,28 @@ export function validateModelConfig(modelProvider: string): {
   }
 
   // Cloud providers require API keys
-  const apiKeyEnvVar = `${modelProvider.toUpperCase()}_API_KEY`;
-  const modelEnvVar = `${modelProvider.toUpperCase()}_MODEL`;
-
+  const apiKeyEnvVar = `${provider.toUpperCase()}_API_KEY`;
   const apiKey = process.env[apiKeyEnvVar];
-  const modelName = process.env[modelEnvVar];
 
   if (!apiKey) {
-    throw new Error(`Missing ${apiKeyEnvVar} environment variable. ` + `Please set your ${modelProvider} API key.`);
+    throw new Error(`Missing ${apiKeyEnvVar} environment variable. ` + `Please set your ${provider} API key.`);
   }
 
-  if (!modelName) {
-    throw new Error(
-      `Missing ${modelEnvVar} environment variable. ` + `Please specify the model name for ${modelProvider}.`
-    );
+  // Use specific model from ID if provided, otherwise fall back to env var
+  let modelName: string;
+  if (specificModel) {
+    modelName = specificModel;
+  } else {
+    const modelEnvVar = `${provider.toUpperCase()}_MODEL`;
+    const envModelName = process.env[modelEnvVar];
+    
+    if (!envModelName) {
+      throw new Error(
+        `Missing ${modelEnvVar} environment variable. ` + `Please specify the model name for ${provider}.`
+      );
+    }
+    
+    modelName = envModelName;
   }
 
   return { modelName, apiKey };

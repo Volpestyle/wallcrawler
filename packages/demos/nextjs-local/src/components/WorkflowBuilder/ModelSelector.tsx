@@ -49,7 +49,7 @@ export function ModelSelector({
                     )}
                   ></div>
                   <span>{model.displayName}</span>
-                  {model.input === 0 && model.output === 0 && (
+                  {model.pricing.input === 0 && model.pricing.output === 0 && (
                     <Badge variant="secondary" className="text-xs ml-1">
                       FREE
                     </Badge>
