@@ -61,7 +61,6 @@ function parseGeminiPricing(
 ): Record<string, { input: number; output: number }> | null {
   try {
     const geminiPricing: Record<string, { input: number; output: number }> = {};
-    console.log('pricing data ', pricingData);
 
     if (pricingData.skus && Array.isArray(pricingData.skus)) {
       for (const sku of pricingData.skus) {
@@ -291,10 +290,7 @@ export async function GET() {
     const geminiPricing = geminiPricingData ? parseGeminiPricing(geminiPricingData, scrapedGeminiModels) : null;
 
     if (geminiPricing) {
-      console.log(`✅ Matched Gemini pricing for ${Object.keys(geminiPricing).length} models using scraped model data`);
-      console.log(
-        `🔍 Scraped Gemini models available for matching: ${scrapedGeminiModels.map((m: any) => m.name).join(', ')}`
-      );
+      console.log(`✅ Matched Gemini pricing for ${Object.keys(geminiPricing).length} models`);
     } else if (geminiPricingData) {
       console.warn('⚠️ No Gemini pricing matches found between API response and scraped models');
     }
@@ -346,9 +342,6 @@ export async function GET() {
           const pricingKey = Object.keys(geminiPricing).find((key) => model.name.includes(key));
           if (pricingKey) {
             updatedModel.pricing = geminiPricing[pricingKey];
-            console.log(
-              `🔄 Updated pricing for ${model.name}: $${updatedModel.pricing.input}/$${updatedModel.pricing.output}`
-            );
           }
         }
 
