@@ -1,192 +1,221 @@
 # WallCrawler AWS CDK Infrastructure
 
-AWS CDK infrastructure for deploying WallCrawler with human intervention system.
-
-## Overview
-
-This project contains the AWS CDK infrastructure code to deploy the complete WallCrawler human intervention system, including:
-
-- Lambda functions for intervention detection
-- WebSocket API for real-time browser control
-- DynamoDB tables for state management
-- S3 buckets for artifacts and portal hosting
-- CloudFront distribution for the intervention portal
-- SNS topics for multi-channel notifications
-
-## Prerequisites
-
-- AWS Account with appropriate permissions
-- Node.js 18+
-- AWS CDK CLI: `npm install -g aws-cdk`
-- AWS credentials configured
-- pnpm package manager
-
-## Installation
-
-```bash
-# Install dependencies
-pnpm install
-
-# Build the TypeScript
-pnpm run build
-```
-
-## Configuration
-
-Before deploying, ensure you have:
-
-1. AWS credentials configured:
-
-   ```bash
-   aws configure
-   ```
-
-2. CDK bootstrapped in your AWS account:
-
-   ```bash
-   pnpm run bootstrap
-   ```
-
-3. Built the @wallcrawler/aws package:
-   ```bash
-   cd ../wallcrawler-aws
-   pnpm run build
-   ```
-
-## Deployment
-
-```bash
-# Synthesize CloudFormation template
-pnpm run synth
-
-# Deploy the stack
-pnpm run deploy
-
-# Or deploy with specific AWS profile
-AWS_PROFILE=myprofile pnpm run deploy
-```
-
-## Stack Outputs
-
-After deployment, the stack will output:
-
-- **InterventionHandlerArn**: Lambda function ARN for handling interventions
-- **WebSocketApiUrl**: WebSocket API endpoint for real-time communication
-- **PortalUrl**: CloudFront URL for the intervention portal
-- **ArtifactsBucketName**: S3 bucket name for storing artifacts
-
-Save these values as they're needed to configure the WallCrawler AWS extension.
+This package contains AWS CDK constructs and stacks for deploying WallCrawler infrastructure optimized for browser automation workloads.
 
 ## Architecture
 
 The infrastructure includes:
 
-### Core Services
+- **VPC**: Multi-AZ VPC with public, private, and isolated subnets
+- **Redis ElastiCache**: High-performance Redis cluster for session state management
+- **ECS Fargate**: Container orchestration for browser automation tasks
+- **Application Load Balancer**: Internal load balancer for ECS services
+- **Security Groups**: Least-privilege security configuration
+- **VPC Endpoints**: Cost-optimized AWS service access
 
-- **Lambda Functions**: Intervention detection, WebSocket handlers
-- **API Gateway**: WebSocket API for real-time browser control
-- **DynamoDB Tables**: Sessions, interventions, device tokens, connections
-- **S3 Buckets**: Artifacts storage, portal static files
+## Quick Start
 
-### Security
+### Prerequisites
 
-- **Secrets Manager**: JWT secrets, push notification credentials
-- **IAM Roles**: Least-privilege access for all services
-- **CloudFront**: Secure portal delivery with Lambda@Edge auth
+1. AWS CLI configured with appropriate permissions
+2. Node.js 18+ and pnpm installed
+3. AWS CDK CLI installed: `npm install -g aws-cdk`
 
-### Monitoring
+### Installation
 
-- **CloudWatch Logs**: Centralized logging for all Lambda functions
-- **CloudWatch Metrics**: Performance and error tracking
-
-## Usage with WallCrawler
-
-After deploying, use the outputs to configure WallCrawler:
-
-```typescript
-import { WallCrawlerAWSProvider } from '@wallcrawler/aws';
-
-const AWSProvider = new WallCrawlerAWSProvider(sessionId, userId, {
-  region: 'us-east-1',
-  interventionLambdaArn: '<InterventionHandlerArn from outputs>',
-  artifactsBucket: '<ArtifactsBucketName from outputs>',
-});
+```bash
+cd packages/deploy/aws-cdk
+pnpm install
 ```
+
+### Bootstrap CDK (first time only)
+
+```bash
+pnpm run bootstrap
+```
+
+### Deploy
+
+```bash
+# Development environment
+pnpm run deploy
+
+# Production environment
+pnpm run deploy -- -c environment=prod -c projectName=wallcrawler-prod
+```
+
+### Useful Commands
+
+```bash
+pnpm run build        # Compile TypeScript
+pnpm run synth        # Generate CloudFormation template
+pnpm run diff         # Show differences with deployed stack
+pnpm run destroy      # Destroy the stack
+pnpm run lint         # Run ESLint
+pnpm run test         # Run tests
+```
+
+## Configuration
+
+### Environment Variables
+
+- `CDK_DEFAULT_ACCOUNT`: AWS account ID
+- `CDK_DEFAULT_REGION`: AWS region (default: us-east-1)
+
+### Context Variables
+
+You can customize deployment using CDK context:
+
+```bash
+cdk deploy -c environment=prod -c projectName=my-project -c vpcCidr=10.1.0.0/16
+```
+
+Available context variables:
+- `environment`: Deployment environment (dev, staging, prod)
+- `projectName`: Project name for resource naming
+- `vpcCidr`: VPC CIDR block
+- `maxAzs`: Maximum number of Availability Zones
+- `redisNodeType`: Redis node instance type
+- `redisReplicas`: Number of Redis replica nodes
+- `ecsTaskCpu`: ECS task CPU units
+- `ecsTaskMemory`: ECS task memory (MB)
+
+## Infrastructure Components
+
+### Networking Stack
+
+Creates a VPC with:
+- Public subnets for load balancers
+- Private subnets for ECS tasks
+- Isolated subnets for databases
+- NAT gateways for internet access
+- VPC endpoints for AWS services (production)
+
+### Redis Cluster
+
+Deploys ElastiCache Redis with:
+- Multi-AZ deployment (production)
+- Encryption at rest and in transit
+- Automated backups
+- CloudWatch logging
+- Optimized parameter group for session storage
+
+### ECS Cluster
+
+Provisions Fargate cluster with:
+- Browser automation task definition
+- Application Load Balancer
+- Auto-scaling capabilities
+- CloudWatch logging
+- Health checks and monitoring
+
+## Security
+
+The infrastructure follows AWS security best practices:
+
+- **Network Security**: Resources deployed in private/isolated subnets
+- **Encryption**: All data encrypted at rest and in transit
+- **IAM**: Least-privilege roles and policies
+- **Security Groups**: Minimal required access
+- **VPC Flow Logs**: Network traffic monitoring
+
+## Monitoring
+
+Built-in monitoring includes:
+
+- **CloudWatch Logs**: Centralized logging for all services
+- **Container Insights**: ECS performance monitoring (production)
+- **VPC Flow Logs**: Network traffic analysis
+- **ElastiCache Metrics**: Redis performance monitoring
+
+## Cost Optimization
+
+- **VPC Endpoints**: Reduces NAT gateway costs in production
+- **Spot Instances**: Can be enabled for non-critical workloads
+- **Auto Scaling**: Scales resources based on demand
+- **Environment-specific Sizing**: Smaller instances for dev/test
+
+## Deployment Environments
+
+### Development
+- Single AZ deployment
+- Minimal instance sizes
+- Reduced backup retention
+- No Multi-AZ Redis
+
+### Production
+- Multi-AZ deployment
+- Larger instance sizes
+- Extended backup retention
+- Multi-AZ Redis with replicas
+- VPC endpoints for cost optimization
 
 ## Customization
 
-### Modify Lambda Memory/Timeout
-
-Edit `lib/wallcrawler-stack.ts`:
+### Adding Custom Constructs
 
 ```typescript
-const interventionDetectorFn = new lambda.Function(
-  this,
-  'InterventionDetector',
-  {
-    // ...
-    timeout: cdk.Duration.minutes(2), // Increase timeout
-    memorySize: 2048, // Increase memory
-  }
-);
+import { WallCrawlerInfraStack } from '@wallcrawler/aws-cdk';
+
+const stack = new WallCrawlerInfraStack(app, 'MyStack', {
+  environment: 'prod',
+  projectName: 'my-project',
+});
+
+// Access individual components
+const redis = stack.redisCluster;
+const ecs = stack.ecsCluster;
+const networking = stack.networking;
 ```
 
-### Add Custom Domain
+### Environment-specific Configuration
 
-Add to the CloudFront distribution:
+Create environment-specific configuration files:
 
 ```typescript
-const portalDistribution = new cloudfront.Distribution(
-  this,
-  'PortalDistribution',
-  {
-    // ...
-    domainNames: ['intervention.yourdomain.com'],
-    certificate: acm.Certificate.fromCertificateArn(
-      this,
-      'Cert',
-      'arn:aws:acm:...'
-    ),
-  }
-);
+// config/dev.ts
+export const devConfig = {
+  vpcCidr: '10.0.0.0/16',
+  maxAzs: 2,
+  redisNodeType: 'cache.t3.micro',
+  redisReplicas: 0,
+  ecsTaskCpu: 512,
+  ecsTaskMemory: 1024,
+};
+
+// config/prod.ts
+export const prodConfig = {
+  vpcCidr: '10.1.0.0/16',
+  maxAzs: 3,
+  redisNodeType: 'cache.r7g.large',
+  redisReplicas: 2,
+  ecsTaskCpu: 1024,
+  ecsTaskMemory: 2048,
+};
 ```
-
-## Cleanup
-
-To remove all resources:
-
-```bash
-pnpm run destroy
-```
-
-⚠️ **Warning**: This will delete all data in DynamoDB tables and S3 buckets.
 
 ## Troubleshooting
 
-### CDK Bootstrap Error
+### Common Issues
 
-If you see "This stack uses assets", run:
+1. **Bootstrap Required**: Run `pnpm run bootstrap` if you see bootstrap errors
+2. **Permissions**: Ensure your AWS credentials have sufficient permissions
+3. **Region**: Verify your AWS region supports all required services
+4. **Quotas**: Check AWS service limits for your account
+
+### Debug Mode
+
+Enable debug logging:
 
 ```bash
-cdk bootstrap aws://ACCOUNT-NUMBER/REGION
+export CDK_DEBUG=true
+pnpm run deploy
 ```
-
-### Lambda Timeout
-
-Increase the timeout in the stack definition if intervention detection takes longer.
-
-### WebSocket Connection Issues
-
-Check CloudWatch logs for the WebSocket Lambda functions for detailed error messages.
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## License
-
-MIT - see [LICENSE](../LICENSE) for details.
+1. Make changes to constructs or stacks
+2. Run `pnpm run build` to compile
+3. Run `pnpm run test` to validate
+4. Run `pnpm run synth` to generate CloudFormation
+5. Test in a development environment before production

@@ -1,8 +1,7 @@
 'use client';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Code2, Globe, Database, Zap, Bot, Workflow } from 'lucide-react';
+import { Code2, Globe, Database, Zap, Workflow } from 'lucide-react';
 import WorkflowBuilder from '@/components/WorkflowBuilder';
 
 export default function Home() {

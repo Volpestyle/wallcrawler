@@ -410,15 +410,32 @@ export class AwsProvider implements IBrowserProvider {
       throw new Error(`No content found for artifact ${artifactId}`);
     }
 
-    // Convert stream to buffer
-    const chunks: Buffer[] = [];
-    const reader = result.Body as any;
-
-    return new Promise((resolve, reject) => {
-      reader.on('data', (chunk: Buffer) => chunks.push(chunk));
-      reader.on('error', reject);
-      reader.on('end', () => resolve(Buffer.concat(chunks)));
-    });
+    // Convert stream to buffer using streamCollector
+    // This handles both web streams and Node.js streams properly
+    const chunks: Uint8Array[] = [];
+    
+    if (result.Body instanceof ReadableStream) {
+      const reader = result.Body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
+    } else {
+      // Assume it's a Node.js Readable stream and convert to async iterator
+      const stream = result.Body as NodeJS.ReadableStream;
+      return new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        stream.on('error', reject);
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+      });
+    }
   }
 
   /**

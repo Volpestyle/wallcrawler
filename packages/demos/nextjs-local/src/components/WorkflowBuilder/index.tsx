@@ -13,7 +13,6 @@ import { WorkflowPresets } from './WorkflowPresets';
 import { WorkflowStats } from './WorkflowStats';
 import { WorkflowStep } from './WorkflowStep';
 import { stepTypes, presets } from './constants';
-import { calculateStepCostWithFuzzyMatch } from './utils';
 import {
   WorkflowStep as WorkflowStepType,
   ModelInfo,
@@ -21,7 +20,6 @@ import {
   ProviderPricing,
   PricingResponse,
   WallcrawlerResponse,
-  ModelPricing,
 } from './types';
 
 export default function WorkflowBuilder() {
@@ -32,8 +30,8 @@ export default function WorkflowBuilder() {
   const [selectedProvider, setSelectedProvider] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
-  const [modelPricing, setModelPricing] = useState<Record<string, ProviderPricing>>({});
-  const [pricingStatus, setPricingStatus] = useState<PricingResponse | null>(null);
+  const [_modelPricing, setModelPricing] = useState<Record<string, ProviderPricing>>({});
+  const [_pricingStatus, setPricingStatus] = useState<PricingResponse | null>(null);
   const [workflowStats, setWorkflowStats] = useState<WorkflowStatsType>({
     totalTokens: 0,
     totalCost: 0,
@@ -51,13 +49,13 @@ export default function WorkflowBuilder() {
 
         if (modelsData.models && modelsData.models.length > 0) {
           setAvailableModels(modelsData.models);
-          
+
           // Auto-select first provider and its first model
           const providers = [...new Set(modelsData.models.map((m: ModelInfo) => m.provider))];
           if (providers.length > 0) {
             const firstProvider = providers[0] as string;
             setSelectedProvider(firstProvider);
-            
+
             const firstProviderModels = modelsData.models.filter((m: ModelInfo) => m.provider === firstProvider);
             if (firstProviderModels.length > 0) {
               setSelectedModel(firstProviderModels[0]);
@@ -75,8 +73,19 @@ export default function WorkflowBuilder() {
 
           if (pricingData.available === true) {
             // Extract only the provider pricing data (for backward compatibility)
-            const { available, note, reason, lastFetched, sources, modelsCount, models, ...providerPricing } =
-              pricingData;
+            const providerPricing: Record<string, ProviderPricing> = {};
+            
+            // Only include known provider pricing fields
+            if (pricingData.openai) {
+              providerPricing.openai = pricingData.openai;
+            }
+            if (pricingData.anthropic) {
+              providerPricing.anthropic = pricingData.anthropic;
+            }
+            if (pricingData.gemini) {
+              providerPricing.gemini = pricingData.gemini;
+            }
+            
             setModelPricing(providerPricing);
           } else {
             setModelPricing({});
@@ -103,11 +112,6 @@ export default function WorkflowBuilder() {
     setWorkflowStats({ totalTokens, totalCost, totalInferenceTime, stepCosts });
   }, [steps]);
 
-  // Get the currently selected model info
-  const getSelectedModelInfo = (): ModelInfo | null => {
-    return selectedModel;
-  };
-
   // Calculate cost for a step using the selected model
   const calculateStepCost = (tokens: { prompt_tokens: number; completion_tokens: number }, modelId: string): number => {
     const model = availableModels.find((m) => m.id === modelId) || selectedModel;
@@ -121,33 +125,33 @@ export default function WorkflowBuilder() {
   // Get available providers
   const getAvailableProviders = (): Array<{ value: string; label: string; count: number; hasApiKey: boolean }> => {
     const providers = new Map<string, { count: number; hasApiKey: boolean }>();
-    
-    availableModels.forEach(model => {
+
+    availableModels.forEach((model) => {
       const existing = providers.get(model.provider) || { count: 0, hasApiKey: false };
       providers.set(model.provider, {
         count: existing.count + 1,
-        hasApiKey: existing.hasApiKey || model.apiKeyStatus === 'configured'
+        hasApiKey: existing.hasApiKey || model.apiKeyStatus === 'configured',
       });
     });
-    
+
     return Array.from(providers.entries()).map(([provider, info]) => ({
       value: provider,
       label: provider.charAt(0).toUpperCase() + provider.slice(1),
       count: info.count,
-      hasApiKey: info.hasApiKey
+      hasApiKey: info.hasApiKey,
     }));
   };
 
   // Get models for selected provider
   const getModelsForProvider = (provider: string): ModelInfo[] => {
-    return availableModels.filter(model => model.provider === provider);
+    return availableModels.filter((model) => model.provider === provider);
   };
 
   // Handle provider selection
   const handleProviderChange = (provider: string) => {
     setSelectedProvider(provider);
     setSelectedModel(null); // Reset model when provider changes
-    
+
     // Auto-select first available model for the provider
     const providerModels = getModelsForProvider(provider);
     if (providerModels.length > 0) {
@@ -157,7 +161,7 @@ export default function WorkflowBuilder() {
 
   // Handle model selection
   const handleModelChange = (modelId: string) => {
-    const model = availableModels.find(m => m.id === modelId);
+    const model = availableModels.find((m) => m.id === modelId);
     if (model) {
       setSelectedModel(model);
     }
@@ -496,9 +500,7 @@ export default function WorkflowBuilder() {
                   disabled={isRunning || availableModels.length === 0}
                 >
                   <SelectTrigger className="w-40" id="provider-select">
-                    <SelectValue
-                      placeholder={availableModels.length === 0 ? 'No providers' : 'Select provider'}
-                    />
+                    <SelectValue placeholder={availableModels.length === 0 ? 'No providers' : 'Select provider'} />
                   </SelectTrigger>
                   <SelectContent>
                     {getAvailableProviders().map((provider) => (
@@ -606,7 +608,9 @@ export default function WorkflowBuilder() {
                   <div>
                     <div className="text-sm font-semibold text-red-800">API Key Required</div>
                     <div className="text-xs text-red-600">
-                      Add <code className="bg-red-100 px-1 rounded">{selectedModel.provider.toUpperCase()}_API_KEY</code> to your .env.local file to use this model
+                      Add{' '}
+                      <code className="bg-red-100 px-1 rounded">{selectedModel.provider.toUpperCase()}_API_KEY</code> to
+                      your .env.local file to use this model
                     </div>
                   </div>
                 </div>

@@ -1,7 +1,7 @@
 {
-  "name": "@wallcrawler/infra-local",
+  "name": "@wallcrawler/infra-common",
   "version": "1.0.0",
-  "description": "Local browser provider for Wallcrawler/Stagehand",
+  "description": "Common types and interfaces for Wallcrawler/Stagehand infrastructure providers",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,14 +16,13 @@
     "stagehand",
     "browser",
     "automation",
-    "local"
+    "infrastructure",
+    "common"
   ],
   "author": "Wallcrawler",
   "license": "MIT",
   "dependencies": {
-    "@wallcrawler/stagehand": "workspace:*",
-    "@wallcrawler/infra-common": "workspace:*",
-    "playwright": "^1.52.0"
+    "@wallcrawler/stagehand": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.2.2"

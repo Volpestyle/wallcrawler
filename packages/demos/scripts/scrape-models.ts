@@ -168,14 +168,16 @@ async function scrapeAnthropic(stagehand: Stagehand): Promise<ModelInfo[]> {
 
     console.log(`✅ Found ${anthropicData.length || 0} Anthropic models`);
 
-    return (anthropicData || []).map((model) => ({
-      id: `anthropic/${model.name}`,
-      name: model.name,
-      displayName: model.displayName,
-      provider: 'anthropic',
-      pricing: model.pricing,
-      type: 'cloud' as const,
-    }));
+    return (anthropicData || [])
+      .filter((model) => model.name && model.displayName)
+      .map((model) => ({
+        id: `anthropic/${model.name}`,
+        name: model.name!,
+        displayName: model.displayName!,
+        provider: 'anthropic',
+        pricing: model.pricing,
+        type: 'cloud' as const,
+      }));
   } catch (error) {
     console.error('❌ Failed to scrape Anthropic:', error);
     return [];

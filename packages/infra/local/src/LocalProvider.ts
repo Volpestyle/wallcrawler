@@ -11,6 +11,7 @@ import {
   Artifact,
   ArtifactList,
   LogLine,
+  Stagehand,
 } from '@wallcrawler/stagehand';
 
 export interface LocalProviderConfig {
@@ -24,6 +25,12 @@ export interface LocalProviderConfig {
   logger?: (logLine: LogLine) => void;
 }
 
+export interface SessionState {
+  stagehand?: Stagehand;
+  lastUsed: number;
+  currentModel?: string;
+}
+
 /**
  * Local browser provider for running browsers on the local machine
  * Handles browser launching, session management, and local artifact storage
@@ -35,7 +42,7 @@ export class LocalProvider implements IBrowserProvider {
   private readonly config: LocalProviderConfig;
   private readonly artifactsPath: string;
   private readonly sessions: Map<string, ProviderSession> = new Map();
-  private readonly sessionState: Map<string, { stagehand?: any; lastUsed: number; currentModel?: string }> = new Map();
+  private readonly sessionState: Map<string, SessionState> = new Map();
 
   constructor(config: LocalProviderConfig = {}) {
     this.config = config;
@@ -387,7 +394,7 @@ export class LocalProvider implements IBrowserProvider {
    * Session state management for Stagehand instances
    */
 
-  setSessionState(sessionId: string, stagehand: any, model?: string): void {
+  setSessionState(sessionId: string, stagehand: Stagehand, model?: string): void {
     this.sessionState.set(sessionId, {
       stagehand,
       lastUsed: Date.now(),
@@ -395,7 +402,7 @@ export class LocalProvider implements IBrowserProvider {
     });
   }
 
-  getSessionState(sessionId: string): { stagehand?: any; lastUsed: number; currentModel?: string } | undefined {
+  getSessionState(sessionId: string): SessionState | undefined {
     const state = this.sessionState.get(sessionId);
     if (state) {
       state.lastUsed = Date.now(); // Update last used time

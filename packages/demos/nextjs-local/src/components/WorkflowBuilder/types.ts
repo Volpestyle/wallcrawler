@@ -1,3 +1,47 @@
+// Union type for different step results based on step type
+export type StepResult = 
+  | NavigateResult
+  | ActResult
+  | ObserveResult
+  | ExtractResult
+  | AgentResult;
+
+export interface NavigateResult {
+  type: 'navigate';
+  url: string;
+  title: string;
+  status: number;
+}
+
+export interface ActResult {
+  type: 'act';
+  action: string;
+  success: boolean;
+  element?: string;
+}
+
+export interface ObserveResult {
+  type: 'observe';
+  observations: Array<{
+    element: string;
+    description: string;
+    confidence: number;
+  }>;
+}
+
+export interface ExtractResult {
+  type: 'extract';
+  data: Record<string, unknown>;
+  schema: Record<string, unknown>;
+}
+
+export interface AgentResult {
+  type: 'agent';
+  actions: string[];
+  finalState: Record<string, unknown>;
+  success: boolean;
+}
+
 export interface WorkflowStep {
   id: string;
   type: 'navigate' | 'act' | 'observe' | 'extract' | 'agent';
@@ -8,7 +52,7 @@ export interface WorkflowStep {
     schema?: string;
     waitTime?: number;
   };
-  result?: any;
+  result?: StepResult;
   status: 'pending' | 'running' | 'completed' | 'error';
   error?: string;
   tokens?: {
@@ -69,12 +113,12 @@ export interface PricingResponse {
     output: number;
     note: string;
   };
-  [provider: string]: any;
+  [provider: string]: ProviderPricing | { input: number; output: number; note: string } | boolean | string | ModelInfo[] | { openai: number; anthropic: number; gemini: number } | string[] | undefined;
 }
 
 export interface WallcrawlerResponse {
   sessionId?: string;
-  result?: any;
+  result?: StepResult;
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -96,8 +140,27 @@ export interface WorkflowPreset {
   name: string;
   description: string;
   steps: Array<{
-    type: string;
+    type: 'navigate' | 'act' | 'observe' | 'extract' | 'agent';
     title: string;
-    config: Record<string, any>;
+    config: {
+      url?: string;
+      instruction?: string;
+      schema?: string;
+      waitTime?: number;
+    };
   }>;
+}
+
+export interface TaskResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+  screenshots?: string[];
+  logs?: string[];
+}
+
+export interface TaskStatus {
+  status: 'idle' | 'running' | 'success' | 'error';
+  message?: string;
+  progress?: number;
 }

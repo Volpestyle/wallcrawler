@@ -1,7 +1,7 @@
 'use client';
 
-import { TaskStatus } from './WallcrawlerDemo';
 import { CheckCircle, XCircle, Loader2, Circle } from 'lucide-react';
+import { TaskStatus } from './WorkflowBuilder/types';
 
 interface StatusIndicatorProps {
   status: TaskStatus;

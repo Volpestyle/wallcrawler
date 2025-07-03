@@ -1,11 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { TaskResult } from './WallcrawlerDemo';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Download, Copy, Eye, EyeOff } from 'lucide-react';
+import { TaskResult } from './WorkflowBuilder/types';
 
 interface ResultsDisplayProps {
   result: TaskResult;
