@@ -9,7 +9,7 @@
     "build": "echo 'No build needed for scripts'"
   },
   "dependencies": {
-    "@wallcrawler/infra/local": "workspace:*",
+    "@wallcrawler/infra-local": "workspace:*",
     "@wallcrawler/stagehand": "workspace:*",
     "dotenv": "^16.4.5",
     "zod": "^3.25.57"

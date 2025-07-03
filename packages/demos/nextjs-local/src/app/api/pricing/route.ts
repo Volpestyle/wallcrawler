@@ -17,8 +17,31 @@ interface ModelInfo {
   optimizedFor?: string;
 }
 
+interface ScrapedData {
+  models?: ModelInfo[];
+  lastUpdated?: string;
+  sources?: string[];
+  metadata?: Record<string, number>;
+}
+
+interface PricingResponse {
+  lastFetched?: string;
+  available: boolean;
+  sources: string[];
+  models: ModelInfo[];
+  apiKeyStatus: {
+    openai: string;
+    anthropic: string;
+    gemini: string;
+    ollama: string;
+  };
+  note: string;
+  modelsCount: Record<string, number>;
+  [provider: string]: unknown; // For provider-specific pricing data
+}
+
 // Create JWT for Google Cloud authentication
-async function createJWT(serviceAccountKey: string, projectId: string): Promise<string> {
+async function createJWT(serviceAccountKey: string, _projectId: string): Promise<string> {
   const serviceAccount = JSON.parse(serviceAccountKey);
   const now = Math.floor(Date.now() / 1000);
 
@@ -54,9 +77,37 @@ async function createJWT(serviceAccountKey: string, projectId: string): Promise<
   return `${signInput}.${signature}`;
 }
 
+// Google Cloud API types
+interface GoogleCloudUnitPrice {
+  units?: string;
+  nanos?: string;
+}
+
+interface GoogleCloudTieredRate {
+  unitPrice?: GoogleCloudUnitPrice;
+}
+
+interface GoogleCloudPricingExpression {
+  tieredRates?: GoogleCloudTieredRate[];
+  displayQuantity?: number;
+}
+
+interface GoogleCloudPricingInfo {
+  pricingExpression?: GoogleCloudPricingExpression;
+}
+
+interface GoogleCloudSKU {
+  description?: string;
+  pricingInfo?: GoogleCloudPricingInfo[];
+}
+
+interface GoogleCloudPricingData {
+  skus?: GoogleCloudSKU[];
+}
+
 // Parse Gemini pricing from Google Cloud API response
 function parseGeminiPricing(
-  pricingData: any,
+  pricingData: GoogleCloudPricingData,
   scrapedGeminiModels: ModelInfo[]
 ): Record<string, { input: number; output: number }> | null {
   try {
@@ -75,7 +126,7 @@ function parseGeminiPricing(
               const pricingExpression = pricingInfo.pricingExpression;
               const tieredRates = pricingExpression.tieredRates;
 
-              if (tieredRates[0] && tieredRates[0].unitPrice) {
+              if (tieredRates?.[0] && tieredRates[0]?.unitPrice) {
                 const unitPriceData = tieredRates[0].unitPrice;
                 const units = parseFloat(unitPriceData.units || '0');
                 const nanos = parseFloat(unitPriceData.nanos || '0');
@@ -189,8 +240,8 @@ async function fetchGeminiPricing() {
       } else {
         serviceAccountKey = serviceAccountKeyPath;
       }
-    } catch (error: any) {
-      console.warn('Failed to load service account key:', error.message);
+    } catch (error) {
+      console.warn('Failed to load service account key:', error instanceof Error ? error.message : 'Unknown error');
       return null;
     }
 
@@ -274,7 +325,7 @@ export async function GET() {
     }
 
     // Load the scraped data
-    const scrapedData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+    const scrapedData: ScrapedData = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
     console.log(`✅ Loaded ${scrapedData.models?.length || 0} models from scraped data`);
 
@@ -283,7 +334,7 @@ export async function GET() {
 
     // Extract scraped Gemini models for matching
     const scrapedGeminiModels: ModelInfo[] = (scrapedData.models || []).filter(
-      (model: any) => model.provider === 'gemini'
+      (model): model is ModelInfo => model.provider === 'gemini'
     );
 
     // Parse the pricing data using the scraped models
@@ -304,7 +355,7 @@ export async function GET() {
     };
 
     // Filter for text generation models only (suitable for browser automation)
-    const isTextGenerationModel = (model: any): boolean => {
+    const isTextGenerationModel = (model: ModelInfo): boolean => {
       // For non-Gemini providers, assume all models are text generation
       if (model.provider !== 'gemini') {
         return true;
@@ -313,14 +364,14 @@ export async function GET() {
       // For Gemini models, check output types
       if (model.outputTypes && Array.isArray(model.outputTypes)) {
         const outputTypes = model.outputTypes.map((type: string) => type.toLowerCase());
-        
+
         // Must include text output and NOT be primarily for other media
-        const hasTextOutput = outputTypes.some(type => type.includes('text'));
-        const isImageGeneration = outputTypes.some(type => type.includes('image')) && !hasTextOutput;
-        const isVideoGeneration = outputTypes.some(type => type.includes('video')) && !hasTextOutput;
-        const isAudioGeneration = outputTypes.some(type => type.includes('audio')) && !hasTextOutput;
-        const isEmbedding = outputTypes.some(type => type.includes('embedding'));
-        
+        const hasTextOutput = outputTypes.some((type) => type.includes('text'));
+        const isImageGeneration = outputTypes.some((type) => type.includes('image')) && !hasTextOutput;
+        const isVideoGeneration = outputTypes.some((type) => type.includes('video')) && !hasTextOutput;
+        const isAudioGeneration = outputTypes.some((type) => type.includes('audio')) && !hasTextOutput;
+        const isEmbedding = outputTypes.some((type) => type.includes('embedding'));
+
         return hasTextOutput && !isImageGeneration && !isVideoGeneration && !isAudioGeneration && !isEmbedding;
       }
 
@@ -331,8 +382,8 @@ export async function GET() {
     // Add API key status and merge Gemini pricing
     const modelsWithApiStatus = (scrapedData.models || [])
       .filter(isTextGenerationModel) // Filter for text generation models only
-      .map((model: any) => {
-        let updatedModel = {
+      .map((model) => {
+        const updatedModel = {
           ...model,
           apiKeyStatus: apiKeyStatus[model.provider as keyof typeof apiKeyStatus] || 'missing',
         };
@@ -349,7 +400,7 @@ export async function GET() {
       });
 
     // Build response in expected format
-    const response: any = {
+    const response: PricingResponse = {
       lastFetched: scrapedData.lastUpdated,
       available: true,
       sources: scrapedData.sources || [],
@@ -360,7 +411,7 @@ export async function GET() {
     };
 
     // Group by provider for backward compatibility
-    const providerGroups = modelsWithApiStatus.reduce((acc: any, model: any) => {
+    const providerGroups = modelsWithApiStatus.reduce((acc: Record<string, Record<string, unknown>>, model) => {
       if (!acc[model.provider]) {
         acc[model.provider] = {};
       }
