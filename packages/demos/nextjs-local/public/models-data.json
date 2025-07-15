@@ -430,16 +430,8 @@
       "displayName": "Gemini 2.5 Pro",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text",
-        "PDF"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text", "PDF"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more"
     },
     {
@@ -448,15 +440,8 @@
       "displayName": "Gemini 2.5 Flash",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Adaptive thinking, cost efficiency"
     },
     {
@@ -465,15 +450,8 @@
       "displayName": "Gemini 2.5 Flash-Lite Preview",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text",
-        "image",
-        "video",
-        "audio"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Text", "image", "video", "audio"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Most cost-efficient model supporting high throughput"
     },
     {
@@ -482,15 +460,8 @@
       "displayName": "Gemini 2.5 Flash Native Audio",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text",
-        "audio"
-      ],
+      "inputTypes": ["Audio", "videos", "text"],
+      "outputTypes": ["Text", "audio"],
       "optimizedFor": "High quality, natural conversational audio outputs, with or without thinking"
     },
     {
@@ -499,12 +470,8 @@
       "displayName": "Gemini 2.5 Flash Preview TTS",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text"
-      ],
-      "outputTypes": [
-        "Audio"
-      ],
+      "inputTypes": ["Text"],
+      "outputTypes": ["Audio"],
       "optimizedFor": "Low latency, controllable, single- and multi-speaker text-to-speech audio generation"
     },
     {
@@ -513,12 +480,8 @@
       "displayName": "Gemini 2.5 Pro Preview TTS",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text"
-      ],
-      "outputTypes": [
-        "Audio"
-      ],
+      "inputTypes": ["Text"],
+      "outputTypes": ["Audio"],
       "optimizedFor": "Low latency, controllable, single- and multi-speaker text-to-speech audio generation"
     },
     {
@@ -527,15 +490,8 @@
       "displayName": "Gemini 2.0 Flash",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Next generation features, speed, and realtime streaming."
     },
     {
@@ -544,16 +500,8 @@
       "displayName": "Gemini 2.0 Flash Preview Image Generation",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text",
-        "images"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text", "images"],
       "optimizedFor": "Conversational image generation and editing"
     },
     {
@@ -562,15 +510,8 @@
       "displayName": "Gemini 2.0 Flash-Lite",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Cost efficiency and low latency"
     },
     {
@@ -579,15 +520,8 @@
       "displayName": "Gemini 1.5 Flash",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Fast and versatile performance across a diverse variety of tasks"
     },
     {
@@ -596,15 +530,8 @@
       "displayName": "Gemini 1.5 Flash-8B",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text"],
       "optimizedFor": "High volume and lower intelligence tasks"
     },
     {
@@ -613,15 +540,8 @@
       "displayName": "Gemini 1.5 Pro",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "images",
-        "videos",
-        "text"
-      ],
-      "outputTypes": [
-        "Text"
-      ],
+      "inputTypes": ["Audio", "images", "videos", "text"],
+      "outputTypes": ["Text"],
       "optimizedFor": "Complex reasoning tasks requiring more intelligence"
     },
     {
@@ -630,12 +550,8 @@
       "displayName": "Gemini Embedding",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text"
-      ],
-      "outputTypes": [
-        "Text embeddings"
-      ],
+      "inputTypes": ["Text"],
+      "outputTypes": ["Text embeddings"],
       "optimizedFor": "Measuring the relatedness of text strings"
     },
     {
@@ -644,12 +560,8 @@
       "displayName": "Imagen 4",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text"
-      ],
-      "outputTypes": [
-        "Images"
-      ],
+      "inputTypes": ["Text"],
+      "outputTypes": ["Images"],
       "optimizedFor": "Our most up-to-date image generation model"
     },
     {
@@ -658,12 +570,8 @@
       "displayName": "Imagen 3",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text"
-      ],
-      "outputTypes": [
-        "Images"
-      ],
+      "inputTypes": ["Text"],
+      "outputTypes": ["Images"],
       "optimizedFor": "High quality image generation model"
     },
     {
@@ -672,13 +580,8 @@
       "displayName": "Veo 2",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Text",
-        "images"
-      ],
-      "outputTypes": [
-        "Video"
-      ],
+      "inputTypes": ["Text", "images"],
+      "outputTypes": ["Video"],
       "optimizedFor": "High quality video generation"
     },
     {
@@ -687,15 +590,8 @@
       "displayName": "Gemini 2.5 Flash Live",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "video",
-        "text"
-      ],
-      "outputTypes": [
-        "Text",
-        "audio"
-      ],
+      "inputTypes": ["Audio", "video", "text"],
+      "outputTypes": ["Text", "audio"],
       "optimizedFor": "Low-latency bidirectional voice and video interactions"
     },
     {
@@ -704,15 +600,8 @@
       "displayName": "Gemini 2.0 Flash Live",
       "provider": "gemini",
       "type": "cloud",
-      "inputTypes": [
-        "Audio",
-        "video",
-        "text"
-      ],
-      "outputTypes": [
-        "Text",
-        "audio"
-      ],
+      "inputTypes": ["Audio", "video", "text"],
+      "outputTypes": ["Text", "audio"],
       "optimizedFor": "Low-latency bidirectional voice and video interactions"
     }
   ],

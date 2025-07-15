@@ -5,6 +5,7 @@ This Next.js demo showcases the WallCrawler Agent functionality, which enables m
 ## Running the Demo
 
 1. **Install dependencies:**
+
    ```bash
    cd packages/demos/nextjs-local
    npm install
@@ -12,12 +13,14 @@ This Next.js demo showcases the WallCrawler Agent functionality, which enables m
 
 2. **Set up environment variables:**
    Create a `.env.local` file with:
+
    ```env
    OPENAI_API_KEY=your-openai-api-key
    OPENAI_MODEL=gpt-4-1106-preview
    ```
 
 3. **Run the development server:**
+
    ```bash
    npm run dev
    ```
@@ -48,21 +51,25 @@ This Next.js demo showcases the WallCrawler Agent functionality, which enables m
 Here are some example tasks you can try:
 
 ### Search and Extract
+
 ```
 Search for "machine learning tutorials", click on the first result, and extract the main topics covered
 ```
 
 ### Multi-Site Comparison
+
 ```
 Go to three different news websites and collect their top headline for today
 ```
 
 ### Documentation Navigation
+
 ```
 Navigate to the React documentation, find the Hooks section, and extract information about useState
 ```
 
 ### Form Interaction
+
 ```
 Find a contact form on the website and fill it with test data: name "Test User", email "test@example.com"
 ```

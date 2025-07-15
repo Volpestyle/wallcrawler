@@ -1,22 +1,13 @@
 export { LocalProvider, LocalProviderConfig } from './LocalProvider';
 
 // Browser automation provider
-export { 
-  LocalBrowserAutomationProvider,
-  type LocalBrowserAutomationConfig 
-} from './LocalBrowserAutomationProvider';
+export { LocalBrowserAutomationProvider, type LocalBrowserAutomationConfig } from './LocalBrowserAutomationProvider';
 
 // Session state management
-export { 
-  InMemorySessionStateManager,
-  type InMemorySessionStateConfig 
-} from './InMemorySessionStateManager';
+export { InMemorySessionStateManager, type InMemorySessionStateConfig } from './InMemorySessionStateManager';
 
 // Process management utilities
-export { 
-  ProcessTaskManager,
-  type ProcessTaskManagerConfig 
-} from './utils/ProcessTaskManager';
+export { ProcessTaskManager, type ProcessTaskManagerConfig } from './utils/ProcessTaskManager';
 
 // Re-export common interfaces for convenience
 export {

@@ -1,0 +1,13 @@
+{
+  "name": "wallcrawler-lambda-dependencies",
+  "version": "1.0.0",
+  "description": "Shared dependencies for WallCrawler Lambda functions",
+  "dependencies": {
+    "@aws-sdk/client-ecs": "^3.470.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.470.0",
+    "@aws-sdk/client-secrets-manager": "^3.470.0",
+    "@aws-sdk/client-ssm": "^3.470.0",
+    "jose": "^5.10.0",
+    "redis": "^4.6.12"
+  }
+}

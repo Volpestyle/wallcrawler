@@ -39,6 +39,21 @@ export interface IBrowserAutomationProvider extends IBrowserProvider {
    */
   listActiveTasks(): Promise<TaskInfo[]>;
 
+  /**
+   * Find or create a container for a specific user
+   */
+  getOrCreateUserContainer(userId: string): Promise<TaskInfo>;
+
+  /**
+   * Find a container currently serving a specific user
+   */
+  findContainerByUserId(userId: string): Promise<TaskInfo | null>;
+
+  /**
+   * List all containers serving a specific user
+   */
+  listUserContainers(userId: string): Promise<TaskInfo[]>;
+
   // Container Communication
   /**
    * Get the HTTP endpoint for a running task

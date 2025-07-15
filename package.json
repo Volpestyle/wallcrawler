@@ -11,7 +11,7 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "pnpm -r run typecheck",
     "clean": "pnpm -r exec rm -rf dist node_modules",
-    "format": "prettier --write \"packages/*/src/**/*.{ts,tsx,js,jsx,json,md}\"",
+    "format": "prettier --write \"packages/**/*.{ts,tsx,js,jsx,json,md}\" \"*.{ts,tsx,js,jsx,json,md}\" \"!packages/stagehand/**\"",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "pnpm build && changeset publish"

@@ -1,10 +1,5 @@
 // Union type for different step results based on step type
-export type StepResult = 
-  | NavigateResult
-  | ActResult
-  | ObserveResult
-  | ExtractResult
-  | AgentResult;
+export type StepResult = NavigateResult | ActResult | ObserveResult | ExtractResult | AgentResult;
 
 export interface NavigateResult {
   type: 'navigate';
@@ -113,7 +108,15 @@ export interface PricingResponse {
     output: number;
     note: string;
   };
-  [provider: string]: ProviderPricing | { input: number; output: number; note: string } | boolean | string | ModelInfo[] | { openai: number; anthropic: number; gemini: number } | string[] | undefined;
+  [provider: string]:
+    | ProviderPricing
+    | { input: number; output: number; note: string }
+    | boolean
+    | string
+    | ModelInfo[]
+    | { openai: number; anthropic: number; gemini: number }
+    | string[]
+    | undefined;
 }
 
 export interface WallcrawlerResponse {

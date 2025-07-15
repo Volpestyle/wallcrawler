@@ -1,0 +1,29 @@
+{
+  "name": "@wallcrawler/proxy-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run index.ts",
+    "build": "bun build index.ts --compile --outfile proxy",
+    "healthcheck": "bun run healthcheck.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ecs": "^3.511.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.511.0",
+    "@aws-sdk/client-s3": "^3.511.0",
+    "@aws-sdk/client-secrets-manager": "^3.511.0",
+    "@aws-sdk/client-ssm": "^3.511.0",
+    "jose": "^5.2.0",
+    "redis": "^4.6.12",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.18",
+    "@types/ws": "^8.5.10",
+    "bun-types": "^1.2.18"
+  },
+  "engines": {
+    "bun": ">=1.0.20"
+  }
+}

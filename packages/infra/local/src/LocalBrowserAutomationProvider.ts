@@ -149,7 +149,10 @@ export class LocalBrowserAutomationProvider implements IBrowserProvider, IBrowse
         privateIp: taskInfo.privateIp || null,
         publicIp: taskInfo.publicIp || null,
         itemsProcessed: 0,
-        metadata: taskInfo.metadata,
+        metadata: {
+          userId: config.userId,
+          ...taskInfo.metadata,
+        },
       });
 
       // Add to monitoring
@@ -246,6 +249,46 @@ export class LocalBrowserAutomationProvider implements IBrowserProvider, IBrowse
       console.error('[LocalBrowserAutomationProvider] Failed to list active tasks:', error);
       return [];
     }
+  }
+
+  // User-based container management methods (for local development)
+  async getOrCreateUserContainer(userId: string): Promise<TaskInfo> {
+    console.log(`[LocalBrowserAutomationProvider] Getting or creating container for user: ${userId} (local mode)`);
+
+    // For local development, create a new session/task each time
+    const sessionId = `local-user-${userId}-${Date.now()}`;
+    const taskConfig: AutomationTaskConfig = {
+      sessionId,
+      userId,
+      environment: 'development',
+      region: 'local',
+      environmentVariables: {
+        CONTAINER_USER_ID: userId,
+        CONTAINER_MODE: 'user-dedicated',
+      },
+      tags: {
+        ContainerType: 'UserDedicated',
+        Environment: 'Local',
+      },
+    };
+
+    return this.startAutomationTask(taskConfig);
+  }
+
+  async findContainerByUserId(userId: string): Promise<TaskInfo | null> {
+    console.log(`[LocalBrowserAutomationProvider] Finding container for user: ${userId} (local mode)`);
+
+    // For local development, always return null to force new container creation
+    // In a real implementation, this would check for existing user containers
+    return null;
+  }
+
+  async listUserContainers(userId: string): Promise<TaskInfo[]> {
+    console.log(`[LocalBrowserAutomationProvider] Listing containers for user: ${userId} (local mode)`);
+
+    // For local development, return empty array
+    // In a real implementation, this would filter tasks by userId
+    return [];
   }
 
   // Container Communication

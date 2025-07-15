@@ -69,7 +69,7 @@ export class InMemorySessionStateManager implements ISessionStateManager {
     const sessionCopy = { ...session };
     this.sessions.set(session.id, sessionCopy);
     this.taskIdMapping.set(session.taskId, session.id);
-    
+
     console.log(`[InMemorySessionStateManager] Created session: ${session.id}`);
     return sessionCopy;
   }
@@ -113,7 +113,11 @@ export class InMemorySessionStateManager implements ISessionStateManager {
     return { ...updated };
   }
 
-  async updateSessionStatus(sessionId: string, status: BrowserSessionStatus, metadata?: Record<string, unknown>): Promise<void> {
+  async updateSessionStatus(
+    sessionId: string,
+    status: BrowserSessionStatus,
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
     const updates: Partial<BrowserSession> = { status };
     if (metadata) {
       updates.metadata = metadata;
@@ -127,27 +131,26 @@ export class InMemorySessionStateManager implements ISessionStateManager {
 
   async getAllSessions(): Promise<BrowserSession[]> {
     const sessions = Array.from(this.sessions.values())
-      .filter(session => !this.isSessionExpired(session))
-      .map(session => ({ ...session }));
+      .filter((session) => !this.isSessionExpired(session))
+      .map((session) => ({ ...session }));
 
     return sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
   async getSessionsByParentId(parentSessionId: string): Promise<BrowserSession[]> {
     const sessions = Array.from(this.sessions.values())
-      .filter(session => session.sessionId === parentSessionId && !this.isSessionExpired(session))
-      .map(session => ({ ...session }));
+      .filter((session) => session.sessionId === parentSessionId && !this.isSessionExpired(session))
+      .map((session) => ({ ...session }));
 
     return sessions;
   }
 
   async getActiveSessions(): Promise<BrowserSession[]> {
     const sessions = Array.from(this.sessions.values())
-      .filter(session => 
-        !this.isSessionExpired(session) && 
-        (session.status === 'running' || session.status === 'starting')
+      .filter(
+        (session) => !this.isSessionExpired(session) && (session.status === 'running' || session.status === 'starting')
       )
-      .map(session => ({ ...session }));
+      .map((session) => ({ ...session }));
 
     return sessions;
   }
@@ -157,10 +160,10 @@ export class InMemorySessionStateManager implements ISessionStateManager {
     if (session) {
       this.taskIdMapping.delete(session.taskId);
     }
-    
+
     this.sessions.delete(sessionId);
     this.connections.delete(sessionId);
-    
+
     // Clean up related connection info
     const sessionConnections = this.connections.get(sessionId);
     if (sessionConnections) {
@@ -277,7 +280,7 @@ export class InMemorySessionStateManager implements ISessionStateManager {
     staleInfrastructure: number;
   }> {
     const sessions = await this.getAllSessions();
-    
+
     let activeSessions = 0;
     let pausedSessions = 0;
     let failedSessions = 0;
@@ -306,8 +309,10 @@ export class InMemorySessionStateManager implements ISessionStateManager {
       }
     }
 
-    const totalConnections = Array.from(this.connections.values())
-      .reduce((total, connections) => total + connections.size, 0);
+    const totalConnections = Array.from(this.connections.values()).reduce(
+      (total, connections) => total + connections.size,
+      0
+    );
 
     return {
       totalSessions: sessions.length,
@@ -333,9 +338,10 @@ export class InMemorySessionStateManager implements ISessionStateManager {
 
   private async ensureCapacity(): Promise<void> {
     if (this.sessions.size >= this.config.maxSessions) {
-      const sessions = Array.from(this.sessions.entries())
-        .sort(([, a], [, b]) => a.updatedAt.getTime() - b.updatedAt.getTime());
-      
+      const sessions = Array.from(this.sessions.entries()).sort(
+        ([, a], [, b]) => a.updatedAt.getTime() - b.updatedAt.getTime()
+      );
+
       const toRemove = sessions.slice(0, Math.ceil(this.config.maxSessions * 0.1)); // Remove 10%
       for (const [sessionId] of toRemove) {
         await this.deleteSession(sessionId);
@@ -345,10 +351,7 @@ export class InMemorySessionStateManager implements ISessionStateManager {
 
   private startAutoCleanup(): void {
     this.cleanupInterval = setInterval(() => {
-      Promise.all([
-        this.cleanupExpiredSessions(),
-        this.cleanupStaleInfrastructure()
-      ]).catch(error => {
+      Promise.all([this.cleanupExpiredSessions(), this.cleanupStaleInfrastructure()]).catch((error) => {
         console.error('[InMemorySessionStateManager] Auto cleanup error:', error);
       });
     }, this.config.cleanupInterval * 1000);

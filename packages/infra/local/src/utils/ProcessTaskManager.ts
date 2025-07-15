@@ -43,6 +43,7 @@ export interface ProcessTaskManagerConfig {
  */
 interface ProcessMetadata {
   sessionId: string;
+  userId: string;
   environment: string;
   command: string;
   args: string[];
@@ -103,6 +104,8 @@ export class ProcessTaskManager {
       const env = {
         ...process.env,
         SESSION_ID: taskConfig.sessionId,
+        USER_ID: taskConfig.userId,
+        CONTAINER_USER_ID: taskConfig.userId, // Required by container app
         ENVIRONMENT: taskConfig.environment,
         REGION: taskConfig.region,
         PORT: port.toString(),
@@ -127,6 +130,7 @@ export class ProcessTaskManager {
         createdAt: new Date(),
         metadata: {
           sessionId: taskConfig.sessionId,
+          userId: taskConfig.userId,
           environment: taskConfig.environment,
           command: this.config.defaultCommand,
           args: this.config.defaultArgs,
@@ -148,6 +152,7 @@ export class ProcessTaskManager {
       const taskInfo: TaskInfo = {
         taskId: processId,
         taskArn: `local:process:${processId}`,
+        userId: taskConfig.userId,
         status: 'STARTING',
         createdAt: processInfo.createdAt,
         startedAt: processInfo.startedAt,
@@ -220,6 +225,7 @@ export class ProcessTaskManager {
       return {
         taskId: processInfo.processId,
         taskArn: processArn,
+        userId: processInfo.metadata.userId,
         status: processInfo.status,
         createdAt: processInfo.createdAt,
         startedAt: processInfo.startedAt,
@@ -262,6 +268,7 @@ export class ProcessTaskManager {
           processInfos.push({
             taskId: processInfo.processId,
             taskArn: `local:process:${processInfo.processId}`,
+            userId: processInfo.metadata.userId,
             status: processInfo.status,
             createdAt: processInfo.createdAt,
             startedAt: processInfo.startedAt,

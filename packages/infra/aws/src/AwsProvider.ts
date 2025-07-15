@@ -1,535 +1,590 @@
-import { chromium } from 'playwright';
-import { ECSClient, RunTaskCommand, StopTaskCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
-import { S3Client, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
+/**
+ * AWS Browser Automation Provider
+ * Implements browser automation using AWS services:
+ * - ECS Fargate for browser containers
+ * - Redis (ElastiCache) for session state
+ * - S3 for artifact storage
+ * - API Gateway WebSocket for real-time communication
+ */
+
 import {
   IBrowserProvider,
-  ProviderType,
   ProviderSession,
   SessionCreateParams,
   BrowserConnectionResult,
   Artifact,
   ArtifactList,
-  LogLine,
 } from '@wallcrawler/stagehand';
 
-export interface AwsProviderConfig {
-  /** AWS region */
-  region?: string;
-  /** AWS access key ID */
-  accessKeyId?: string;
-  /** AWS secret access key */
-  secretAccessKey?: string;
-  /** S3 bucket for artifacts */
-  artifactsBucket?: string;
-  /** ECS cluster name for browser instances */
-  ecsCluster?: string;
-  /** ECR repository for browser image */
-  browserImageUri?: string;
-  /** VPC configuration */
-  vpcConfig?: {
-    subnets: string[];
-    securityGroups: string[];
-  };
-  /** Logging function */
-  logger?: (logLine: LogLine) => void;
-}
+import {
+  IBrowserAutomationProvider,
+  ISessionStateManager,
+  AutomationTaskConfig,
+  TaskInfo,
+  ContainerResponse,
+  HealthStatus,
+  ContainerMethod,
+  AutomationEvent,
+} from '@wallcrawler/infra-common';
+
+import { AwsProviderConfig, AwsTaskConfig } from './types';
+import { AwsSessionStateManager } from './AwsSessionStateManager';
+import { AwsTaskManager } from './utils/AwsTaskManager';
+import { S3ArtifactManager } from './utils/S3ArtifactManager';
+import { WebSocketManager } from './utils/WebSocketManager';
+import { ContainerCommunicator } from '@wallcrawler/infra-common';
 
 /**
- * AWS browser provider for running browsers in ECS/Fargate
- * Handles ECS task management and S3 artifact storage
+ * AWS Provider for browser automation
+ * Orchestrates AWS services to provide scalable browser automation
  */
-export class AwsProvider implements IBrowserProvider {
-  public readonly type: ProviderType = 'aws';
-  public readonly name: string = 'AWS Browser Provider';
+export class AwsProvider implements IBrowserProvider, IBrowserAutomationProvider {
+  // IBrowserProvider properties
+  readonly type = 'aws' as const;
+  readonly name = 'AWS Browser Automation Provider';
 
   private readonly config: AwsProviderConfig;
-  private readonly ecsClient: ECSClient;
-  private readonly s3Client: S3Client;
-  private readonly sessions: Map<string, ProviderSession> = new Map();
+  private readonly sessionStateManager: AwsSessionStateManager;
+  private readonly taskManager: AwsTaskManager;
+  private readonly artifactManager: S3ArtifactManager;
+  private readonly webSocketManager: WebSocketManager;
+  private readonly containerCommunicator: ContainerCommunicator;
 
   constructor(config: AwsProviderConfig) {
     this.config = config;
 
-    const awsConfig = {
-      region: config.region || process.env.AWS_REGION || 'us-east-1',
-      ...(config.accessKeyId &&
-        config.secretAccessKey && {
-          credentials: {
-            accessKeyId: config.accessKeyId,
-            secretAccessKey: config.secretAccessKey,
-          },
-        }),
-    };
-
-    this.ecsClient = new ECSClient(awsConfig);
-    this.s3Client = new S3Client(awsConfig);
-
-    if (!config.artifactsBucket) {
-      throw new Error('artifactsBucket is required for AWS provider');
-    }
-    if (!config.ecsCluster) {
-      throw new Error('ecsCluster is required for AWS provider');
-    }
-    if (!config.browserImageUri) {
-      throw new Error('browserImageUri is required for AWS provider');
-    }
-  }
-
-  private log(logLine: Omit<LogLine, 'category'>): void {
-    if (this.config.logger) {
-      this.config.logger({
-        category: 'aws-provider',
-        ...logLine,
-      });
-    }
-  }
-
-  /**
-   * Create a new browser session by launching an ECS task
-   */
-  async createSession(params?: SessionCreateParams): Promise<ProviderSession> {
-    const sessionId = this.generateSessionId();
-
-    this.log({
-      message: 'creating new AWS browser session',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-        cluster: { value: this.config.ecsCluster!, type: 'string' },
+    // Initialize session state manager with Redis
+    this.sessionStateManager = new AwsSessionStateManager({
+      backend: 'redis',
+      connectionConfig: {
+        endpoint: config.redis.endpoint,
+        port: config.redis.port || 6379,
+        password: config.redis.password,
+        db: config.redis.db || 0,
       },
+      sessionTtl: config.sessionState?.sessionTtl || 4 * 60 * 60, // 4 hours
+      taskTtl: config.sessionState?.taskTtl || 8 * 60 * 60, // 8 hours
+      cleanupInterval: config.sessionState?.cleanupInterval || 60 * 60, // 1 hour
+      autoCleanup: config.sessionState?.autoCleanup ?? true,
+      keyPrefix: 'wallcrawler:',
+      heartbeatTimeout: 5 * 60, // 5 minutes
     });
 
-    // Launch ECS task with browser container
-    const runTaskCommand = new RunTaskCommand({
-      cluster: this.config.ecsCluster,
-      taskDefinition: await this.getOrCreateTaskDefinition(),
-      launchType: 'FARGATE',
-      networkConfiguration: {
-        awsvpcConfiguration: {
-          subnets: this.config.vpcConfig?.subnets || [],
-          securityGroups: this.config.vpcConfig?.securityGroups || [],
-          assignPublicIp: 'ENABLED',
+    // Initialize ECS task manager
+    this.taskManager = new AwsTaskManager({
+      region: config.region,
+      clusterName: config.ecsClusterName,
+      taskDefinition: config.ecsTaskDefinition,
+      subnetIds: config.subnetIds,
+      securityGroupIds: config.securityGroupIds,
+      autoScaling: config.autoScaling,
+      costOptimization: config.costOptimization,
+    });
+
+    // Initialize S3 artifact manager (if configured)
+    this.artifactManager = new S3ArtifactManager({
+      region: config.s3?.region || config.region,
+      bucketName: config.s3?.bucketName || '',
+      keyPrefix: config.s3?.keyPrefix || 'artifacts/',
+      enabled: !!config.s3?.bucketName,
+    });
+
+    // Initialize WebSocket manager (if configured)
+    this.webSocketManager = new WebSocketManager({
+      region: config.region,
+      apiId: config.websocket?.apiId || '',
+      stage: config.websocket?.stage || 'dev',
+      endpoint: config.websocket?.endpoint,
+      enabled: !!config.websocket?.apiId,
+    });
+
+    // Initialize container communicator
+    this.containerCommunicator = new ContainerCommunicator({
+      defaultPort: config.container?.browserPort || 8080,
+      healthCheckPath: '/health',
+      defaultTimeout: config.networking?.timeout || 30000,
+      defaultRetries: 3,
+      enableLogging: true,
+    });
+
+    console.log(`[AwsProvider] Initialized AWS provider in region ${config.region}`);
+  }
+
+  // =============================================================================
+  // Task Management (IBrowserAutomationProvider)
+  // =============================================================================
+
+  async startAutomationTask(config: AutomationTaskConfig): Promise<TaskInfo> {
+    console.log(`[AwsProvider] Starting automation task for session: ${config.sessionId}`);
+
+    try {
+      // Convert to AWS-specific task config
+      const awsTaskConfig: AwsTaskConfig = {
+        ...config,
+        clusterName: this.config.ecsClusterName,
+        taskDefinition: this.config.ecsTaskDefinition,
+        subnetIds: this.config.subnetIds,
+        securityGroupIds: this.config.securityGroupIds,
+        useFargateSpot: this.config.costOptimization?.useFargateSpot,
+        containerOverrides: {
+          environment: {
+            SESSION_ID: config.sessionId,
+            USER_ID: config.userId,
+            CONTAINER_USER_ID: config.userId, // Required by container app
+            ENVIRONMENT: config.environment,
+            REGION: config.region,
+            REDIS_ENDPOINT: this.config.redis.endpoint,
+            REDIS_PORT: (this.config.redis.port || 6379).toString(),
+            ...(this.config.redis.password && { REDIS_PASSWORD: this.config.redis.password }),
+            ...(this.config.websocket?.endpoint && { WEBSOCKET_ENDPOINT: this.config.websocket.endpoint }),
+            ...config.environmentVariables,
+          },
         },
-      },
-      overrides: {
-        containerOverrides: [
-          {
-            name: 'browser',
-            environment: [{ name: 'SESSION_ID', value: sessionId }],
-          },
-        ],
-      },
-    });
+      };
 
-    const taskResult = await this.ecsClient.send(runTaskCommand);
-    const taskArn = taskResult.tasks?.[0]?.taskArn;
+      // Start ECS task
+      const taskInfo = await this.taskManager.startTask(awsTaskConfig);
 
-    if (!taskArn) {
-      throw new Error('Failed to launch ECS task');
+      // Create session entry in state manager
+      await this.sessionStateManager.createSession({
+        id: `${config.sessionId}-${taskInfo.taskId}`,
+        sessionId: config.sessionId,
+        taskId: taskInfo.taskId,
+        taskArn: taskInfo.taskArn,
+        status: 'starting',
+        startedAt: new Date(),
+        updatedAt: new Date(),
+        lastHeartbeat: new Date(),
+        browserUrl: null,
+        vncUrl: null,
+        privateIp: null,
+        publicIp: null,
+        itemsProcessed: 0,
+        metadata: {
+          userId: config.userId,
+          region: config.region,
+          environment: config.environment,
+          ...taskInfo.metadata,
+        },
+      });
+
+      console.log(`[AwsProvider] Started ECS task ${taskInfo.taskId} for session ${config.sessionId}`);
+      return taskInfo;
+    } catch (error) {
+      console.error('[AwsProvider] Failed to start automation task:', error);
+      throw error;
     }
+  }
 
-    // Wait for task to be running and get public IP
-    const publicIp = await this.waitForTaskRunning(taskArn);
-    const connectUrl = `ws://${publicIp}:9222`;
+  async stopAutomationTask(taskId: string, reason?: string): Promise<void> {
+    console.log(`[AwsProvider] Stopping automation task: ${taskId}`);
 
-    const session: ProviderSession = {
+    try {
+      // Update session status first
+      const session = await this.sessionStateManager.getSessionByTaskId(taskId);
+      if (session) {
+        await this.sessionStateManager.updateSessionStatus(session.id, 'stopping');
+      }
+
+      // Stop ECS task
+      await this.taskManager.stopTask(taskId, reason);
+
+      console.log(`[AwsProvider] Stopped ECS task ${taskId}`);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to stop automation task:', error);
+      throw error;
+    }
+  }
+
+  async getTaskInfo(taskId: string): Promise<TaskInfo | null> {
+    try {
+      return await this.taskManager.getTaskInfo(taskId);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to get task info:', error);
+      return null;
+    }
+  }
+
+  async findTaskBySessionId(sessionId: string): Promise<TaskInfo | null> {
+    try {
+      // First try session state manager
+      const sessions = await this.sessionStateManager.getSessionsByParentId(sessionId);
+      if (sessions.length > 0) {
+        const session = sessions[0]; // Get the most recent
+        return this.getTaskInfo(session.taskId);
+      }
+
+      // Fallback to ECS search
+      return await this.taskManager.findTaskBySessionId(sessionId);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to find task by session ID:', error);
+      return null;
+    }
+  }
+
+  async listActiveTasks(): Promise<TaskInfo[]> {
+    try {
+      const activeSessions = await this.sessionStateManager.getActiveSessions();
+      const taskInfoPromises = activeSessions.map((session) => this.getTaskInfo(session.taskId));
+      const taskInfos = await Promise.all(taskInfoPromises);
+      return taskInfos.filter((info): info is TaskInfo => info !== null);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to list active tasks:', error);
+      return [];
+    }
+  }
+
+  async getOrCreateUserContainer(userId: string): Promise<TaskInfo> {
+    console.log(`[AwsProvider] Getting or creating container for user: ${userId}`);
+
+    try {
+      // First check if user has an existing container
+      const existingContainer = await this.findContainerByUserId(userId);
+      if (existingContainer) {
+        console.log(`[AwsProvider] Found existing container ${existingContainer.taskId} for user ${userId}`);
+        return existingContainer;
+      }
+
+      // Create new container for user
+      const sessionId = `user-container-${userId}-${Date.now()}`;
+      const taskConfig: AutomationTaskConfig = {
+        sessionId,
+        userId,
+        environment: 'user-container',
+        region: this.config.region,
+        environmentVariables: {
+          CONTAINER_MODE: 'user-dedicated',
+        },
+        tags: {
+          ContainerType: 'UserDedicated',
+        },
+      };
+
+      const taskInfo = await this.startAutomationTask(taskConfig);
+      console.log(`[AwsProvider] Created new container ${taskInfo.taskId} for user ${userId}`);
+
+      return taskInfo;
+    } catch (error) {
+      console.error('[AwsProvider] Failed to get or create user container:', error);
+      throw error;
+    }
+  }
+
+  async findContainerByUserId(userId: string): Promise<TaskInfo | null> {
+    try {
+      return await this.taskManager.findAvailableContainerForUser(userId);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to find container by user ID:', error);
+      return null;
+    }
+  }
+
+  async listUserContainers(userId: string): Promise<TaskInfo[]> {
+    try {
+      return await this.taskManager.findTasksByUserId(userId);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to list user containers:', error);
+      return [];
+    }
+  }
+
+  // =============================================================================
+  // Container Communication
+  // =============================================================================
+
+  async getTaskEndpoint(taskId: string, timeoutMs: number = 60000): Promise<string | null> {
+    try {
+      return await this.taskManager.getTaskEndpoint(taskId, timeoutMs);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to get task endpoint:', error);
+      return null;
+    }
+  }
+
+  async callContainerEndpoint<T = unknown>(
+    endpoint: string,
+    path: string,
+    method: ContainerMethod = 'GET',
+    body?: Record<string, unknown>,
+    retries?: number
+  ): Promise<ContainerResponse<T>> {
+    return this.containerCommunicator.callEndpoint(endpoint, path, method, body, retries);
+  }
+
+  async startContainerAutomation(
+    taskId: string,
+    sessionId: string,
+    params: Record<string, unknown>
+  ): Promise<ContainerResponse<{ message: string; sessionId?: string }>> {
+    try {
+      const endpoint = await this.getTaskEndpoint(taskId);
+      if (!endpoint) {
+        return {
+          success: false,
+          error: 'Could not get container endpoint',
+        };
+      }
+
+      return this.containerCommunicator.startAutomation(endpoint, sessionId, params);
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to start container automation: ${error}`,
+      };
+    }
+  }
+
+  async stopContainerAutomation(taskId: string): Promise<ContainerResponse<{ message: string }>> {
+    try {
+      const endpoint = await this.getTaskEndpoint(taskId, 10000);
+      if (!endpoint) {
+        return {
+          success: false,
+          error: 'Could not get container endpoint',
+        };
+      }
+
+      return this.containerCommunicator.stopAutomation(endpoint);
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to stop container automation: ${error}`,
+      };
+    }
+  }
+
+  // =============================================================================
+  // Health & Monitoring
+  // =============================================================================
+
+  async getContainerHealth(taskId: string): Promise<ContainerResponse<HealthStatus>> {
+    try {
+      const endpoint = await this.getTaskEndpoint(taskId, 10000);
+      if (!endpoint) {
+        return {
+          success: false,
+          error: 'Could not get container endpoint',
+        };
+      }
+
+      return this.containerCommunicator.checkHealth(endpoint);
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to get container health: ${error}`,
+      };
+    }
+  }
+
+  async enableVncStreaming(taskId: string): Promise<string> {
+    try {
+      const taskInfo = await this.getTaskInfo(taskId);
+      if (!taskInfo || !taskInfo.privateIp) {
+        throw new Error(`Task ${taskId} not found or no IP address available`);
+      }
+
+      const vncPort = this.config.container?.vncPort || 5900;
+      const vncUrl = `vnc://${taskInfo.privateIp}:${vncPort}`;
+
+      // Update session with VNC URL
+      const session = await this.sessionStateManager.getSessionByTaskId(taskId);
+      if (session) {
+        await this.sessionStateManager.updateSession(session.id, {
+          vncUrl,
+          status: 'running',
+        });
+      }
+
+      return vncUrl;
+    } catch (error) {
+      console.error('[AwsProvider] Failed to enable VNC streaming:', error);
+      throw error;
+    }
+  }
+
+  async getContainerVncInfo(taskId: string): Promise<ContainerResponse<{ vncUrl?: string; status: string }>> {
+    try {
+      const session = await this.sessionStateManager.getSessionByTaskId(taskId);
+      if (!session) {
+        return {
+          success: false,
+          error: 'Session not found',
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          vncUrl: session.vncUrl || undefined,
+          status: session.vncUrl ? 'available' : 'not_configured',
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to get VNC info: ${error}`,
+      };
+    }
+  }
+
+  // =============================================================================
+  // Session State Management
+  // =============================================================================
+
+  getSessionStateManager(): ISessionStateManager {
+    return this.sessionStateManager;
+  }
+
+  // =============================================================================
+  // Real-time Communication
+  // =============================================================================
+
+  async subscribeToEvents(sessionId: string, callback: (event: AutomationEvent) => void): Promise<string> {
+    return this.sessionStateManager.subscribeToEvents(sessionId, callback);
+  }
+
+  async unsubscribeFromEvents(subscriptionId: string): Promise<void> {
+    return this.sessionStateManager.unsubscribeFromEvents(subscriptionId);
+  }
+
+  async publishEvent(sessionId: string, eventType: string, data: Record<string, unknown>): Promise<void> {
+    const event: AutomationEvent = {
+      type: 'progress' as const,
+      timestamp: new Date().toISOString(),
       sessionId,
-      provider: this.type,
-      connectUrl,
-      metadata: {
-        ...params?.userMetadata,
-        createdAt: new Date().toISOString(),
-        taskArn,
-        cluster: this.config.ecsCluster,
-        publicIp,
+      data: {
+        progress: 0,
+        message: eventType,
+        ...data,
       },
     };
 
-    this.sessions.set(sessionId, session);
-
-    this.log({
-      message: 'AWS browser session created',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-        taskArn: { value: taskArn, type: 'string' },
-        connectUrl: { value: connectUrl, type: 'string' },
-      },
-    });
-
-    return session;
+    return this.sessionStateManager.publishEvent(sessionId, event);
   }
 
-  /**
-   * Resume an existing session
-   */
+  // =============================================================================
+  // IBrowserProvider Methods
+  // =============================================================================
+
+  async createSession(params: SessionCreateParams = {}): Promise<ProviderSession> {
+    const sessionId = `aws-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    return {
+      sessionId,
+      connectUrl: '', // Will be populated when task starts
+      provider: 'aws',
+      metadata: {
+        type: 'automation',
+        region: this.config.region,
+        ...params.userMetadata,
+      },
+    };
+  }
+
   async resumeSession(sessionId: string): Promise<ProviderSession> {
-    const session = this.sessions.get(sessionId);
+    const session = await this.sessionStateManager.getSession(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    // Verify ECS task is still running
-    const taskArn = session.metadata?.taskArn as string;
-    if (taskArn) {
-      const describeTasksCommand = new DescribeTasksCommand({
-        cluster: this.config.ecsCluster,
-        tasks: [taskArn],
-      });
-
-      const result = await this.ecsClient.send(describeTasksCommand);
-      const task = result.tasks?.[0];
-
-      if (!task || task.lastStatus !== 'RUNNING') {
-        throw new Error(`Session ${sessionId} task is not running`);
-      }
-    }
-
-    this.log({
-      message: 'resuming AWS browser session',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-      },
-    });
-
-    return session;
-  }
-
-  /**
-   * Connect to the browser instance running in ECS
-   */
-  async connectToBrowser(session: ProviderSession): Promise<BrowserConnectionResult> {
-    if (!session.connectUrl) {
-      throw new Error('No connect URL available for session');
-    }
-
-    this.log({
-      message: 'connecting to AWS browser instance',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: session.sessionId, type: 'string' },
-        connectUrl: { value: session.connectUrl, type: 'string' },
-      },
-    });
-
-    // Connect to remote browser via CDP
-    const browser = await chromium.connectOverCDP(session.connectUrl);
-
-    this.log({
-      message: 'connected to AWS browser instance',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: session.sessionId, type: 'string' },
-      },
-    });
+    const endpoint = session.browserUrl || (await this.getTaskEndpoint(session.taskId));
 
     return {
-      browser,
-      session,
+      sessionId: session.id,
+      connectUrl: endpoint || '',
+      provider: 'aws',
+      metadata: session.metadata,
     };
   }
 
-  /**
-   * End a browser session by stopping the ECS task
-   */
+  async connectToBrowser(_session: ProviderSession): Promise<BrowserConnectionResult> {
+    throw new Error(
+      'connectToBrowser is not supported for AwsProvider. ' + 'Use startAutomationTask and getTaskEndpoint instead.'
+    );
+  }
+
   async endSession(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+    try {
+      // Find and stop any running tasks for this session
+      const task = await this.findTaskBySessionId(sessionId);
+      if (task) {
+        await this.stopAutomationTask(task.taskId, 'Session ended');
+      }
+
+      // Clean up session state
+      await this.sessionStateManager.deleteSession(sessionId);
+    } catch (error) {
+      console.error('[AwsProvider] Failed to end session:', error);
+      throw error;
     }
-
-    this.log({
-      message: 'ending AWS browser session',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-      },
-    });
-
-    // Stop ECS task
-    const taskArn = session.metadata?.taskArn as string;
-    if (taskArn) {
-      const stopTaskCommand = new StopTaskCommand({
-        cluster: this.config.ecsCluster,
-        task: taskArn,
-      });
-
-      await this.ecsClient.send(stopTaskCommand);
-    }
-
-    this.sessions.delete(sessionId);
-
-    this.log({
-      message: 'AWS browser session ended',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-      },
-    });
   }
 
-  /**
-   * Save an artifact to S3
-   */
   async saveArtifact(sessionId: string, filePath: string, data: Buffer): Promise<Artifact> {
-    const artifactId = this.generateArtifactId();
-    const key = `${sessionId}/${artifactId}/${filePath}`;
-
-    this.log({
-      message: 'saving artifact to S3',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-        artifactId: { value: artifactId, type: 'string' },
-        bucket: { value: this.config.artifactsBucket!, type: 'string' },
-        key: { value: key, type: 'string' },
-      },
-    });
-
-    const putObjectCommand = new PutObjectCommand({
-      Bucket: this.config.artifactsBucket,
-      Key: key,
-      Body: data,
-      Metadata: {
-        sessionId,
-        artifactId,
-        originalPath: filePath,
-        uploadedAt: new Date().toISOString(),
-      },
-    });
-
-    await this.s3Client.send(putObjectCommand);
-
-    const artifact: Artifact = {
-      id: artifactId,
-      name: filePath,
-      size: data.length,
-      createdAt: new Date(),
-      path: key,
-      metadata: {
-        sessionId,
-        bucket: this.config.artifactsBucket,
-        originalPath: filePath,
-      },
-    };
-
-    this.log({
-      message: 'artifact saved to S3',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-        artifactId: { value: artifactId, type: 'string' },
-      },
-    });
-
-    return artifact;
+    return this.artifactManager.saveArtifact(sessionId, filePath, data);
   }
 
-  /**
-   * List artifacts for a session from S3
-   */
   async getArtifacts(sessionId: string, cursor?: string): Promise<ArtifactList> {
-    this.log({
-      message: 'listing artifacts from S3',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-        bucket: { value: this.config.artifactsBucket!, type: 'string' },
-      },
-    });
-
-    const listCommand = new ListObjectsV2Command({
-      Bucket: this.config.artifactsBucket,
-      Prefix: `${sessionId}/`,
-      ContinuationToken: cursor,
-    });
-
-    const result = await this.s3Client.send(listCommand);
-    const artifacts: Artifact[] = [];
-
-    if (result.Contents) {
-      for (const object of result.Contents) {
-        if (object.Key && object.Size && object.LastModified) {
-          const keyParts = object.Key.split('/');
-          const artifactId = keyParts[1];
-          const fileName = keyParts.slice(2).join('/');
-
-          artifacts.push({
-            id: artifactId,
-            name: fileName,
-            size: object.Size,
-            createdAt: object.LastModified,
-            path: object.Key,
-            metadata: {
-              sessionId,
-              bucket: this.config.artifactsBucket,
-            },
-          });
-        }
-      }
-    }
-
-    return {
-      artifacts,
-      totalCount: artifacts.length,
-      hasMore: !!result.IsTruncated,
-      nextCursor: result.NextContinuationToken,
-    };
+    return this.artifactManager.getArtifacts(sessionId, cursor);
   }
 
-  /**
-   * Download a specific artifact from S3
-   */
   async downloadArtifact(sessionId: string, artifactId: string): Promise<Buffer> {
-    this.log({
-      message: 'downloading artifact from S3',
-      level: 1,
-      auxiliary: {
-        sessionId: { value: sessionId, type: 'string' },
-        artifactId: { value: artifactId, type: 'string' },
-      },
-    });
-
-    // List objects to find the artifact
-    const artifacts = await this.getArtifacts(sessionId);
-    const artifact = artifacts.artifacts.find((a) => a.id === artifactId);
-
-    if (!artifact) {
-      throw new Error(`Artifact ${artifactId} not found for session ${sessionId}`);
-    }
-
-    const getObjectCommand = new GetObjectCommand({
-      Bucket: this.config.artifactsBucket,
-      Key: artifact.path,
-    });
-
-    const result = await this.s3Client.send(getObjectCommand);
-
-    if (!result.Body) {
-      throw new Error(`No content found for artifact ${artifactId}`);
-    }
-
-    // Convert stream to buffer using streamCollector
-    // This handles both web streams and Node.js streams properly
-    const chunks: Uint8Array[] = [];
-    
-    if (result.Body instanceof ReadableStream) {
-      const reader = result.Body.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      return Buffer.concat(chunks.map(chunk => Buffer.from(chunk)));
-    } else {
-      // Assume it's a Node.js Readable stream and convert to async iterator
-      const stream = result.Body as NodeJS.ReadableStream;
-      return new Promise<Buffer>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-        stream.on('error', reject);
-        stream.on('end', () => resolve(Buffer.concat(chunks)));
-      });
-    }
+    return this.artifactManager.downloadArtifact(sessionId, artifactId);
   }
 
-  /**
-   * Clean up AWS provider resources
-   */
+  // =============================================================================
+  // Provider Management
+  // =============================================================================
+
   async cleanup(): Promise<void> {
-    this.log({
-      message: 'cleaning up AWS provider resources',
-      level: 1,
-    });
+    console.log('[AwsProvider] Cleaning up AWS provider resources...');
 
-    // Stop all running tasks
-    const stopPromises = Array.from(this.sessions.values()).map(async (session) => {
-      const taskArn = session.metadata?.taskArn as string;
-      if (taskArn) {
+    try {
+      // Stop all active tasks
+      const activeSessions = await this.sessionStateManager.getActiveSessions();
+      const stopPromises = activeSessions.map(async (session) => {
         try {
-          const stopTaskCommand = new StopTaskCommand({
-            cluster: this.config.ecsCluster,
-            task: taskArn,
-          });
-          await this.ecsClient.send(stopTaskCommand);
+          await this.taskManager.stopTask(session.taskId, 'Provider cleanup');
         } catch (error) {
-          this.log({
-            message: `Error stopping task ${taskArn}`,
-            level: 0,
-            auxiliary: {
-              error: { value: (error as Error).message, type: 'string' },
-            },
-          });
+          console.error(`[AwsProvider] Error stopping task ${session.taskId}:`, error);
         }
-      }
-    });
-
-    await Promise.all(stopPromises);
-    this.sessions.clear();
-  }
-
-  /**
-   * Wait for ECS task to be running and return public IP
-   */
-  private async waitForTaskRunning(taskArn: string, maxWaitTime = 300000): Promise<string> {
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < maxWaitTime) {
-      const describeTasksCommand = new DescribeTasksCommand({
-        cluster: this.config.ecsCluster,
-        tasks: [taskArn],
       });
 
-      const result = await this.ecsClient.send(describeTasksCommand);
-      const task = result.tasks?.[0];
+      await Promise.allSettled(stopPromises);
 
-      if (task?.lastStatus === 'RUNNING') {
-        // Extract public IP from task
-        const attachment = task.attachments?.find((a) => a.type === 'NetworkInterface');
-        const detail = attachment?.details?.find((d) => d.name === 'networkInterfaceId');
+      // Cleanup managers
+      await this.sessionStateManager.destroy();
+      await this.taskManager.cleanup();
+      await this.webSocketManager.cleanup();
 
-        if (detail?.value) {
-          // In a real implementation, you'd use EC2 to get the public IP
-          // For now, we'll simulate it
-          return 'placeholder-public-ip';
-        }
-      }
-
-      if (task?.lastStatus === 'STOPPED') {
-        throw new Error(`Task ${taskArn} stopped unexpectedly`);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      console.log('[AwsProvider] Cleanup completed');
+    } catch (error) {
+      console.error('[AwsProvider] Error during cleanup:', error);
     }
-
-    throw new Error(`Task ${taskArn} did not start within ${maxWaitTime}ms`);
   }
 
-  /**
-   * Get or create ECS task definition for browser
-   */
-  private async getOrCreateTaskDefinition(): Promise<string> {
-    // In a real implementation, this would check if the task definition exists
-    // and create it if it doesn't
-    return 'browser-task-definition';
+  // =============================================================================
+  // Configuration and Utilities
+  // =============================================================================
+
+  getConfig(): AwsProviderConfig {
+    return { ...this.config };
   }
 
-  /**
-   * Generate a unique session ID
-   */
-  private generateSessionId(): string {
-    return `aws_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-  }
-
-  /**
-   * Generate a unique artifact ID
-   */
-  private generateArtifactId(): string {
-    return `${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+  async getProviderStats(): Promise<{
+    provider: { type: string; name: string; region: string };
+    sessions: any;
+    tasks: { running: number };
+  }> {
+    return {
+      provider: {
+        type: this.type,
+        name: this.name,
+        region: this.config.region,
+      },
+      sessions: await this.sessionStateManager.getStats(),
+      tasks: {
+        running: (await this.sessionStateManager.getActiveSessions()).length,
+      },
+    };
   }
 }

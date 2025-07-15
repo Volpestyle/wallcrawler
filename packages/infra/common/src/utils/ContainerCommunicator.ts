@@ -3,11 +3,7 @@
  * Extracted and generalized from career-agent implementation
  */
 
-import {
-  ContainerResponse,
-  ContainerMethod,
-  ContainerEndpointConfig
-} from '../types/automation';
+import { ContainerResponse, ContainerMethod, ContainerEndpointConfig } from '../types/automation';
 
 /**
  * Configuration for container communicator
@@ -74,9 +70,7 @@ export class ContainerCommunicator {
         }
 
         if (this.config.enableLogging) {
-          console.log(
-            `[ContainerCommunicator] Calling endpoint: ${method} ${url} (attempt ${attempt})`
-          );
+          console.log(`[ContainerCommunicator] Calling endpoint: ${method} ${url} (attempt ${attempt})`);
         }
 
         const response = await fetch(url, options);
@@ -95,13 +89,11 @@ export class ContainerCommunicator {
           success: response.ok,
           data,
           statusCode: response.status,
-          error: response.ok
-            ? undefined
-            : `HTTP ${response.status}: ${response.statusText}`,
+          error: response.ok ? undefined : `HTTP ${response.status}: ${response.statusText}`,
         };
       } catch (error) {
         clearTimeout(timeoutId); // Clear timeout on error
-        
+
         if (this.config.enableLogging) {
           console.error(`[ContainerCommunicator] Attempt ${attempt} failed:`, error);
         }
@@ -148,15 +140,10 @@ export class ContainerCommunicator {
     sessionId: string,
     params: Record<string, unknown>
   ): Promise<ContainerResponse<{ message: string; sessionId?: string }>> {
-    return this.callEndpoint(
-      endpoint,
-      '/start',
-      'POST',
-      {
-        sessionId,
-        ...params,
-      }
-    );
+    return this.callEndpoint(endpoint, '/start', 'POST', {
+      sessionId,
+      ...params,
+    });
   }
 
   /**

@@ -3,11 +3,7 @@
  * Provides common functionality for event publishing and subscription
  */
 
-import {
-  AutomationEvent,
-  EventCallback,
-  IEventPublisher
-} from '../types/events';
+import { AutomationEvent, EventCallback, IEventPublisher } from '../types/events';
 
 /**
  * Configuration for event publisher
@@ -63,7 +59,7 @@ export class BaseEventPublisher implements IEventPublisher {
    */
   async publishEvent(sessionId: string, event: AutomationEvent): Promise<void> {
     const subscribers = this.sessionSubscriptions.get(sessionId);
-    
+
     if (!subscribers || subscribers.size === 0) {
       if (this.config.enableLogging) {
         console.log(`[EventPublisher] No subscribers for session ${sessionId}`);
@@ -86,10 +82,7 @@ export class BaseEventPublisher implements IEventPublisher {
           // Update last activity
           subscription.lastActivity = new Date();
         } catch (error) {
-          console.error(
-            `[EventPublisher] Error in subscription ${subscriptionId}:`,
-            error
-          );
+          console.error(`[EventPublisher] Error in subscription ${subscriptionId}:`, error);
           // Remove failed subscription
           this.removeSubscription(subscriptionId);
         }
@@ -110,7 +103,7 @@ export class BaseEventPublisher implements IEventPublisher {
     }
 
     const subscriptionId = this.generateSubscriptionId();
-    
+
     const subscription: Subscription = {
       id: subscriptionId,
       sessionId,
@@ -128,9 +121,7 @@ export class BaseEventPublisher implements IEventPublisher {
     this.sessionSubscriptions.get(sessionId)!.add(subscriptionId);
 
     if (this.config.enableLogging) {
-      console.log(
-        `[EventPublisher] Added subscription ${subscriptionId} for session ${sessionId}`
-      );
+      console.log(`[EventPublisher] Added subscription ${subscriptionId} for session ${sessionId}`);
     }
 
     return subscriptionId;
@@ -183,7 +174,7 @@ export class BaseEventPublisher implements IEventPublisher {
     }
 
     return Array.from(subscriptionIds)
-      .map(id => this.subscriptions.get(id))
+      .map((id) => this.subscriptions.get(id))
       .filter((sub): sub is Subscription => sub !== undefined);
   }
 
@@ -197,13 +188,12 @@ export class BaseEventPublisher implements IEventPublisher {
     oldestSubscription?: Date;
   } {
     const subscriptions = Array.from(this.subscriptions.values());
-    
+
     return {
       totalSubscriptions: subscriptions.length,
       activeSessions: this.sessionSubscriptions.size,
-      oldestSubscription: subscriptions.length > 0 
-        ? new Date(Math.min(...subscriptions.map(s => s.createdAt.getTime())))
-        : undefined,
+      oldestSubscription:
+        subscriptions.length > 0 ? new Date(Math.min(...subscriptions.map((s) => s.createdAt.getTime()))) : undefined,
     };
   }
 
@@ -223,7 +213,7 @@ export class BaseEventPublisher implements IEventPublisher {
     const sessionSubscriptions = this.sessionSubscriptions.get(subscription.sessionId);
     if (sessionSubscriptions) {
       sessionSubscriptions.delete(subscriptionId);
-      
+
       // Clean up empty session subscription sets
       if (sessionSubscriptions.size === 0) {
         this.sessionSubscriptions.delete(subscription.sessionId);
@@ -247,11 +237,14 @@ export class BaseEventPublisher implements IEventPublisher {
    */
   private startCleanup(): void {
     // Run cleanup every hour
-    this.cleanupInterval = setInterval(() => {
-      this.cleanup().catch(error => {
-        console.error('[EventPublisher] Cleanup error:', error);
-      });
-    }, 60 * 60 * 1000);
+    this.cleanupInterval = setInterval(
+      () => {
+        this.cleanup().catch((error) => {
+          console.error('[EventPublisher] Cleanup error:', error);
+        });
+      },
+      60 * 60 * 1000
+    );
   }
 
   /**

@@ -1,0 +1,12 @@
+# Bun configuration for container app
+
+[install]
+# Ensure lockfile is created
+lockfile = true
+
+[install.scopes]
+# Scope configuration if needed
+
+[test]
+# Test configuration
+root = "./" 
