@@ -67,7 +67,7 @@ export function validateModelConfig(modelIdOrProvider: string): {
   // Ollama has different requirements than cloud providers
   if (provider === 'ollama') {
     const baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-    
+
     // Use specific model from ID if provided, otherwise fall back to env var
     const modelName = specificModel || process.env.OLLAMA_MODEL || 'llama3';
 
@@ -92,13 +92,13 @@ export function validateModelConfig(modelIdOrProvider: string): {
   } else {
     const modelEnvVar = `${provider.toUpperCase()}_MODEL`;
     const envModelName = process.env[modelEnvVar];
-    
+
     if (!envModelName) {
       throw new Error(
         `Missing ${modelEnvVar} environment variable. ` + `Please specify the model name for ${provider}.`
       );
     }
-    
+
     modelName = envModelName;
   }
 

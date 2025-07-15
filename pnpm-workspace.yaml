@@ -1,4 +1,5 @@
 packages:
-  - "packages/stagehand"
-  - "packages/demos/*"
-  - "packages/infra/*"
+  - 'packages/stagehand'
+  - 'packages/demos/*'
+  - 'packages/infra/*'
+  - 'packages/deploy/*'

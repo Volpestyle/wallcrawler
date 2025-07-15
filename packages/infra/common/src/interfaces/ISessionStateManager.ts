@@ -140,16 +140,16 @@ export interface ISessionStateManager {
 export interface SessionStateManagerConfig extends SessionConfig {
   /** Storage backend identifier */
   backend: string;
-  
+
   /** Connection string or configuration for the backend */
   connectionConfig: Record<string, unknown>;
-  
+
   /** Prefix for storage keys */
   keyPrefix?: string;
-  
+
   /** Enable automatic cleanup */
   autoCleanup?: boolean;
-  
+
   /** Heartbeat timeout in seconds (sessions without heartbeat are considered stale) */
   heartbeatTimeout?: number;
 }

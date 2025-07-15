@@ -1,39 +1,45 @@
 {
   "name": "@wallcrawler/infra-aws",
-  "version": "1.0.0",
-  "description": "AWS browser provider for Wallcrawler/Stagehand",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "version": "0.1.0",
+  "description": "AWS infrastructure provider for WallCrawler browser automation",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*"
+  ],
   "scripts": {
     "build": "tsc",
-    "prepare": "npm run build"
+    "watch": "tsc -w",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts"
   },
-  "files": [
-    "dist/**"
-  ],
-  "keywords": [
-    "stagehand",
-    "browser",
-    "automation",
-    "aws",
-    "ecs",
-    "s3"
-  ],
-  "author": "Wallcrawler",
-  "license": "MIT",
   "dependencies": {
-    "@wallcrawler/stagehand": "workspace:*",
     "@wallcrawler/infra-common": "workspace:*",
+    "@wallcrawler/stagehand": "workspace:*",
     "@aws-sdk/client-ecs": "^3.0.0",
+    "@aws-sdk/client-elasticache": "^3.0.0",
     "@aws-sdk/client-s3": "^3.0.0",
-    "playwright": "^1.52.0",
-    "redis": "^5.5.6"
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.0.0",
+    "@aws-sdk/client-application-auto-scaling": "^3.0.0",
+    "@aws-sdk/client-cloudwatch": "^3.0.0",
+    "redis": "^4.6.0"
   },
   "devDependencies": {
-    "typescript": "^5.2.2"
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.8.0"
   },
-  "peerDependencies": {
-    "@wallcrawler/stagehand": "^2.3.0"
-  }
+  "keywords": [
+    "aws",
+    "ecs",
+    "browser",
+    "automation",
+    "wallcrawler",
+    "infrastructure"
+  ],
+  "author": "WallCrawler Team",
+  "license": "MIT"
 }

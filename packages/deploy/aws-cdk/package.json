@@ -12,7 +12,8 @@
     "watch": "tsc -w",
     "clean": "rm -rf dist",
     "cdk": "cdk",
-    "deploy": "cdk deploy",
+    "deploy": "./deploy.sh",
+    "deploy:cdk-only": "cdk deploy",
     "destroy": "cdk destroy",
     "diff": "cdk diff",
     "synth": "cdk synth",
@@ -21,18 +22,26 @@
     "bootstrap": "cdk bootstrap"
   },
   "dependencies": {
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.844.0",
+    "@aws-sdk/client-secrets-manager": "^3.844.0",
+    "@aws-sdk/client-ssm": "^3.844.0",
     "aws-cdk-lib": "^2.170.0",
+    "cdk-nag": "^2.28.0",
     "constructs": "^10.0.0"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.150",
+    "@types/aws-sdk": "^2.7.4",
     "@types/jest": "^29.5.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.1",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "aws-cdk": "^2.170.0",
     "eslint": "^9.0.0",
     "jest": "^29.5.0",
     "ts-jest": "^29.1.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.8.0"
   },
   "keywords": [
@@ -40,8 +49,6 @@
     "cdk",
     "infrastructure",
     "wallcrawler",
-    "redis",
-    "elasticache",
     "ecs",
     "automation"
   ],

@@ -20,13 +20,15 @@ pnpm scrape-models
 ```
 
 This script will:
+
 1. **Visit OpenAI pricing page** - Extract model names and pricing from https://platform.openai.com/docs/pricing
-2. **Visit Anthropic docs** - Get model names from https://docs.anthropic.com/en/docs/about-claude/models/overview and pricing from https://www.anthropic.com/pricing  
+2. **Visit Anthropic docs** - Get model names from https://docs.anthropic.com/en/docs/about-claude/models/overview and pricing from https://www.anthropic.com/pricing
 3. **Visit Gemini docs** - Extract model information from https://ai.google.dev/gemini-api/docs/models
 4. **Add Ollama models** - Include common local models like Llama, Qwen, Mistral, etc.
 5. **Save to JSON** - Write all data to `../nextjs-local/public/models-data.json` for the demo to use
 
 The scraping uses Stagehand's `extract()` method with structured schemas to ensure we get:
+
 - **Exact API model names** (like `claude-3-5-sonnet-20241022`, `gemini-2.5-flash-preview-04-17`)
 - **Current pricing** (input/output costs per 1M tokens)
 - **Display names** and metadata
@@ -48,7 +50,7 @@ The generated `public/models-data.json` contains:
       "id": "openai/gpt-4o",
       "name": "gpt-4o",
       "displayName": "GPT-4o",
-      "provider": "openai", 
+      "provider": "openai",
       "pricing": { "input": 5, "output": 15 },
       "type": "cloud"
     }
@@ -65,7 +67,7 @@ The generated `public/models-data.json` contains:
 ## Why This Approach?
 
 - **Accuracy**: Gets real model names directly from provider docs, not approximations
-- **Currency**: Always has latest pricing and model availability 
+- **Currency**: Always has latest pricing and model availability
 - **Reliability**: No web scraping brittleness - uses AI extraction with schemas
 - **Auditability**: Can see exactly what sources were used and when
 - **Performance**: Static JSON file loads instantly vs. real-time scraping

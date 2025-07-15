@@ -1,11 +1,13 @@
 # Wallcrawler Logging Configuration
 
 ## Overview
+
 Wallcrawler now supports saving application logs to files for easier debugging and analysis.
 
 ## Configuration
 
 ### Enable File Logging
+
 Set the following environment variable in your `.env.local` file:
 
 ```bash
@@ -13,6 +15,7 @@ WALLCRAWLER_LOG_TO_FILE=true
 ```
 
 ### Disable File Logging
+
 Remove the variable or set it to `false`:
 
 ```bash
@@ -32,14 +35,18 @@ logs/
 ## Log File Structure
 
 ### General Log (`wallcrawler.log`)
+
 Contains all application logs with timestamps:
+
 ```
 2025-06-28T21:26:00.000Z [DEBUG] API Request - Type: navigate, SessionId: abc123, HasConfig: true
 2025-06-28T21:26:01.000Z [abc123] [DEBUG] Navigating to: https://amazon.com
 ```
 
 ### Session-Specific Logs (`session-{sessionId}.log`)
+
 Contains only logs for a specific workflow session:
+
 ```
 2025-06-28T21:26:01.000Z [abc123] [DEBUG] Navigating to: https://amazon.com
 2025-06-28T21:26:05.000Z [abc123] [DEBUG] Navigation complete, new URL: https://www.amazon.com/

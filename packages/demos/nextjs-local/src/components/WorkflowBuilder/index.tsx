@@ -74,7 +74,7 @@ export default function WorkflowBuilder() {
           if (pricingData.available === true) {
             // Extract only the provider pricing data (for backward compatibility)
             const providerPricing: Record<string, ProviderPricing> = {};
-            
+
             // Only include known provider pricing fields
             if (pricingData.openai) {
               providerPricing.openai = pricingData.openai;
@@ -85,7 +85,7 @@ export default function WorkflowBuilder() {
             if (pricingData.gemini) {
               providerPricing.gemini = pricingData.gemini;
             }
-            
+
             setModelPricing(providerPricing);
           } else {
             setModelPricing({});

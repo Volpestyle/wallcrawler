@@ -6,6 +6,8 @@
 export interface AutomationTaskConfig {
   /** Session ID that this task belongs to */
   sessionId: string;
+  /** User ID that this session/task belongs to */
+  userId: string;
   /** Environment name (dev, staging, production) */
   environment: string;
   /** AWS region or deployment region */
@@ -21,6 +23,8 @@ export interface TaskInfo {
   taskId: string;
   /** Task ARN or full identifier */
   taskArn: string;
+  /** User ID that this task serves (required) */
+  userId: string;
   /** Current task status */
   status: string;
   /** Task creation timestamp */
@@ -70,17 +74,12 @@ export interface HealthStatus {
 /**
  * Task status enum for automation tasks
  */
-export type TaskStatus = 
-  | "starting" 
-  | "running" 
-  | "stopping" 
-  | "stopped" 
-  | "failed";
+export type TaskStatus = 'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
 
 /**
  * Container endpoint methods
  */
-export type ContainerMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
+export type ContainerMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 
 /**
  * Container endpoint configuration

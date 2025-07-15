@@ -1,221 +1,93 @@
-# WallCrawler AWS CDK Infrastructure
+# WallCrawler AWS CDK
 
-This package contains AWS CDK constructs and stacks for deploying WallCrawler infrastructure optimized for browser automation workloads.
-
-## Architecture
-
-The infrastructure includes:
-
-- **VPC**: Multi-AZ VPC with public, private, and isolated subnets
-- **Redis ElastiCache**: High-performance Redis cluster for session state management
-- **ECS Fargate**: Container orchestration for browser automation tasks
-- **Application Load Balancer**: Internal load balancer for ECS services
-- **Security Groups**: Least-privilege security configuration
-- **VPC Endpoints**: Cost-optimized AWS service access
+This package contains the AWS CDK code for deploying the WallCrawler infrastructure.
 
 ## Quick Start
 
-### Prerequisites
+1. Install dependencies:
 
-1. AWS CLI configured with appropriate permissions
-2. Node.js 18+ and pnpm installed
-3. AWS CDK CLI installed: `npm install -g aws-cdk`
+   ```bash
+   pnpm install
+   ```
 
-### Installation
+2. Build:
 
-```bash
-cd packages/deploy/aws-cdk
-pnpm install
-```
+   ```bash
+   pnpm build
+   ```
 
-### Bootstrap CDK (first time only)
+3. Deploy:
+   ```bash
+   ./deploy.sh
+   ```
 
-```bash
-pnpm run bootstrap
-```
+For detailed architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-### Deploy
-
-```bash
-# Development environment
-pnpm run deploy
-
-# Production environment
-pnpm run deploy -- -c environment=prod -c projectName=wallcrawler-prod
-```
-
-### Useful Commands
-
-```bash
-pnpm run build        # Compile TypeScript
-pnpm run synth        # Generate CloudFormation template
-pnpm run diff         # Show differences with deployed stack
-pnpm run destroy      # Destroy the stack
-pnpm run lint         # Run ESLint
-pnpm run test         # Run tests
-```
-
-## Configuration
-
-### Environment Variables
+## Environment Variables
 
 - `CDK_DEFAULT_ACCOUNT`: AWS account ID
-- `CDK_DEFAULT_REGION`: AWS region (default: us-east-1)
+- `CDK_DEFAULT_REGION`: AWS region
 
-### Context Variables
+## Context Parameters
 
-You can customize deployment using CDK context:
+Use with `cdk deploy --context key=value`:
 
-```bash
-cdk deploy -c environment=prod -c projectName=my-project -c vpcCidr=10.1.0.0/16
-```
+- `environment`: dev/prod
+- `projectName`: wallcrawler
+- `allowedApiKeys`: comma-separated keys
+- `maxSessionsPerContainer`: default 20
 
-Available context variables:
-- `environment`: Deployment environment (dev, staging, prod)
-- `projectName`: Project name for resource naming
-- `vpcCidr`: VPC CIDR block
-- `maxAzs`: Maximum number of Availability Zones
-- `redisNodeType`: Redis node instance type
-- `redisReplicas`: Number of Redis replica nodes
-- `ecsTaskCpu`: ECS task CPU units
-- `ecsTaskMemory`: ECS task memory (MB)
+## Outputs
 
-## Infrastructure Components
+After deployment:
 
-### Networking Stack
-
-Creates a VPC with:
-- Public subnets for load balancers
-- Private subnets for ECS tasks
-- Isolated subnets for databases
-- NAT gateways for internet access
-- VPC endpoints for AWS services (production)
-
-### Redis Cluster
-
-Deploys ElastiCache Redis with:
-- Multi-AZ deployment (production)
-- Encryption at rest and in transit
-- Automated backups
-- CloudWatch logging
-- Optimized parameter group for session storage
-
-### ECS Cluster
-
-Provisions Fargate cluster with:
-- Browser automation task definition
-- Application Load Balancer
-- Auto-scaling capabilities
-- CloudWatch logging
-- Health checks and monitoring
+- APIUrl: Session management endpoint
+- WebSocketUrl: Browser connection URL
+- ECRRepositoryUri: For pushing container images
 
 ## Security
 
-The infrastructure follows AWS security best practices:
+- **WAF Protection**: AWS WAF protects the ALB from common attacks
+- **VPC Isolation**: All resources run in private subnets
+- **Secrets Management**: Sensitive data stored in AWS Secrets Manager
+- **JWE Token Encryption**: Session tokens are encrypted using JSON Web Encryption (JWE)
+  - Symmetric encryption with A256GCM algorithm
+  - Encryption key derived from shared secret using SHA-256
+  - Provides both confidentiality and integrity
+  - No KMS asymmetric keys required - simpler and more cost-effective
 
-- **Network Security**: Resources deployed in private/isolated subnets
-- **Encryption**: All data encrypted at rest and in transit
-- **IAM**: Least-privilege roles and policies
-- **Security Groups**: Minimal required access
-- **VPC Flow Logs**: Network traffic monitoring
+## Technology Stack
 
-## Monitoring
+- **Runtime**: Bun 1.0.20+ for high-performance JavaScript/TypeScript execution
+- **Container Orchestration**: AWS ECS Fargate
+- **Browser Automation**: Playwright with Chromium
+- **Token Security**: jose library for JWE symmetric encryption
+- **Infrastructure**: AWS CDK v2 for infrastructure as code
 
-Built-in monitoring includes:
+## Development
 
-- **CloudWatch Logs**: Centralized logging for all services
-- **Container Insights**: ECS performance monitoring (production)
-- **VPC Flow Logs**: Network traffic analysis
-- **ElastiCache Metrics**: Redis performance monitoring
+### Prerequisites
 
-## Cost Optimization
+- Bun 1.0.20 or higher
+- AWS CDK CLI
+- AWS credentials configured
 
-- **VPC Endpoints**: Reduces NAT gateway costs in production
-- **Spot Instances**: Can be enabled for non-critical workloads
-- **Auto Scaling**: Scales resources based on demand
-- **Environment-specific Sizing**: Smaller instances for dev/test
-
-## Deployment Environments
-
-### Development
-- Single AZ deployment
-- Minimal instance sizes
-- Reduced backup retention
-- No Multi-AZ Redis
-
-### Production
-- Multi-AZ deployment
-- Larger instance sizes
-- Extended backup retention
-- Multi-AZ Redis with replicas
-- VPC endpoints for cost optimization
-
-## Customization
-
-### Adding Custom Constructs
-
-```typescript
-import { WallCrawlerInfraStack } from '@wallcrawler/aws-cdk';
-
-const stack = new WallCrawlerInfraStack(app, 'MyStack', {
-  environment: 'prod',
-  projectName: 'my-project',
-});
-
-// Access individual components
-const redis = stack.redisCluster;
-const ecs = stack.ecsCluster;
-const networking = stack.networking;
-```
-
-### Environment-specific Configuration
-
-Create environment-specific configuration files:
-
-```typescript
-// config/dev.ts
-export const devConfig = {
-  vpcCidr: '10.0.0.0/16',
-  maxAzs: 2,
-  redisNodeType: 'cache.t3.micro',
-  redisReplicas: 0,
-  ecsTaskCpu: 512,
-  ecsTaskMemory: 1024,
-};
-
-// config/prod.ts
-export const prodConfig = {
-  vpcCidr: '10.1.0.0/16',
-  maxAzs: 3,
-  redisNodeType: 'cache.r7g.large',
-  redisReplicas: 2,
-  ecsTaskCpu: 1024,
-  ecsTaskMemory: 2048,
-};
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Bootstrap Required**: Run `pnpm run bootstrap` if you see bootstrap errors
-2. **Permissions**: Ensure your AWS credentials have sufficient permissions
-3. **Region**: Verify your AWS region supports all required services
-4. **Quotas**: Check AWS service limits for your account
-
-### Debug Mode
-
-Enable debug logging:
+### Local Development
 
 ```bash
-export CDK_DEBUG=true
-pnpm run deploy
+# Install dependencies
+bun install
+
+# Run CDK commands
+bun run cdk synth
+bun run cdk diff
+bun run cdk deploy
 ```
 
-## Contributing
+### Service Dependencies
 
-1. Make changes to constructs or stacks
-2. Run `pnpm run build` to compile
-3. Run `pnpm run test` to validate
-4. Run `pnpm run synth` to generate CloudFormation
-5. Test in a development environment before production
+Each service (proxy, container app, lambda) has its own package.json with specific dependencies:
+
+- **Proxy Service**: Uses Bun runtime with jose for JWE token verification
+- **Container App**: Playwright-based with Bun runtime
+- **Lambda Functions**: Node.js runtime with shared dependencies layer
