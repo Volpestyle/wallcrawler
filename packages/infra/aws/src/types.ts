@@ -11,23 +11,26 @@ export interface AwsProviderConfig extends BrowserAutomationConfig {
   /** AWS region */
   region: string;
 
-  /** ECS cluster name */
-  ecsClusterName: string;
+  /** WallCrawler API key for authentication */
+  apiKey?: string;
 
-  /** ECS task definition name */
-  ecsTaskDefinition: string;
+  /** ECS cluster name (required unless loadFromSsm is true) */
+  ecsClusterName?: string;
+
+  /** ECS task definition name (required unless loadFromSsm is true) */
+  ecsTaskDefinition?: string;
 
   /** ECS service name */
   ecsServiceName?: string;
 
-  /** VPC subnet IDs for task deployment */
-  subnetIds: string[];
+  /** VPC subnet IDs for task deployment (required unless loadFromSsm is true) */
+  subnetIds?: string[];
 
-  /** Security group IDs for tasks */
-  securityGroupIds: string[];
+  /** Security group IDs for tasks (required unless loadFromSsm is true) */
+  securityGroupIds?: string[];
 
-  /** Redis configuration */
-  redis: {
+  /** Redis configuration (required unless loadFromSsm is true) */
+  redis?: {
     /** Redis cluster endpoint */
     endpoint: string;
     /** Redis port */
@@ -108,6 +111,13 @@ export interface AwsProviderConfig extends BrowserAutomationConfig {
     /** Enable automatic cleanup */
     autoCleanup?: boolean;
   };
+
+  /** SSM-based configuration loading */
+  loadFromSsm?: boolean;
+  /** Project name for SSM parameter path (defaults to 'wallcrawler') */
+  projectName?: string;
+  /** Environment for SSM parameter path (defaults to 'dev') */
+  environment?: string;
 }
 
 /**

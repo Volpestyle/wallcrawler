@@ -203,6 +203,35 @@ export class CoreInfrastructureStack extends cdk.Stack {
 
     this.redisEndpoint = redisCluster.attrRedisEndpointAddress;
 
+    // Store infrastructure configuration in SSM for programmatic access
+    this.configConstruct.createInfrastructureParameter(
+      'RedisEndpointParam',
+      `/${props.projectName}/${props.environment}/redis-endpoint`,
+      this.redisEndpoint,
+      'ElastiCache Redis endpoint for session state'
+    );
+
+    this.configConstruct.createInfrastructureParameter(
+      'S3BucketParam',
+      `/${props.projectName}/${props.environment}/s3-bucket-name`,
+      this.s3Bucket.bucketName,
+      'S3 bucket name for browser artifacts'
+    );
+
+    this.configConstruct.createInfrastructureParameter(
+      'VpcPrivateSubnetsParam',
+      `/${props.projectName}/${props.environment}/vpc-private-subnet-ids`,
+      JSON.stringify(this.vpc.privateSubnets.map(s => s.subnetId)),
+      'VPC Private Subnet IDs for ECS tasks'
+    );
+
+    this.configConstruct.createInfrastructureParameter(
+      'ContainerSecurityGroupParam',
+      `/${props.projectName}/${props.environment}/container-security-group-id`,
+      this.containerSecurityGroup.securityGroupId,
+      'Security Group ID for ECS containers'
+    );
+
     // Service Discovery Namespace
     this.namespace = new cdk.aws_servicediscovery.PrivateDnsNamespace(this, 'ServiceNamespace', {
       name: `${props.projectName}.local`,

@@ -2,11 +2,12 @@
   "name": "@wallcrawler/container-app",
   "version": "2.0.0",
   "description": "WallCrawler multi-session browser container",
-  "main": "src/index.ts",
+  "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun run --watch src/index.ts",
+    "build": "tsc",
+    "start": "node src/index.js",
+    "dev": "tsc && node --watch src/index.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,11 +19,11 @@
     "redis": "^4.6.12"
   },
   "devDependencies": {
+    "@types/node": "^20.10.0",
     "@types/ws": "^8.5.10",
-    "bun-types": "^1.0.20",
     "typescript": "^5.3.3"
   },
   "engines": {
-    "bun": ">=1.0.20"
+    "node": ">=18.0.0"
   }
 }

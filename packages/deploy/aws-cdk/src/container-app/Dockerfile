@@ -4,22 +4,17 @@
 FROM mcr.microsoft.com/playwright:v1.40.0-jammy
 
 # Playwright image already includes Chromium, Firefox, and WebKit
-# Just need to add Bun runtime
-
-# Install specific Bun version
-RUN curl -fsSL https://bun.sh/install | bash -s -- bun-v1.0.20
-ENV PATH="/root/.bun/bin:${PATH}"
+# Use Node.js (already included in Playwright image) for better compatibility
 
 # Create app directory
 WORKDIR /app
 
 # Copy package files
 COPY package.json ./
-COPY bunfig.toml ./
-COPY bun.lockb* ./
+COPY package-lock.json* ./
 
-# Install dependencies with Bun
-RUN bun install --production
+# Install dependencies with npm
+RUN npm install --production
 
 # Copy application source
 COPY src/ ./src/
@@ -38,5 +33,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Run as playwright user
 USER pwuser
 
-# Start with Bun
-CMD ["bun", "run", "src/index.ts"]
+# Start with Node.js
+CMD ["node", "src/index.js"]

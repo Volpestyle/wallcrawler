@@ -24,7 +24,7 @@ import {
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 
 import { TaskInfo } from '@wallcrawler/infra-common';
-import { AwsTaskConfig, EcsTaskInfo, EcsContainerInfo, EcsNetworkBinding } from '../types';
+import { AwsTaskConfig, EcsContainerInfo, EcsNetworkBinding } from '../types';
 
 export interface AwsTaskManagerConfig {
   region: string;
@@ -72,9 +72,9 @@ export class AwsTaskManager {
       const capacityProviderStrategy =
         config.useFargateSpot || this.config.costOptimization?.useFargateSpot
           ? [
-              { capacityProvider: 'FARGATE_SPOT', weight: 1, base: 0 },
-              { capacityProvider: 'FARGATE', weight: 0, base: 0 },
-            ]
+            { capacityProvider: 'FARGATE_SPOT', weight: 1, base: 0 },
+            { capacityProvider: 'FARGATE', weight: 0, base: 0 },
+          ]
           : [{ capacityProvider: 'FARGATE', weight: 1, base: 1 }];
 
       const command = new RunTaskCommand({
@@ -92,16 +92,16 @@ export class AwsTaskManager {
         overrides: {
           containerOverrides: config.containerOverrides
             ? [
-                {
-                  name: 'BrowserContainer', // Match container name from CDK
-                  environment: Object.entries(config.containerOverrides.environment || {}).map(([name, value]) => ({
-                    name,
-                    value,
-                  })),
-                  ...(config.containerOverrides.cpu && { cpu: config.containerOverrides.cpu }),
-                  ...(config.containerOverrides.memory && { memory: config.containerOverrides.memory }),
-                },
-              ]
+              {
+                name: 'BrowserContainer', // Match container name from CDK
+                environment: Object.entries(config.containerOverrides.environment || {}).map(([name, value]) => ({
+                  name,
+                  value,
+                })),
+                ...(config.containerOverrides.cpu && { cpu: config.containerOverrides.cpu }),
+                ...(config.containerOverrides.memory && { memory: config.containerOverrides.memory }),
+              },
+            ]
             : undefined,
         },
         tags: Object.entries({
@@ -132,6 +132,7 @@ export class AwsTaskManager {
       const taskInfo: TaskInfo = {
         taskId,
         taskArn: task.taskArn,
+        userId: config.userId,
         status: 'starting',
         lastStatus: task.lastStatus || 'UNKNOWN',
         createdAt: task.createdAt,
@@ -486,11 +487,11 @@ export class AwsTaskManager {
             Timestamp: new Date(),
             Dimensions: sessionId
               ? [
-                  {
-                    Name: 'SessionId',
-                    Value: sessionId,
-                  },
-                ]
+                {
+                  Name: 'SessionId',
+                  Value: sessionId,
+                },
+              ]
               : undefined,
           },
         ],

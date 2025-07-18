@@ -4,7 +4,6 @@
  */
 
 export { AwsProvider } from './AwsProvider';
-export { StagehandAwsProvider } from './StagehandAwsProvider';
 export { AwsSessionStateManager } from './AwsSessionStateManager';
 export { AwsTaskManager } from './utils/AwsTaskManager';
 export { S3ArtifactManager } from './utils/S3ArtifactManager';

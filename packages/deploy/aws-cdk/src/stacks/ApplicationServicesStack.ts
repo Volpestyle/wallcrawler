@@ -203,6 +203,21 @@ export class ApplicationServicesStack extends cdk.Stack {
 
     jweSecret.grantRead(proxyTaskDefinition.taskRole);
 
+    // Store ECS-specific configuration in SSM for programmatic access
+    configConstruct.createInfrastructureParameter(
+      'EcsClusterNameParam',
+      `/${props.projectName}/${props.environment}/ecs-cluster-name`,
+      ecsCluster.clusterName,
+      'ECS Cluster name for browser automation tasks'
+    );
+
+    configConstruct.createInfrastructureParameter(
+      'BrowserTaskDefinitionParam',
+      `/${props.projectName}/${props.environment}/ecs-browser-task-definition`,
+      browserTaskDefinition.taskDefinitionArn,
+      'ECS Task Definition ARN for browser containers'
+    );
+
     // Proxy Service
     const proxyService = new cdk.aws_ecs.FargateService(this, 'ProxyService', {
       cluster: ecsCluster,
@@ -257,10 +272,10 @@ export class ApplicationServicesStack extends cdk.Stack {
     // HTTPS Listener
     const httpsListener = props.certificateArn
       ? sharedLoadBalancer.addListener('HttpsListener', {
-          port: 443,
-          protocol: cdk.aws_elasticloadbalancingv2.ApplicationProtocol.HTTPS,
-          certificates: [cdk.aws_elasticloadbalancingv2.ListenerCertificate.fromArn(props.certificateArn)],
-        })
+        port: 443,
+        protocol: cdk.aws_elasticloadbalancingv2.ApplicationProtocol.HTTPS,
+        certificates: [cdk.aws_elasticloadbalancingv2.ListenerCertificate.fromArn(props.certificateArn)],
+      })
       : null;
 
     // HTTP Listener (always created)

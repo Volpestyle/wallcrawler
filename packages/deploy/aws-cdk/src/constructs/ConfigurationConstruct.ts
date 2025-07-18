@@ -89,4 +89,22 @@ export class ConfigurationConstruct extends Construct {
     // The actual parameter resolution happens at deploy time
     return true; // Default to true, actual value controlled by parameter
   }
+
+  /**
+   * Create an SSM parameter for infrastructure configuration
+   */
+  createInfrastructureParameter(
+    id: string,
+    parameterName: string,
+    value: string,
+    description: string,
+    type: cdk.aws_ssm.ParameterType = cdk.aws_ssm.ParameterType.STRING
+  ): cdk.aws_ssm.StringParameter {
+    return new cdk.aws_ssm.StringParameter(this, id, {
+      parameterName,
+      stringValue: value,
+      description,
+      type,
+    });
+  }
 }
