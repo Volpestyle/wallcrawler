@@ -203,14 +203,33 @@ class WallCrawlerProxy {
     const container = this.containers.get(client.containerId);
     if (!container) return;
 
-    // Forward message to container with session context
-    container.ws.send(
-      JSON.stringify({
-        type: 'CLIENT_MESSAGE',
-        sessionId,
-        data: JSON.parse(message.toString()),
-      })
-    );
+    try {
+      const parsedMessage = JSON.parse(message.toString());
+
+      // Handle screencast messages directly
+      if (parsedMessage.type === 'START_SCREENCAST' ||
+        parsedMessage.type === 'STOP_SCREENCAST' ||
+        parsedMessage.type === 'SEND_INPUT') {
+        // Forward screencast messages directly with session context
+        container.ws.send(
+          JSON.stringify({
+            ...parsedMessage,
+            sessionId
+          })
+        );
+      } else {
+        // Forward other messages as CLIENT_MESSAGE
+        container.ws.send(
+          JSON.stringify({
+            type: 'CLIENT_MESSAGE',
+            sessionId,
+            data: parsedMessage,
+          })
+        );
+      }
+    } catch (error) {
+      console.error('Error handling client message:', error);
+    }
   }
 
   private async handleClientClose(ws: Bun.ServerWebSocket) {
@@ -412,6 +431,32 @@ class WallCrawlerProxy {
           container.cpuUsage = message.cpuUsage;
           container.memoryUsage = message.memoryUsage;
           container.lastHealthCheck = Date.now();
+        }
+        break;
+      }
+
+      case 'SCREENCAST_FRAME': {
+        // Forward screencast frame to client
+        const sessionId = message.sessionId;
+        if (sessionId && this.clients.has(sessionId)) {
+          const clientWs = this.clients.get(sessionId)?.ws;
+          if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify(message));
+          }
+        }
+        break;
+      }
+
+      case 'SCREENCAST_STARTED':
+      case 'SCREENCAST_STOPPED':
+      case 'SCREENCAST_ERROR': {
+        // Forward screencast status messages to client
+        const sessionId = message.sessionId;
+        if (sessionId && this.clients.has(sessionId)) {
+          const clientWs = this.clients.get(sessionId)?.ws;
+          if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify(message));
+          }
         }
         break;
       }

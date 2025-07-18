@@ -23,6 +23,42 @@ This package contains the AWS CDK code for deploying the WallCrawler infrastruct
 
 For detailed architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## Architecture Flow
+
+The following sequence diagram illustrates how components interact during container registration, session creation, and browser connection:
+
+```mermaid
+sequenceDiagram
+    participant ECS as ECS Cluster
+    participant Container as Browser Container (multi-session.ts)
+    participant Proxy as Proxy Service (index.ts)
+    participant Lambda as Session Lambda (create-session.ts)
+    participant Client as Client (Stagehand/AwsProvider)
+    participant Redis as Redis
+
+    Note over ECS,Container: Container Startup
+    ECS->>Container: Launch Task
+    activate Container
+    Container->>Proxy: POST /internal/register (IP, Port, Token)
+    Proxy->>Container: Establish WebSocket (/internal/ws)
+    Proxy->>Redis: Update Container Health/Status
+
+    Note over Client,Lambda: createSession
+    Client->>Lambda: POST /sessions (API Key, Params)
+    Lambda->>Redis: Store Session Metadata (ID, Timeout)
+    Lambda->>Client: Return Session ID, Token, WS URL
+
+    Note over Client,Proxy: connectToBrowser
+    Client->>Proxy: WebSocket Connect (w/ Token, Session ID)
+    Proxy->>Container: Forward via WS (CREATE_SESSION)
+    Container->>Container: Launch Browser Context/Page
+    Container->>Proxy: SESSION_READY
+    Proxy->>Client: Proxy CDP Messages
+    Client-->>Container: Browser Automation (via Proxy WS)
+```
+
+This flow shows how registration enables dynamic routing for sessions and connections.
+
 ## Environment Variables
 
 - `CDK_DEFAULT_ACCOUNT`: AWS account ID
@@ -58,7 +94,7 @@ After deployment:
 
 ## Technology Stack
 
-- **Runtime**: Bun 1.0.20+ for high-performance JavaScript/TypeScript execution
+- **Runtime**: Node.js for container and Lambda execution (with optional Bun for specific components)
 - **Container Orchestration**: AWS ECS Fargate
 - **Browser Automation**: Playwright with Chromium
 - **Token Security**: jose library for JWE symmetric encryption
@@ -68,7 +104,7 @@ After deployment:
 
 ### Prerequisites
 
-- Bun 1.0.20 or higher
+- Node.js 18+ (for compatibility with Playwright)
 - AWS CDK CLI
 - AWS credentials configured
 
@@ -76,12 +112,12 @@ After deployment:
 
 ```bash
 # Install dependencies
-bun install
+npm install
 
 # Run CDK commands
-bun run cdk synth
-bun run cdk diff
-bun run cdk deploy
+npx cdk synth
+npx cdk diff
+npx cdk deploy
 ```
 
 ### Service Dependencies

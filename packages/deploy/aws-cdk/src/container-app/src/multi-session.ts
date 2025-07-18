@@ -4,10 +4,16 @@
  */
 
 import { chromium, Browser, BrowserContext, Page, CDPSession } from 'playwright-core';
-import { WebSocket } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createClient } from 'redis';
-import { createSandboxedContext, SessionSandbox } from './session-sandbox';
+import { createSandboxedContext, SessionSandbox } from './session-sandbox.js';
+import { ScreencastManager } from './screencast-manager.js';
+import type {
+  ScreencastOptions,
+  InputEvent
+} from '@wallcrawler/infra-common';
 
 // Environment configuration
 const PORT = parseInt(process.env.PORT || '8080');
@@ -36,13 +42,22 @@ interface SessionOptions {
   timezoneId?: string;
   storageState?: any;
   extraHTTPHeaders?: Record<string, string>;
-  recordVideo?: boolean;
+
+}
+
+interface ClientMessage {
+  id: number;
+  method?: string;
+  params?: object;
+  targetId?: string;
 }
 
 class MultiSessionContainer {
   private browser: Browser | null = null;
   private sessions = new Map<string, Session>();
-  private server: Bun.Server | null = null;
+  private screencastManager = new ScreencastManager();
+  private httpServer: ReturnType<typeof createServer> | null = null;
+  private wss: WebSocketServer | null = null;
   private proxyConnection: WebSocket | null = null;
   private redis!: ReturnType<typeof createClient>;
   private s3Client = new S3Client({});
@@ -72,14 +87,26 @@ class MultiSessionContainer {
     });
 
     // Start HTTP server for internal communication
-    this.server = Bun.serve({
-      port: PORT,
-      fetch: this.handleRequest.bind(this),
-      websocket: {
-        open: this.handleInternalOpen.bind(this),
-        message: this.handleInternalMessage.bind(this),
-        close: this.handleInternalClose.bind(this),
-      },
+    this.httpServer = createServer(this.handleRequest.bind(this));
+
+    // Create WebSocket server
+    this.wss = new WebSocketServer({
+      server: this.httpServer,
+      path: '/internal/ws'
+    });
+
+    // Handle WebSocket connections
+    this.wss.on('connection', (ws, req) => {
+      this.handleInternalOpen(ws, req);
+      ws.on('message', (message) => this.handleInternalMessage(ws, message.toString()));
+      ws.on('close', () => this.handleInternalClose(ws));
+    });
+
+    // Start listening
+    this.httpServer.listen(PORT, () => {
+      console.log(`🚀 Multi-Session Container started on port ${PORT}`);
+      console.log(`Container ID: ${CONTAINER_ID}`);
+      console.log(`Max Sessions: ${MAX_SESSIONS}`);
     });
 
     console.log(`🚀 Multi-Session Container started on port ${PORT}`);
@@ -97,43 +124,38 @@ class MultiSessionContainer {
     process.on('SIGINT', () => this.shutdown());
   }
 
-  private async handleRequest(req: Request): Promise<Response> {
-    const url = new URL(req.url);
+  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url || '', `http://${req.headers.host}`);
 
     if (url.pathname === '/health') {
-      return Response.json({
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
         status: 'healthy',
         sessions: this.sessions.size,
         maxSessions: MAX_SESSIONS,
         containerId: CONTAINER_ID,
-      });
-    }
-
-    // WebSocket upgrade for internal communication
-    if (url.pathname === '/internal/ws') {
-      const upgraded = this.server!.upgrade(req, { data: { internal: true } });
-      if (upgraded) {
-        return new Response(null, { status: 101 });
-      }
-      return new Response('WebSocket upgrade failed', { status: 400 });
-    }
-
-    return new Response('Not Found', { status: 404 });
-  }
-
-  private async handleInternalOpen(ws: Bun.ServerWebSocket) {
-    const data = ws.data as { internal: boolean } | undefined;
-    if (!data?.internal) {
-      ws.close(1008, 'Unauthorized');
+      }));
       return;
     }
 
+    // WebSocket upgrades are handled by the WebSocketServer
+    // No need to handle /internal/ws here
+
+    // Default: Not Found
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+
+  private async handleInternalOpen(ws: WebSocket, _req: IncomingMessage) {
+    // WebSocket connections to /internal/ws are authorized by path
+    // Additional validation can be added here if needed
+
     // This is the proxy connection
-    this.proxyConnection = ws as any;
+    this.proxyConnection = ws;
     console.log('Proxy connected');
   }
 
-  private async handleInternalMessage(ws: Bun.ServerWebSocket, message: string | Buffer) {
+  private async handleInternalMessage(ws: WebSocket, message: Buffer | string) {
     const data = JSON.parse(message.toString()) as {
       type: string;
       sessionId?: string;
@@ -154,10 +176,22 @@ class MultiSessionContainer {
       case 'CLIENT_MESSAGE':
         await this.handleClientMessage(data.sessionId!, data.data);
         break;
+
+      case 'START_SCREENCAST':
+        await this.handleStartScreencast(ws, data);
+        break;
+
+      case 'STOP_SCREENCAST':
+        await this.handleStopScreencast(data);
+        break;
+
+      case 'SEND_INPUT':
+        await this.handleInputEvent(data);
+        break;
     }
   }
 
-  private handleInternalClose(_ws: Bun.ServerWebSocket) {
+  private handleInternalClose(_ws: WebSocket) {
     console.log('Proxy disconnected');
     this.proxyConnection = null;
   }
@@ -228,12 +262,6 @@ class MultiSessionContainer {
           timezoneId: options.timezoneId,
           storageState: options.storageState,
           extraHTTPHeaders: options.extraHTTPHeaders,
-          recordVideo: options.recordVideo
-            ? {
-                dir: `/tmp/videos/${sessionId}`,
-                size: options.viewport || { width: 1920, height: 1080 },
-              }
-            : undefined,
         },
       });
 
@@ -292,9 +320,12 @@ class MultiSessionContainer {
     if (!session) return;
 
     try {
+      // Stop screencast if active
+      await this.screencastManager.stopScreencast(sessionId);
+
       // Close all CDP sessions
       for (const cdp of session.cdpSessions.values()) {
-        await cdp.detach().catch(() => {});
+        await cdp.detach().catch(() => { });
       }
 
       // Close context (closes all pages)
@@ -314,7 +345,7 @@ class MultiSessionContainer {
 
   private async handleClientMessage(
     sessionId: string,
-    message: { id: number; method?: string; params?: any; targetId?: string }
+    message: ClientMessage
   ) {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -350,7 +381,7 @@ class MultiSessionContainer {
         }
 
         // Execute CDP command
-        const result = await cdpSession.send(message.method as any, message.params || {});
+        const result = await cdpSession.send(message.method as string, message.params || {});
 
         // Special handling for screenshots
         if (message.method === 'Page.captureScreenshot' && result.data) {
@@ -380,6 +411,65 @@ class MultiSessionContainer {
           },
         },
       });
+    }
+  }
+
+  /**
+   * Handle start screencast message
+   */
+  private async handleStartScreencast(ws: WebSocket, data: any): Promise<void> {
+    try {
+      const { sessionId, params } = data as any;
+      const session = this.sessions.get(sessionId);
+
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+
+      // Get the main page for the session
+      const mainPage = session.pages.get('main');
+      if (!mainPage) {
+        throw new Error(`Main page not found for session ${sessionId}`);
+      }
+
+      await this.screencastManager.startScreencast(
+        sessionId,
+        mainPage,
+        ws,
+        params as ScreencastOptions
+      );
+
+    } catch (error) {
+      console.error('Error starting screencast:', error);
+      ws.send(JSON.stringify({
+        type: 'SCREENCAST_ERROR',
+        sessionId: (data as any).sessionId,
+        error: error.message
+      }));
+    }
+  }
+
+  /**
+   * Handle stop screencast message
+   */
+  private async handleStopScreencast(data: any): Promise<void> {
+    try {
+      const { sessionId } = data as any;
+      await this.screencastManager.stopScreencast(sessionId);
+    } catch (error) {
+      console.error('Error stopping screencast:', error);
+    }
+  }
+
+  /**
+   * Handle input event message
+   */
+  private async handleInputEvent(data: any): Promise<void> {
+    try {
+      const { sessionId, event } = data as any;
+      await this.screencastManager.handleInput(sessionId, event as InputEvent);
+    } catch (error) {
+      console.error('Error handling input event:', error);
     }
   }
 
@@ -470,6 +560,9 @@ class MultiSessionContainer {
     if (this.healthInterval) clearInterval(this.healthInterval);
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
 
+    // Stop all active screencasts
+    await this.screencastManager.stopAllScreencasts();
+
     // Close all sessions
     for (const sessionId of this.sessions.keys()) {
       await this.destroySession(sessionId);
@@ -486,7 +579,13 @@ class MultiSessionContainer {
     }
 
     await this.redis.quit();
-    this.server?.stop();
+
+    if (this.httpServer) {
+      this.httpServer.close();
+    }
+    if (this.wss) {
+      this.wss.close();
+    }
 
     process.exit(0);
   }
