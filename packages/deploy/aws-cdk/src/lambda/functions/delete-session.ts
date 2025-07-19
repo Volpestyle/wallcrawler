@@ -2,22 +2,23 @@ import { APIGatewayProxyHandler } from 'aws-lambda';
 import { ECSClient, StopTaskCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
 import { ElasticLoadBalancingV2Client, DeregisterTargetsCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { createClient } from 'redis';
+import { initRedisClient } from '../utils/redis-client';
 
 const ecsClient = new ECSClient({});
 const elbClient = new ElasticLoadBalancingV2Client({});
 const ssmClient = new SSMClient({});
 
-const REDIS_ENDPOINT = process.env.REDIS_ENDPOINT!;
 const CLUSTER_NAME = process.env.CLUSTER_NAME!;
 const ENVIRONMENT = process.env.ENVIRONMENT!;
 const PROJECT_NAME = process.env.PROJECT_NAME || 'wallcrawler';
 
-let redisClient: ReturnType<typeof createClient>;
 let targetGroupArn: string;
 
 export const handler: APIGatewayProxyHandler = async (event) => {
   try {
+    // Initialize Redis client
+    const client = await initRedisClient();
+
     const sessionId = event.pathParameters?.sessionId;
 
     if (!sessionId) {
@@ -27,19 +28,8 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       };
     }
 
-    // Connect to Redis if not connected
-    if (!redisClient) {
-      redisClient = createClient({
-        socket: {
-          host: REDIS_ENDPOINT,
-          port: 6379,
-        },
-      });
-      await redisClient.connect();
-    }
-
     // Get session data from Redis
-    const sessionData = await redisClient.get(`session:${sessionId}`);
+    const sessionData = await client.get(`session:${sessionId}`);
 
     if (!sessionData) {
       return {
@@ -67,11 +57,11 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     // Check for other sessions on the same task
     let shouldStopTask = true;
     if (taskArn) {
-      const allSessionKeys = await redisClient.keys('session:*');
+      const allSessionKeys = await client.keys('session:*');
       let activeSessionsOnTask = 0;
 
       for (const key of allSessionKeys) {
-        const otherSessionData = await redisClient.get(key);
+        const otherSessionData = await client.get(key);
         if (otherSessionData) {
           const otherSession = JSON.parse(otherSessionData);
           if (
@@ -142,7 +132,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     session.status = 'terminated';
     session.terminatedAt = new Date().toISOString();
 
-    await redisClient.setEx(
+    await client.setEx(
       `session:${sessionId}`,
       300, // Keep terminated session info for 5 minutes
       JSON.stringify(session)

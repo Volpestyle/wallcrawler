@@ -11,8 +11,6 @@ import {
   BrowserSessionStatus,
   ConnectionInfo,
   ConnectionType,
-  AutomationEvent,
-  EventCallback,
 } from '@wallcrawler/infra-common';
 
 import { AwsSessionStateConfig } from './types';
@@ -24,8 +22,6 @@ interface RedisKeys {
   activeSessions: () => string;
   connections: (sessionId: string) => string;
   connectionInfo: (connectionId: string) => string;
-  events: (sessionId: string) => string;
-  subscriptions: () => string;
 }
 
 /**
@@ -36,7 +32,6 @@ export class AwsSessionStateManager implements ISessionStateManager {
   private readonly config: AwsSessionStateConfig;
   private readonly keys: RedisKeys;
   private cleanupInterval: NodeJS.Timeout | null = null;
-  private subscriptions: Map<string, { sessionId: string; callback: EventCallback }> = new Map();
 
   constructor(config: AwsSessionStateConfig) {
     this.config = config;
@@ -50,8 +45,6 @@ export class AwsSessionStateManager implements ISessionStateManager {
       activeSessions: () => `${prefix}active`,
       connections: (sessionId: string) => `${prefix}connections:${sessionId}`,
       connectionInfo: (connectionId: string) => `${prefix}connection:${connectionId}`,
-      events: (sessionId: string) => `${prefix}events:${sessionId}`,
-      subscriptions: () => `${prefix}subscriptions`,
     };
 
     this.initializeRedis();
@@ -140,7 +133,7 @@ export class AwsSessionStateManager implements ISessionStateManager {
 
     try {
       const sessionData = await client.get(this.keys.session(sessionId));
-      if (!sessionData) {
+      if (!sessionData || typeof sessionData !== 'string') {
         return undefined;
       }
 
@@ -162,7 +155,7 @@ export class AwsSessionStateManager implements ISessionStateManager {
 
     try {
       const sessionId = await client.get(this.keys.sessionByTaskId(taskId));
-      if (!sessionId) {
+      if (!sessionId || typeof sessionId !== 'string') {
         return undefined;
       }
 
@@ -235,7 +228,7 @@ export class AwsSessionStateManager implements ISessionStateManager {
       const keys = await client.keys(this.keys.session('*'));
       const sessionPromises = keys.map(async (key) => {
         const data = await client.get(key);
-        if (data) {
+        if (data && typeof data === 'string') {
           const parsed = JSON.parse(data);
           return {
             ...parsed,
@@ -368,7 +361,7 @@ export class AwsSessionStateManager implements ISessionStateManager {
 
     try {
       const data = await client.get(this.keys.connectionInfo(connectionId));
-      if (!data) {
+      if (!data || typeof data !== 'string') {
         return undefined;
       }
 
@@ -382,54 +375,6 @@ export class AwsSessionStateManager implements ISessionStateManager {
       console.error('[AwsSessionStateManager] Failed to get connection info:', error);
       return undefined;
     }
-  }
-
-  // =============================================================================
-  // Event Management
-  // =============================================================================
-
-  async publishEvent(sessionId: string, event: AutomationEvent): Promise<void> {
-    const client = await this.ensureConnected();
-
-    try {
-      // Store event for potential replay/history
-      await client.lPush(this.keys.events(sessionId), JSON.stringify(event));
-      await client.expire(this.keys.events(sessionId), this.config.sessionTtl || 4 * 60 * 60);
-
-      // Limit event history to prevent memory issues
-      await client.lTrim(this.keys.events(sessionId), 0, 99); // Keep last 100 events
-
-      // Notify all subscribers
-      for (const [subscriptionId, subscription] of this.subscriptions) {
-        if (subscription.sessionId === sessionId) {
-          try {
-            subscription.callback(event);
-          } catch (error) {
-            console.error(`[AwsSessionStateManager] Error in event callback ${subscriptionId}:`, error);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[AwsSessionStateManager] Failed to publish event:', error);
-      throw error;
-    }
-  }
-
-  async subscribeToEvents(sessionId: string, callback: EventCallback): Promise<string> {
-    const subscriptionId = `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    this.subscriptions.set(subscriptionId, {
-      sessionId,
-      callback,
-    });
-
-    console.log(`[AwsSessionStateManager] Subscribed to events for session ${sessionId}: ${subscriptionId}`);
-    return subscriptionId;
-  }
-
-  async unsubscribeFromEvents(subscriptionId: string): Promise<void> {
-    this.subscriptions.delete(subscriptionId);
-    console.log(`[AwsSessionStateManager] Unsubscribed from events: ${subscriptionId}`);
   }
 
   // =============================================================================
@@ -571,7 +516,6 @@ export class AwsSessionStateManager implements ISessionStateManager {
 
     try {
       this.stopCleanupInterval();
-      this.subscriptions.clear();
 
       if (this.client) {
         await this.client.disconnect();

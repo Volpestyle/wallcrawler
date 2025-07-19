@@ -1,68 +1,33 @@
-import { createClient, RedisClientType } from 'redis';
+import { createClient } from 'redis';
 
-interface RedisConfig {
-  socket: {
-    host: string;
-    port: number;
-    reconnectStrategy?: (attempts: number) => Error | number;
-    tls?: boolean;
-  };
-}
+const REDIS_ENDPOINT = process.env.REDIS_ENDPOINT!;
 
-let redisClient: RedisClientType | null = null;
+type RedisClient = ReturnType<typeof createClient>;
+
+let redisClient: RedisClient | null = null;
 
 /**
- * Get or create a Redis client with TLS support
+ * Initialize Redis client with error handling and reconnection strategy
+ * Follows Context7 best practices for reliable Redis usage in Lambda
  */
-export async function getRedisClient(): Promise<RedisClientType> {
-  if (redisClient && redisClient.isReady) {
-    return redisClient;
-  }
-
-  const endpoint = process.env.REDIS_ENDPOINT!;
-  const isTlsEnabled = process.env.REDIS_TLS_ENABLED === 'true';
-  const environment = process.env.ENVIRONMENT || 'development';
-
-  const config: RedisConfig = {
-    socket: {
-      host: endpoint,
-      port: 6379,
-      reconnectStrategy: (attempts: number) => {
-        if (attempts > 10) {
-          return new Error('Redis connection failed after 10 attempts');
-        }
-        return Math.min(attempts * 100, 3000); // Exponential backoff with max 3s
+export async function initRedisClient(): Promise<RedisClient> {
+  if (!redisClient) {
+    redisClient = createClient({
+      socket: {
+        host: REDIS_ENDPOINT,
+        port: 6379,
+        reconnectStrategy: (retries: number): number => {
+          // Generate a random jitter between 0 – 200 ms
+          const jitter = Math.floor(Math.random() * 200);
+          // Delay is an exponential back off, (2^retries) * 50 ms, with a maximum value of 2000 ms
+          const delay = Math.min(Math.pow(2, retries) * 50, 2000);
+          return delay + jitter;
+        },
       },
-    },
-  };
+    })
+      .on('error', (err: Error) => console.error('Redis Client Error:', err));
 
-  // Configure TLS for production
-  if (isTlsEnabled && environment !== 'development') {
-    config.socket.tls = true;
-    // ElastiCache uses AWS-managed certificates, no custom CA needed
+    await redisClient.connect();
   }
-
-  redisClient = createClient(config);
-
-  // Error handling
-  redisClient.on('error', (err) => {
-    console.error('Redis Client Error:', err);
-  });
-
-  redisClient.on('connect', () => {
-    console.log(`Redis connected (TLS: ${isTlsEnabled})`);
-  });
-
-  await redisClient.connect();
   return redisClient;
-}
-
-/**
- * Safely disconnect Redis client
- */
-export async function disconnectRedis(): Promise<void> {
-  if (redisClient) {
-    await redisClient.quit();
-    redisClient = null;
-  }
 }

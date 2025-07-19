@@ -2,18 +2,16 @@ import { ScheduledEvent, Context } from 'aws-lambda';
 import { ECSClient, ListTasksCommand, StopTaskCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
 import { ElasticLoadBalancingV2Client, DeregisterTargetsCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
-import { createClient } from 'redis';
+import { initRedisClient } from '../utils/redis-client';
 
 const ecsClient = new ECSClient({});
 const elbClient = new ElasticLoadBalancingV2Client({});
 const ssmClient = new SSMClient({});
 
-const REDIS_ENDPOINT = process.env.REDIS_ENDPOINT!;
 const CLUSTER_NAME = process.env.CLUSTER_NAME!;
 const ENVIRONMENT = process.env.ENVIRONMENT!;
 const PROJECT_NAME = process.env.PROJECT_NAME || 'wallcrawler';
 
-let redisClient: ReturnType<typeof createClient>;
 let targetGroupArn: string;
 
 interface SessionData {
@@ -32,16 +30,8 @@ export const handler = async (event: ScheduledEvent, context: Context): Promise<
   console.log('Starting session cleanup...', { event, context });
 
   try {
-    // Connect to Redis
-    if (!redisClient) {
-      redisClient = createClient({
-        socket: {
-          host: REDIS_ENDPOINT,
-          port: 6379,
-        },
-      });
-      await redisClient.connect();
-    }
+    // Initialize Redis client
+    const client = await initRedisClient();
 
     // Get target group ARN
     if (!targetGroupArn) {
@@ -54,7 +44,7 @@ export const handler = async (event: ScheduledEvent, context: Context): Promise<
     }
 
     // Get all session keys
-    const sessionKeys = await redisClient.keys('session:*');
+    const sessionKeys = await client.keys('session:*');
     console.log(`Found ${sessionKeys.length} sessions to check`);
 
     const now = new Date();
@@ -66,7 +56,7 @@ export const handler = async (event: ScheduledEvent, context: Context): Promise<
 
     for (const key of sessionKeys) {
       try {
-        const sessionData = await redisClient.get(key);
+        const sessionData = await client.get(key);
         if (!sessionData) continue;
 
         const session: SessionData = JSON.parse(sessionData);
@@ -138,7 +128,7 @@ export const handler = async (event: ScheduledEvent, context: Context): Promise<
               cleanedAt: new Date().toISOString(),
             };
 
-            await redisClient.setEx(
+            await client.setEx(
               `session:${session.sessionId}`,
               300, // Keep for 5 minutes for debugging
               JSON.stringify(updatedSession)
@@ -205,6 +195,9 @@ async function deregisterTaskFromTargetGroup(taskArn: string): Promise<void> {
 
 async function cleanupOrphanedTasks(): Promise<void> {
   try {
+    // Get initialized Redis client
+    const client = await initRedisClient();
+
     // List all running tasks in the cluster
     const listResponse = await ecsClient.send(
       new ListTasksCommand({
@@ -239,7 +232,7 @@ async function cleanupOrphanedTasks(): Promise<void> {
       const sessionId = sessionTag.value;
 
       // Check if session exists in Redis
-      const sessionData = await redisClient.get(`session:${sessionId}`);
+      const sessionData = await client.get(`session:${sessionId}`);
 
       if (!sessionData) {
         console.log(`Found orphaned task ${task.taskArn} for non-existent session ${sessionId}`);

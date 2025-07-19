@@ -11,9 +11,8 @@ import { createClient } from 'redis';
 import { createSandboxedContext, SessionSandbox } from './session-sandbox.js';
 import { ScreencastManager } from './screencast-manager.js';
 import type {
-  ScreencastOptions,
   InputEvent
-} from '@wallcrawler/infra-common';
+} from '@wallcrawler/infra-common/src/types/screencast';
 
 // Environment configuration
 const PORT = parseInt(process.env.PORT || '8080');
@@ -47,7 +46,7 @@ interface SessionOptions {
 
 interface ClientMessage {
   id: number;
-  method?: string;
+  method?: Parameters<CDPSession['send']>[0];
   params?: object;
   targetId?: string;
 }
@@ -381,12 +380,15 @@ class MultiSessionContainer {
         }
 
         // Execute CDP command
-        const result = await cdpSession.send(message.method as string, message.params || {});
+        const result = await cdpSession.send(
+          message.method as Parameters<CDPSession['send']>[0],
+          (message.params ?? {}) as Parameters<CDPSession['send']>[1]
+        );
 
         // Special handling for screenshots
-        if (message.method === 'Page.captureScreenshot' && result.data) {
-          const screenshotUrl = await this.uploadScreenshot(sessionId, result.data);
-          result.screenshotUrl = screenshotUrl;
+        if (message.method === 'Page.captureScreenshot' && (result as any).data) {
+          const screenshotUrl = await this.uploadScreenshot(sessionId, (result as any).data);
+          (result as any).screenshotUrl = screenshotUrl;
         }
 
         // Send response
@@ -436,7 +438,7 @@ class MultiSessionContainer {
         sessionId,
         mainPage,
         ws,
-        params as ScreencastOptions
+        params
       );
 
     } catch (error) {
@@ -444,7 +446,7 @@ class MultiSessionContainer {
       ws.send(JSON.stringify({
         type: 'SCREENCAST_ERROR',
         sessionId: (data as any).sessionId,
-        error: error.message
+        error: error instanceof Error ? error.message : 'Unknown error'
       }));
     }
   }

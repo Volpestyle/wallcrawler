@@ -27,8 +27,6 @@ export interface BrowserSession {
   // Connection and access details
   /** Browser connection URL */
   browserUrl: string | null;
-  /** VNC URL for visual debugging */
-  vncUrl: string | null;
   /** Private IP address */
   privateIp: string | null;
   /** Public IP address */

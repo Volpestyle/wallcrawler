@@ -1,21 +1,21 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { JWETokenManager } from '../utils/jwe-utils';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import { createClient } from 'redis';
+import { initRedisClient } from '../utils/redis-client';
 
 const secretsClient = new SecretsManagerClient({});
 
-const REDIS_ENDPOINT = process.env.REDIS_ENDPOINT!;
 const ENVIRONMENT = process.env.ENVIRONMENT!;
 const JWE_SECRET_ARN = process.env.JWE_SECRET_ARN!;
-const API_KEYS_SECRET_ARN = process.env.API_KEYS_SECRET_ARN!;
 const ALB_DNS_NAME = process.env.ALB_DNS_NAME!;
 
 let jweTokenManager: JWETokenManager;
-let redisClient: ReturnType<typeof createClient>;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
+    // Initialize Redis client
+    const client = await initRedisClient();
+
     // Initialize JWE token manager if not already done
     if (!jweTokenManager) {
       const jweSecretResponse = await secretsClient.send(
@@ -28,24 +28,18 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       jweTokenManager = new JWETokenManager(jweSecret);
     }
 
-    // Validate API key
-    const apiKey = event.headers['x-api-key'];
+    // Get API key from request context (already validated by API Gateway)
+    const apiKey = event.requestContext.identity.apiKey;
     if (!apiKey) {
+      // This should not happen with API Gateway validation, but handle it gracefully
       return {
         statusCode: 401,
-        body: JSON.stringify({ error: 'API key required' }),
+        body: JSON.stringify({ error: 'API key missing from request context' }),
       };
     }
 
-    const apiKeysResponse = await secretsClient.send(new GetSecretValueCommand({ SecretId: API_KEYS_SECRET_ARN }));
-    const apiKeys = JSON.parse(apiKeysResponse.SecretString!).API_KEYS;
-
-    if (!apiKeys || !apiKeys.includes(apiKey)) {
-      return {
-        statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid API key' }),
-      };
-    }
+    // Derive user ID from API key (consistent with existing logic)
+    const userId = `user_${apiKey.substring(0, 8)}`;
 
     // Parse request body
     const body = JSON.parse(event.body || '{}') as { browserSettings?: Record<string, unknown>; timeout?: number };
@@ -53,18 +47,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // Generate session ID
     const sessionId = `ses_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-    const userId = `user_${apiKey.substring(0, 8)}`; // Derive user ID from API key
-
-    // Connect to Redis if not connected
-    if (!redisClient) {
-      redisClient = createClient({
-        socket: {
-          host: REDIS_ENDPOINT,
-          port: 6379,
-        },
-      });
-      await redisClient.connect();
-    }
 
     // Store session metadata
     const sessionData = {
@@ -76,7 +58,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       browserSettings,
     };
 
-    await redisClient.setEx(
+    await client.setEx(
       `session:${sessionId}`,
       timeout * 60, // TTL in seconds
       JSON.stringify(sessionData)

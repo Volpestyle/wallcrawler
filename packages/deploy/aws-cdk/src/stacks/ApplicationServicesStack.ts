@@ -45,7 +45,6 @@ export class ApplicationServicesStack extends cdk.Stack {
       namespace,
       securityConstruct: _securityConstruct,
       jweSecret,
-      apiKeysSecret,
     } = props.infrastructureStack;
 
     // ECS Cluster
@@ -91,7 +90,7 @@ export class ApplicationServicesStack extends cdk.Stack {
     });
 
     // Add container to browser task
-    const _browserContainer = browserTaskDefinition.addContainer('BrowserContainer', {
+    browserTaskDefinition.addContainer('BrowserContainer', {
       image: cdk.aws_ecs.ContainerImage.fromEcrRepository(ecrRepository, 'latest'),
       logging: cdk.aws_ecs.LogDrivers.awsLogs({
         streamPrefix: 'browser',
@@ -149,7 +148,7 @@ export class ApplicationServicesStack extends cdk.Stack {
     });
 
     // Add container to proxy task
-    const _proxyContainer = proxyTaskDefinition.addContainer('ProxyContainer', {
+    proxyTaskDefinition.addContainer('ProxyContainer', {
       image: cdk.aws_ecs.ContainerImage.fromEcrRepository(proxyEcrRepository, 'latest'),
       logging: cdk.aws_ecs.LogDrivers.awsLogs({
         streamPrefix: 'proxy',
@@ -306,7 +305,6 @@ export class ApplicationServicesStack extends cdk.Stack {
       BROWSER_TASK_DEFINITION_ARN: browserTaskDefinition.taskDefinitionArn,
       S3_BUCKET: s3Bucket.bucketName,
       JWE_SECRET_ARN: jweSecret.secretArn,
-      API_KEYS_SECRET_ARN: apiKeysSecret.secretArn,
     };
 
     const lambdaFunctions = [];
@@ -392,10 +390,9 @@ export class ApplicationServicesStack extends cdk.Stack {
     lambdaFunctions.push(cleanupSessionsLambda);
 
     // Grant permissions to Lambda functions
-    [createSessionLambda, getSessionLambda, deleteSessionLambda, listSessionsLambda, cleanupSessionsLambda].forEach(
+    lambdaFunctions.forEach(
       (fn) => {
         jweSecret.grantRead(fn);
-        apiKeysSecret.grantRead(fn);
       }
     );
 
@@ -423,15 +420,57 @@ export class ApplicationServicesStack extends cdk.Stack {
       },
     });
 
+    // Create API Keys for native API Gateway validation
+    const primaryApiKey = new cdk.aws_apigateway.ApiKey(this, 'PrimaryApiKey', {
+      apiKeyName: `${props.projectName}-primary-key-${props.environment}`,
+      description: 'Primary API key for WallCrawler session management',
+      enabled: true,
+    });
+
+    // Additional API key for backup/rotation
+    const secondaryApiKey = new cdk.aws_apigateway.ApiKey(this, 'SecondaryApiKey', {
+      apiKeyName: `${props.projectName}-secondary-key-${props.environment}`,
+      description: 'Secondary API key for WallCrawler session management',
+      enabled: true,
+    });
+
+    // Usage Plan with rate limiting and quotas
+    const usagePlan = new cdk.aws_apigateway.UsagePlan(this, 'ApiUsagePlan', {
+      name: `${props.projectName}-usage-plan-${props.environment}`,
+      description: 'Usage plan for WallCrawler API with rate limiting',
+      throttle: {
+        rateLimit: isDev ? 100 : 1000, // requests per second
+        burstLimit: isDev ? 200 : 2000, // burst capacity
+      },
+      quota: {
+        limit: isDev ? 10000 : 100000, // requests per period
+        period: cdk.aws_apigateway.Period.DAY,
+      },
+    });
+
+    // Associate API keys with usage plan
+    usagePlan.addApiKey(primaryApiKey);
+    usagePlan.addApiKey(secondaryApiKey);
+
+    // Associate usage plan with API stage
+    usagePlan.addApiStage({
+      stage: api.deploymentStage,
+    });
+
     // API Gateway resources
     const sessionsResource = api.root.addResource('sessions');
     const sessionResource = sessionsResource.addResource('{sessionId}');
 
-    // Wire up Lambda functions to API Gateway
-    sessionsResource.addMethod('POST', new cdk.aws_apigateway.LambdaIntegration(createSessionLambda));
-    sessionsResource.addMethod('GET', new cdk.aws_apigateway.LambdaIntegration(listSessionsLambda));
-    sessionResource.addMethod('GET', new cdk.aws_apigateway.LambdaIntegration(getSessionLambda));
-    sessionResource.addMethod('DELETE', new cdk.aws_apigateway.LambdaIntegration(deleteSessionLambda));
+    // Configure methods to require API key
+    const methodOptions: cdk.aws_apigateway.MethodOptions = {
+      apiKeyRequired: true,
+    };
+
+    // Wire up Lambda functions to API Gateway with API key requirement
+    sessionsResource.addMethod('POST', new cdk.aws_apigateway.LambdaIntegration(createSessionLambda), methodOptions);
+    sessionsResource.addMethod('GET', new cdk.aws_apigateway.LambdaIntegration(listSessionsLambda), methodOptions);
+    sessionResource.addMethod('GET', new cdk.aws_apigateway.LambdaIntegration(getSessionLambda), methodOptions);
+    sessionResource.addMethod('DELETE', new cdk.aws_apigateway.LambdaIntegration(deleteSessionLambda), methodOptions);
 
     // EventBridge rule for periodic cleanup
     new cdk.aws_events.Rule(this, 'CleanupSchedule', {
@@ -472,6 +511,22 @@ export class ApplicationServicesStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ProxyECRRepositoryUri', {
       value: proxyEcrRepository.repositoryUri,
       description: 'ECR repository URI for proxy container',
+    });
+
+    // API Key outputs for client usage
+    new cdk.CfnOutput(this, 'PrimaryApiKey', {
+      value: primaryApiKey.keyId,
+      description: 'Primary API key for WallCrawler session management',
+    });
+
+    new cdk.CfnOutput(this, 'SecondaryApiKey', {
+      value: secondaryApiKey.keyId,
+      description: 'Secondary API key for WallCrawler session management',
+    });
+
+    new cdk.CfnOutput(this, 'UsagePlanId', {
+      value: usagePlan.usagePlanId,
+      description: 'Usage plan ID for API rate limiting and quotas',
     });
   }
 }

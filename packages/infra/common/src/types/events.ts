@@ -1,6 +1,5 @@
 /**
  * Common event types for real-time browser automation communication
- * Generalized from career-agent implementation
  */
 
 import { TaskStatus } from './automation';
@@ -19,21 +18,6 @@ export interface BaseAutomationEvent {
 }
 
 /**
- * Event fired when items are processed/extracted
- */
-export interface ItemsProcessedEvent extends BaseAutomationEvent {
-  type: 'items_processed';
-  data: {
-    /** Items that were processed */
-    items: unknown[];
-    /** Total items processed so far */
-    totalItemsProcessed: number;
-    /** Additional processing metadata */
-    metadata?: Record<string, unknown>;
-  };
-}
-
-/**
  * Event fired when session is updated
  */
 export interface SessionUpdatedEvent extends BaseAutomationEvent {
@@ -41,17 +25,6 @@ export interface SessionUpdatedEvent extends BaseAutomationEvent {
   data: {
     /** Updated session data */
     session: BrowserSession;
-  };
-}
-
-/**
- * Event fired when automation configuration is updated
- */
-export interface ConfigUpdatedEvent extends BaseAutomationEvent {
-  type: 'config_updated';
-  data: {
-    /** Updated configuration */
-    config: Record<string, unknown>;
   };
 }
 
@@ -68,23 +41,6 @@ export interface AutomationStatusEvent extends BaseAutomationEvent {
     /** Task ARN if applicable */
     taskArn?: string;
     /** Additional status metadata */
-    metadata?: Record<string, unknown>;
-  };
-}
-
-/**
- * Event fired for VNC connection changes
- */
-export interface VncConnectionEvent extends BaseAutomationEvent {
-  type: 'vnc_connection';
-  data: {
-    /** Connection status */
-    status: 'connected' | 'disconnected' | 'error';
-    /** Connection identifier */
-    connectionId?: string;
-    /** VNC URL */
-    vncUrl?: string;
-    /** Additional connection metadata */
     metadata?: Record<string, unknown>;
   };
 }
@@ -131,11 +87,8 @@ export interface ProgressEvent extends BaseAutomationEvent {
  * Union type for all possible automation events
  */
 export type AutomationEvent =
-  | ItemsProcessedEvent
   | SessionUpdatedEvent
-  | ConfigUpdatedEvent
   | AutomationStatusEvent
-  | VncConnectionEvent
   | ErrorEvent
   | ProgressEvent;
 

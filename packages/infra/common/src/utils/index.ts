@@ -7,6 +7,3 @@ export * from './ContainerCommunicator';
 
 // Export task monitoring utilities
 export * from './TaskMonitor';
-
-// Export event publishing utilities
-export * from './EventPublisher';

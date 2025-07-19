@@ -21,13 +21,7 @@
   ],
   "author": "Wallcrawler",
   "license": "MIT",
-  "dependencies": {
-    "@wallcrawler/stagehand": "workspace:*"
-  },
   "devDependencies": {
-    "typescript": "^5.2.2"
-  },
-  "peerDependencies": {
-    "@wallcrawler/stagehand": "^2.3.0"
+    "typescript": "^5.8.3"
   }
 }
