@@ -3,11 +3,26 @@
  * Extends the base IBrowserProvider with automation-specific capabilities
  */
 
-import { IBrowserProvider } from '@wallcrawler/stagehand';
-
 import { AutomationTaskConfig, TaskInfo, ContainerResponse, HealthStatus, ContainerMethod } from '../types/automation';
-import { AutomationEvent } from '../types/events';
 import { ISessionStateManager } from './ISessionStateManager';
+
+/**
+ * Base browser provider interface (to avoid circular dependency with stagehand)
+ */
+export interface IBrowserProvider {
+  /** Provider type identifier */
+  readonly type: string;
+  /** Provider display name */
+  readonly name: string;
+  createSession(params?: any): Promise<any>;
+  resumeSession(sessionId: string): Promise<any>;
+  connectToBrowser(session: any): Promise<any>;
+  endSession(sessionId: string): Promise<void>;
+  saveArtifact(sessionId: string, path: string, data: Buffer): Promise<any>;
+  getArtifacts(sessionId: string, cursor?: string): Promise<any>;
+  downloadArtifact(sessionId: string, artifactId: string): Promise<Buffer>;
+  cleanup?(): Promise<void>;
+}
 
 /**
  * Enhanced browser provider interface with automation capabilities
@@ -39,21 +54,6 @@ export interface IBrowserAutomationProvider extends IBrowserProvider {
    */
   listActiveTasks(): Promise<TaskInfo[]>;
 
-  /**
-   * Find or create a container for a specific user
-   */
-  getOrCreateUserContainer(userId: string): Promise<TaskInfo>;
-
-  /**
-   * Find a container currently serving a specific user
-   */
-  findContainerByUserId(userId: string): Promise<TaskInfo | null>;
-
-  /**
-   * List all containers serving a specific user
-   */
-  listUserContainers(userId: string): Promise<TaskInfo[]>;
-
   // Container Communication
   /**
    * Get the HTTP endpoint for a running task
@@ -71,57 +71,17 @@ export interface IBrowserAutomationProvider extends IBrowserProvider {
     retries?: number
   ): Promise<ContainerResponse<T>>;
 
-  /**
-   * Start container automation with specific parameters
-   */
-  startContainerAutomation(
-    taskId: string,
-    sessionId: string,
-    params: Record<string, unknown>
-  ): Promise<ContainerResponse<{ message: string; sessionId?: string }>>;
-
-  /**
-   * Stop container automation
-   */
-  stopContainerAutomation(taskId: string): Promise<ContainerResponse<{ message: string }>>;
-
   // Health & Monitoring
   /**
    * Get container health status
    */
   getContainerHealth(taskId: string): Promise<ContainerResponse<HealthStatus>>;
 
-  /**
-   * Enable VNC streaming for visual debugging
-   */
-  enableVncStreaming(taskId: string): Promise<string>;
-
-  /**
-   * Get VNC connection information
-   */
-  getContainerVncInfo(taskId: string): Promise<ContainerResponse<{ vncUrl?: string; status: string }>>;
-
   // Session State Management
   /**
    * Get the session state manager for this provider
    */
   getSessionStateManager(): ISessionStateManager;
-
-  // Real-time Communication
-  /**
-   * Subscribe to real-time events for a session
-   */
-  subscribeToEvents(sessionId: string, callback: (event: AutomationEvent) => void): Promise<string>;
-
-  /**
-   * Unsubscribe from real-time events
-   */
-  unsubscribeFromEvents(subscriptionId: string): Promise<void>;
-
-  /**
-   * Publish an event to all subscribers of a session
-   */
-  publishEvent(sessionId: string, eventType: string, data: Record<string, unknown>): Promise<void>;
 }
 
 /**
@@ -145,19 +105,9 @@ export interface BrowserAutomationConfig {
   networking?: {
     /** Default container port */
     containerPort?: number;
-    /** VNC port */
-    vncPort?: number;
     /** Health check endpoint */
     healthCheckPath?: string;
     /** Request timeout in milliseconds */
     timeout?: number;
-  };
-
-  /** Real-time communication configuration */
-  realtime?: {
-    /** Enable real-time events */
-    enabled?: boolean;
-    /** Event retention time in seconds */
-    eventRetention?: number;
   };
 }

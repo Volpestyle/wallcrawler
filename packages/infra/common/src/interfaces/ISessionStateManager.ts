@@ -1,12 +1,4 @@
-/**
- * Session State Management Interface
- * Simplified interface that manages browser sessions as single entities
- * Replaces the dual RuntimeSession/AutomationTask pattern
- */
-
 import { BrowserSession, BrowserSessionStatus, SessionConfig, ConnectionInfo, ConnectionType } from '../types/session';
-
-import { AutomationEvent, EventCallback } from '../types/events';
 
 /**
  * Interface for managing browser automation sessions
@@ -88,22 +80,6 @@ export interface ISessionStateManager {
    * Get connection information
    */
   getConnectionInfo(connectionId: string): Promise<ConnectionInfo | undefined>;
-
-  // Event Management
-  /**
-   * Publish an event to a session
-   */
-  publishEvent(sessionId: string, event: AutomationEvent): Promise<void>;
-
-  /**
-   * Subscribe to events for a session
-   */
-  subscribeToEvents(sessionId: string, callback: EventCallback): Promise<string>;
-
-  /**
-   * Unsubscribe from events
-   */
-  unsubscribeFromEvents(subscriptionId: string): Promise<void>;
 
   // Cleanup and Maintenance
   /**

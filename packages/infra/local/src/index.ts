@@ -1,32 +1,30 @@
-export { LocalProvider, LocalProviderConfig } from './LocalProvider';
+/**
+ * Local Browser Automation Provider
+ * Simple local development alternative to AWS cloud infrastructure
+ */
 
-// Browser automation provider
-export { LocalBrowserAutomationProvider, type LocalBrowserAutomationConfig } from './LocalBrowserAutomationProvider';
+export { LocalProvider } from './LocalProvider';
+export { LocalSessionStateManager } from './LocalSessionStateManager';
 
-// Session state management
-export { InMemorySessionStateManager, type InMemorySessionStateConfig } from './InMemorySessionStateManager';
+export type {
+    LocalProviderConfig,
+    ProviderSession,
+    BrowserConnectionResult,
+    Artifact,
+    ArtifactList,
+} from './LocalProvider';
 
-// Process management utilities
-export { ProcessTaskManager, type ProcessTaskManagerConfig } from './utils/ProcessTaskManager';
-
-// Re-export common interfaces for convenience
-export {
-  type IBrowserAutomationProvider,
-  type ISessionStateManager,
-  type AutomationTaskConfig,
-  type TaskInfo,
-  type BrowserSession,
-  type BrowserSessionStatus,
-  type SessionConfig,
-  type ConnectionInfo,
-  type ConnectionType,
-  type AutomationEvent,
-  type EventCallback,
-  type TaskStatus,
-  type ContainerResponse,
-  type HealthStatus,
-  type ContainerMethod,
-  ContainerCommunicator,
-  TaskMonitor,
-  BaseEventPublisher,
-} from '@wallcrawler/infra-common';
+// Re-export common types for convenience
+export type {
+    IBrowserProvider,
+    IBrowserAutomationProvider,
+    ISessionStateManager,
+    BrowserSession,
+    BrowserSessionStatus,
+    AutomationTaskConfig,
+    TaskInfo,
+    ContainerResponse,
+    HealthStatus,
+    ScreencastOptions,
+    InputEvent,
+} from '@wallcrawler/infra-common'; 

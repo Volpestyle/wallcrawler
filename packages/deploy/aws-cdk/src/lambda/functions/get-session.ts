@@ -1,15 +1,15 @@
 import { APIGatewayProxyHandler } from 'aws-lambda';
 import { ECSClient, DescribeTasksCommand } from '@aws-sdk/client-ecs';
-import { createClient } from 'redis';
+import { initRedisClient } from '../utils/redis-client';
 
 const ecsClient = new ECSClient({});
-const REDIS_ENDPOINT = process.env.REDIS_ENDPOINT!;
 const CLUSTER_NAME = process.env.CLUSTER_NAME!;
-
-let redisClient: ReturnType<typeof createClient>;
 
 export const handler: APIGatewayProxyHandler = async (event) => {
   try {
+    // Initialize Redis client
+    const client = await initRedisClient();
+
     const sessionId = event.pathParameters?.sessionId;
 
     if (!sessionId) {
@@ -19,19 +19,8 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       };
     }
 
-    // Connect to Redis if not connected
-    if (!redisClient) {
-      redisClient = createClient({
-        socket: {
-          host: REDIS_ENDPOINT,
-          port: 6379,
-        },
-      });
-      await redisClient.connect();
-    }
-
     // Get session data from Redis
-    const sessionData = await redisClient.get(`session:${sessionId}`);
+    const sessionData = await client.get(`session:${sessionId}`);
 
     if (!sessionData) {
       return {
@@ -49,9 +38,9 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     // Get sibling sessions on the same container
     const siblingSessions: string[] = [];
     if (taskArn) {
-      const allSessionKeys = await redisClient.keys('session:*');
+      const allSessionKeys = await client.keys('session:*');
       for (const key of allSessionKeys) {
-        const otherSessionData = await redisClient.get(key);
+        const otherSessionData = await client.get(key);
         if (otherSessionData) {
           const otherSession = JSON.parse(otherSessionData);
           if (otherSession.taskArn === taskArn && otherSession.sessionId !== sessionId) {

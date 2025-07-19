@@ -25,7 +25,6 @@ import {
   ContainerResponse,
   HealthStatus,
   ContainerMethod,
-  AutomationEvent,
 } from '@wallcrawler/infra-common';
 
 import { Browser, BrowserContext, Page, CDPSession } from '@playwright/test';
@@ -48,7 +47,7 @@ import { EventEmitter } from 'events';
 interface CdpResponse {
   id: number;
   result?: object;
-  error?: object;
+  error?: { message: string; code?: number; data?: object };
 }
 
 /**
@@ -303,7 +302,6 @@ export class AwsProvider extends EventEmitter implements IBrowserProvider, IBrow
         updatedAt: new Date(),
         lastHeartbeat: new Date(),
         browserUrl: null,
-        vncUrl: null,
         privateIp: null,
         publicIp: null,
         itemsProcessed: 0,
@@ -382,59 +380,7 @@ export class AwsProvider extends EventEmitter implements IBrowserProvider, IBrow
     }
   }
 
-  async getOrCreateUserContainer(userId: string): Promise<TaskInfo> {
-    console.log(`[AwsProvider] Getting or creating container for user: ${userId}`);
 
-    try {
-      // First check if user has an existing container
-      const existingContainer = await this.findContainerByUserId(userId);
-      if (existingContainer) {
-        console.log(`[AwsProvider] Found existing container ${existingContainer.taskId} for user ${userId}`);
-        return existingContainer;
-      }
-
-      // Create new container for user
-      const sessionId = `user-container-${userId}-${Date.now()}`;
-      const taskConfig: AutomationTaskConfig = {
-        sessionId,
-        userId,
-        environment: 'user-container',
-        region: this.config.region,
-        environmentVariables: {
-          CONTAINER_MODE: 'user-dedicated',
-        },
-        tags: {
-          ContainerType: 'UserDedicated',
-        },
-      };
-
-      const taskInfo = await this.startAutomationTask(taskConfig);
-      console.log(`[AwsProvider] Created new container ${taskInfo.taskId} for user ${userId}`);
-
-      return taskInfo;
-    } catch (error) {
-      console.error('[AwsProvider] Failed to get or create user container:', error);
-      throw error;
-    }
-  }
-
-  async findContainerByUserId(userId: string): Promise<TaskInfo | null> {
-    try {
-      return await this.taskManager.findAvailableContainerForUser(userId);
-    } catch (error) {
-      console.error('[AwsProvider] Failed to find container by user ID:', error);
-      return null;
-    }
-  }
-
-  async listUserContainers(userId: string): Promise<TaskInfo[]> {
-    try {
-      return await this.taskManager.findTasksByUserId(userId);
-    } catch (error) {
-      console.error('[AwsProvider] Failed to list user containers:', error);
-      return [];
-    }
-  }
 
   // =============================================================================
   // Container Communication
@@ -459,47 +405,7 @@ export class AwsProvider extends EventEmitter implements IBrowserProvider, IBrow
     return this.containerCommunicator.callEndpoint(endpoint, path, method, body, retries);
   }
 
-  async startContainerAutomation(
-    taskId: string,
-    sessionId: string,
-    params: Record<string, unknown>
-  ): Promise<ContainerResponse<{ message: string; sessionId?: string }>> {
-    try {
-      const endpoint = await this.getTaskEndpoint(taskId);
-      if (!endpoint) {
-        return {
-          success: false,
-          error: 'Could not get container endpoint',
-        };
-      }
 
-      return this.containerCommunicator.startAutomation(endpoint, sessionId, params);
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to start container automation: ${error}`,
-      };
-    }
-  }
-
-  async stopContainerAutomation(taskId: string): Promise<ContainerResponse<{ message: string }>> {
-    try {
-      const endpoint = await this.getTaskEndpoint(taskId, 10000);
-      if (!endpoint) {
-        return {
-          success: false,
-          error: 'Could not get container endpoint',
-        };
-      }
-
-      return this.containerCommunicator.stopAutomation(endpoint);
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to stop container automation: ${error}`,
-      };
-    }
-  }
 
   // =============================================================================
   // Health & Monitoring
@@ -524,56 +430,7 @@ export class AwsProvider extends EventEmitter implements IBrowserProvider, IBrow
     }
   }
 
-  async enableVncStreaming(taskId: string): Promise<string> {
-    try {
-      const taskInfo = await this.getTaskInfo(taskId);
-      if (!taskInfo || !taskInfo.privateIp) {
-        throw new Error(`Task ${taskId} not found or no IP address available`);
-      }
 
-      const vncPort = this.config.container?.vncPort || 5900;
-      const vncUrl = `vnc://${taskInfo.privateIp}:${vncPort}`;
-
-      // Update session with VNC URL
-      const session = await this.sessionStateManager.getSessionByTaskId(taskId);
-      if (session) {
-        await this.sessionStateManager.updateSession(session.id, {
-          vncUrl,
-          status: 'running',
-        });
-      }
-
-      return vncUrl;
-    } catch (error) {
-      console.error('[AwsProvider] Failed to enable VNC streaming:', error);
-      throw error;
-    }
-  }
-
-  async getContainerVncInfo(taskId: string): Promise<ContainerResponse<{ vncUrl?: string; status: string }>> {
-    try {
-      const session = await this.sessionStateManager.getSessionByTaskId(taskId);
-      if (!session) {
-        return {
-          success: false,
-          error: 'Session not found',
-        };
-      }
-
-      return {
-        success: true,
-        data: {
-          vncUrl: session.vncUrl || undefined,
-          status: session.vncUrl ? 'available' : 'not_configured',
-        },
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: `Failed to get VNC info: ${error}`,
-      };
-    }
-  }
 
   // =============================================================================
   // Session State Management
@@ -583,32 +440,7 @@ export class AwsProvider extends EventEmitter implements IBrowserProvider, IBrow
     return this.sessionStateManager;
   }
 
-  // =============================================================================
-  // Real-time Communication
-  // =============================================================================
 
-  async subscribeToEvents(sessionId: string, callback: (event: AutomationEvent) => void): Promise<string> {
-    return this.sessionStateManager.subscribeToEvents(sessionId, callback);
-  }
-
-  async unsubscribeFromEvents(subscriptionId: string): Promise<void> {
-    return this.sessionStateManager.unsubscribeFromEvents(subscriptionId);
-  }
-
-  async publishEvent(sessionId: string, eventType: string, data: Record<string, string | number | boolean>): Promise<void> {
-    const event: AutomationEvent = {
-      type: 'progress' as const,
-      timestamp: new Date().toISOString(),
-      sessionId,
-      data: {
-        progress: 0,
-        message: eventType,
-        ...data,
-      },
-    };
-
-    return this.sessionStateManager.publishEvent(sessionId, event);
-  }
 
   // =============================================================================
   // IBrowserProvider Methods
@@ -781,7 +613,7 @@ export class AwsProvider extends EventEmitter implements IBrowserProvider, IBrow
     const pending = this.pendingCommands.get(response.id);
     if (pending) {
       if (response.error) {
-        pending.reject(new Error(response.error.message));
+        pending.reject(new Error(response.error?.message ?? 'Unknown CDP error'));
       } else {
         pending.resolve(response.result);
       }
