@@ -47,11 +47,12 @@ The stagehand submodule has two remotes:
    ```
 
 4. **Push to your fork:**
+
    ```bash
    git push origin main
    ```
 
-### Updating Main Repository Reference (Optional)
+### Updating Main Repository Reference (Always Required)
 
 If you want the main wallcrawler repository to track your latest changes:
 
@@ -106,7 +107,7 @@ When the original Stagehand repository gets updates:
    git push --force-with-lease origin main
    ```
 
-5. **Update main repository reference** (if desired):
+5. **Update main repository reference**:
    ```bash
    cd ../..
    git add packages/stagehand
@@ -161,24 +162,12 @@ If you encounter conflicts when syncing with upstream:
 3. Continue rebase: `git rebase --continue`
 4. Force push: `git push --force-with-lease origin main`
 
-### Abort Problematic Operations
-
-```bash
-# Abort a rebase
-git rebase --abort
-
-# Abort a merge
-git merge --abort
-```
-
 ## Best Practices
 
 1. **Always work in the submodule directory** (`packages/stagehand`) when making Stagehand changes
-2. **Use conventional commit messages** (feat:, fix:, chore:, etc.)
-3. **Use `--force-with-lease`** instead of `--force` when force pushing
-4. **Keep your fork synced** with upstream regularly
-5. **Test changes thoroughly** before pushing
-6. **Update main repo reference** when you want other team members to use your latest changes
+2. **Use `--force-with-lease`** instead of `--force` when force pushing
+3. **Keep your fork synced** with upstream regularly
+4. **Update main repo reference** when you want other team members to use your latest changes
 
 ## Example Complete Workflow
 
@@ -216,8 +205,53 @@ git branch -d feature/new-browser-provider
 git push origin --delete feature/new-browser-provider
 ```
 
+## Submodule-Specific Considerations
+
+### Team Member Setup
+
+**First-time clone:**
+
+```bash
+git clone --recursive https://github.com/Volpestyle/wallcrawler.git
+# OR
+git clone https://github.com/Volpestyle/wallcrawler.git
+cd wallcrawler
+git submodule update --init --recursive
+```
+
+**Pulling updates:**
+
+```bash
+git pull --recurse-submodules
+# OR
+git pull && git submodule update --recursive
+```
+
+### Submodule Status Indicators
+
+```bash
+git submodule status
+# " hash..." = Clean, matches main repo expectation
+# "+hash..." = Submodule has uncommitted changes
+# "-hash..." = Submodule is on different commit than expected
+# "Uhash..." = Submodule has merge conflicts
+```
+
+### Common Submodule Issues
+
+**Problem**: Team member gets "submodule not found" errors
+**Solution**: `git submodule update --init --recursive`
+
+**Problem**: Submodule shows as modified after pull
+**Solution**: `git submodule update --recursive`
+
+**Problem**: Working in detached HEAD in submodule
+**Solution**: `cd packages/stagehand && git checkout main`
+
 ## Current Status
 
 ✅ **Latest commit successfully pushed:** `0eab048 - feat: add browser provider abstraction system and WallcrawlerAPI`
+
+✅ **Submodule setup verified:** Main repository correctly references the latest commit
 
 The workflow has been properly completed for the recent browser provider abstraction feature.
