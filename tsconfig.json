@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "declaration": true
   },
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts", "packages/stagehand/**"]
 }

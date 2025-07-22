@@ -1,0 +1,12 @@
+{
+  "eslint.execArgv": ["--max-old-space-size=8192"],
+  "typescript.tsserver.maxTsServerMemory": 8192,
+  "eslint.workingDirectories": [
+    { "directory": "packages/demos/nextjs-local", "changeProcessCWD": true },
+    { "directory": "packages/infra/aws-provider", "changeProcessCWD": true },
+    { "directory": "packages/infra/aws-cdk", "changeProcessCWD": true },
+    { "directory": "packages/infra/browser-container", "changeProcessCWD": true },
+    { "directory": "packages/stagehand", "changeProcessCWD": true },
+    { "directory": "packages/utils", "changeProcessCWD": true }
+  ]
+}

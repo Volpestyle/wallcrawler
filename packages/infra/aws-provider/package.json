@@ -1,0 +1,48 @@
+{
+  "name": "@wallcrawler/infra-aws",
+  "version": "0.1.0",
+  "description": "AWS infrastructure provider for WallCrawler browser automation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.848.0",
+    "@aws-sdk/client-application-auto-scaling": "^3.848.0",
+    "@aws-sdk/client-cloudwatch": "^3.848.0",
+    "@aws-sdk/client-ecs": "^3.848.0",
+    "@aws-sdk/client-elasticache": "^3.848.0",
+    "@aws-sdk/client-s3": "^3.848.0",
+    "@aws-sdk/client-ssm": "^3.849.0",
+    "@wallcrawler/stagehand": "workspace:*",
+    "@wallcrawler/utils": "workspace:*",
+    "playwright": "^1.52.0",
+    "redis": "^5.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.14",
+    "@wallcrawler/eslint-config": "workspace:*",
+    "eslint": "^9.31.0",
+    "typescript": "^5.8.3"
+  },
+  "keywords": [
+    "aws",
+    "ecs",
+    "browser",
+    "automation",
+    "wallcrawler",
+    "infrastructure"
+  ],
+  "author": "WallCrawler Team",
+  "license": "MIT"
+}
