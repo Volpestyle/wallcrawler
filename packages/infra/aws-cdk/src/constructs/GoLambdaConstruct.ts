@@ -100,7 +100,7 @@ export class GoLambdaConstruct extends Construct {
      * Create the create-session Go Lambda function
      */
     public createCreateSessionFunction(): lambda.Function {
-        const sourceDir = path.join(__dirname, '../../go-lambda/create-session');
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/create-session');
 
         return this.createFunction({
             functionName: 'create-session-go',
@@ -134,7 +134,7 @@ export class GoLambdaConstruct extends Construct {
      * Create the websocket-connect Go Lambda function
      */
     public createWebSocketConnectFunction(): lambda.Function {
-        const sourceDir = path.join(__dirname, '../../go-lambda/websocket-connect');
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/websocket-connect');
 
         return this.createFunction({
             functionName: 'websocket-connect-go',
@@ -149,7 +149,7 @@ export class GoLambdaConstruct extends Construct {
      * Create the websocket-message Go Lambda function
      */
     public createWebSocketMessageFunction(): lambda.Function {
-        const sourceDir = path.join(__dirname, '../../go-lambda/websocket-message');
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/websocket-message');
 
         return this.createFunction({
             functionName: 'websocket-message-go',
@@ -182,13 +182,211 @@ export class GoLambdaConstruct extends Construct {
      * Create the websocket-disconnect Go Lambda function
      */
     public createWebSocketDisconnectFunction(): lambda.Function {
-        const sourceDir = path.join(__dirname, '../../go-lambda/websocket-disconnect');
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/websocket-disconnect');
 
         return this.createFunction({
             functionName: 'websocket-disconnect-go',
             description: 'Go-based WebSocket disconnect Lambda function',
             sourceDir,
             timeout: cdk.Duration.seconds(30),
+            memorySize: 256,
+            initialPolicy: [
+                new iam.PolicyStatement({
+                    actions: [
+                        'ecs:DescribeTasks',
+                        'ecs:ListTasks',
+                        'ecs:StopTask',
+                    ],
+                    resources: ['*'],
+                }),
+            ],
+        });
+    }
+
+    /**
+     * Create the get-session Go Lambda function
+     */
+    public createGetSessionFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/get-session');
+
+        return this.createFunction({
+            functionName: 'get-session-go',
+            description: 'Go-based session retrieval Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.seconds(10),
+            memorySize: 128,
+        });
+    }
+
+    /**
+     * Create the sessions-start Go Lambda function (Stagehand compatibility)
+     */
+    public createSessionsStartFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/sessions-start');
+
+        return this.createFunction({
+            functionName: 'sessions-start-go',
+            description: 'Go-based Stagehand-compatible session start Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.seconds(30),
+            memorySize: 256,
+            initialPolicy: [
+                new iam.PolicyStatement({
+                    actions: [
+                        'ecs:RunTask',
+                        'ecs:DescribeServices',
+                        'ecs:DescribeTasks',
+                    ],
+                    resources: ['*'],
+                }),
+                new iam.PolicyStatement({
+                    actions: ['iam:PassRole'],
+                    resources: ['*'],
+                    conditions: {
+                        StringEquals: {
+                            'iam:PassedToService': 'ecs-tasks.amazonaws.com',
+                        },
+                    },
+                }),
+            ],
+        });
+    }
+
+    /**
+     * Create the session-act Go Lambda function
+     */
+    public createSessionActFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/session-act');
+
+        return this.createFunction({
+            functionName: 'session-act-go',
+            description: 'Go-based session act Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.minutes(2),
+            memorySize: 512,
+            initialPolicy: [
+                new iam.PolicyStatement({
+                    actions: [
+                        'ecs:RunTask',
+                        'ecs:DescribeTasks',
+                    ],
+                    resources: ['*'],
+                }),
+                new iam.PolicyStatement({
+                    actions: ['iam:PassRole'],
+                    resources: ['*'],
+                    conditions: {
+                        StringEquals: {
+                            'iam:PassedToService': 'ecs-tasks.amazonaws.com',
+                        },
+                    },
+                }),
+            ],
+        });
+    }
+
+    /**
+     * Create the session-extract Go Lambda function
+     */
+    public createSessionExtractFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/session-extract');
+
+        return this.createFunction({
+            functionName: 'session-extract-go',
+            description: 'Go-based session extract Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.minutes(2),
+            memorySize: 512,
+            initialPolicy: [
+                new iam.PolicyStatement({
+                    actions: [
+                        'ecs:RunTask',
+                        'ecs:DescribeTasks',
+                    ],
+                    resources: ['*'],
+                }),
+                new iam.PolicyStatement({
+                    actions: ['iam:PassRole'],
+                    resources: ['*'],
+                    conditions: {
+                        StringEquals: {
+                            'iam:PassedToService': 'ecs-tasks.amazonaws.com',
+                        },
+                    },
+                }),
+            ],
+        });
+    }
+
+    /**
+     * Create the session-observe Go Lambda function
+     */
+    public createSessionObserveFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/session-observe');
+
+        return this.createFunction({
+            functionName: 'session-observe-go',
+            description: 'Go-based session observe Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.minutes(2),
+            memorySize: 512,
+            initialPolicy: [
+                new iam.PolicyStatement({
+                    actions: [
+                        'ecs:RunTask',
+                        'ecs:DescribeTasks',
+                    ],
+                    resources: ['*'],
+                }),
+                new iam.PolicyStatement({
+                    actions: ['iam:PassRole'],
+                    resources: ['*'],
+                    conditions: {
+                        StringEquals: {
+                            'iam:PassedToService': 'ecs-tasks.amazonaws.com',
+                        },
+                    },
+                }),
+            ],
+        });
+    }
+
+    /**
+     * Create the session-end Go Lambda function
+     */
+    public createSessionEndFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/session-end');
+
+        return this.createFunction({
+            functionName: 'session-end-go',
+            description: 'Go-based session end Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.seconds(30),
+            memorySize: 256,
+            initialPolicy: [
+                new iam.PolicyStatement({
+                    actions: [
+                        'ecs:DescribeTasks',
+                        'ecs:ListTasks',
+                        'ecs:StopTask',
+                    ],
+                    resources: ['*'],
+                }),
+            ],
+        });
+    }
+
+    /**
+     * Create the cleanup-sessions Go Lambda function
+     */
+    public createCleanupSessionsFunction(): lambda.Function {
+        const sourceDir = path.join(__dirname, '../../lambda/cmd/cleanup-sessions');
+
+        return this.createFunction({
+            functionName: 'cleanup-sessions-go',
+            description: 'Go-based session cleanup Lambda function',
+            sourceDir,
+            timeout: cdk.Duration.minutes(5),
             memorySize: 256,
             initialPolicy: [
                 new iam.PolicyStatement({

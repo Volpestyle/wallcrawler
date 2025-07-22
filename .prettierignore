@@ -11,6 +11,8 @@ pnpm-lock.yaml
 *.min.*
 .changeset
 CHANGELOG.md
+# Go files (use gofmt instead)
+*.go
 # Generated content
 packages/*/dist/
 packages/*/build/

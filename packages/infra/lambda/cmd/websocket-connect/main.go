@@ -16,7 +16,7 @@ import (
 
 // Environment variables
 var (
-	JWESecretARN = os.Getenv("JWE_SECRET_ARN")
+	JWESecretARN  = os.Getenv("JWE_SECRET_ARN")
 	RedisEndpoint = os.Getenv("REDIS_ENDPOINT")
 )
 
@@ -235,4 +235,4 @@ func getEnvDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
-} 
+}

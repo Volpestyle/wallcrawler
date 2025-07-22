@@ -17,10 +17,10 @@ import (
 
 // Environment variables
 var (
-	RedisEndpoint               = os.Getenv("REDIS_ENDPOINT")
-	ECSClusterName             = os.Getenv("ECS_CLUSTER_NAME")
-	BrowserTaskDefinitionARN   = os.Getenv("BROWSER_TASK_DEFINITION_ARN")
-	Environment                = getEnvDefault("ENVIRONMENT", "dev")
+	RedisEndpoint            = os.Getenv("REDIS_ENDPOINT")
+	ECSClusterName           = os.Getenv("ECS_CLUSTER_NAME")
+	BrowserTaskDefinitionARN = os.Getenv("BROWSER_TASK_DEFINITION_ARN")
+	Environment              = getEnvDefault("ENVIRONMENT", "dev")
 )
 
 // WebSocket message structure
@@ -334,4 +334,4 @@ func getEnvDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
-} 
+}
