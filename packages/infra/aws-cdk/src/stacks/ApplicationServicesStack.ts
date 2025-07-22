@@ -4,6 +4,7 @@ import { CoreInfrastructureStack } from './CoreInfrastructureStack';
 import * as path from 'path';
 import { MonitoringConstruct } from '../constructs/MonitoringConstruct';
 import { ConfigurationConstruct } from '../constructs/ConfigurationConstruct';
+import { GoLambdaConstruct } from '../constructs/GoLambdaConstruct';
 import * as apigatewayv2_integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 
@@ -277,187 +278,55 @@ export class ApplicationServicesStack extends cdk.Stack {
 
     const lambdaFunctions = [];
 
-    // Create Session Lambda
-    const createSessionLambda = new cdk.aws_lambda.Function(this, 'CreateSessionFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'create-session.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
+    const goLambdaConstruct = new GoLambdaConstruct(this, 'GoLambdaConstruct', {
+      projectName: props.projectName,
+      environment: props.environment,
       vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
+      lambdaSecurityGroup,
+      commonEnvironment: lambdaEnvironment,
     });
+
+    // Create Session Lambda (Go version)
+    const createSessionLambda = goLambdaConstruct.createCreateSessionFunction();
     lambdaFunctions.push(createSessionLambda);
 
-    // Get Session Lambda
-    const getSessionLambda = new cdk.aws_lambda.Function(this, 'GetSessionFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'get-session.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.seconds(10),
-      memorySize: 128,
-    });
+    // WebSocket Lambda Functions (Go versions)
+    const goWebsocketConnectLambda = goLambdaConstruct.createWebSocketConnectFunction();
+    const goWebsocketMessageLambda = goLambdaConstruct.createWebSocketMessageFunction();
+    const goWebsocketDisconnectLambda = goLambdaConstruct.createWebSocketDisconnectFunction();
+    lambdaFunctions.push(goWebsocketConnectLambda, goWebsocketMessageLambda, goWebsocketDisconnectLambda);
+
+    // ✅ Remaining Go Lambda functions
+    // Get Session Lambda (Go version)
+    const getSessionLambda = goLambdaConstruct.createGetSessionFunction();
     lambdaFunctions.push(getSessionLambda);
 
-    // Sessions Start Lambda (for Stagehand compatibility)
-    const sessionsStartLambda = new cdk.aws_lambda.Function(this, 'SessionsStartFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'sessions-start.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-    });
+    // Sessions Start Lambda (for Stagehand compatibility) (Go version)
+    const sessionsStartLambda = goLambdaConstruct.createSessionsStartFunction();
     lambdaFunctions.push(sessionsStartLambda);
 
-    // Session Act Lambda
-    const sessionActLambda = new cdk.aws_lambda.Function(this, 'SessionActFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'session-act.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.minutes(2),
-      memorySize: 512,
-    });
+    // Session Act Lambda (Go version)
+    const sessionActLambda = goLambdaConstruct.createSessionActFunction();
     lambdaFunctions.push(sessionActLambda);
 
-    // Session Extract Lambda
-    const sessionExtractLambda = new cdk.aws_lambda.Function(this, 'SessionExtractFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'session-extract.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.minutes(2),
-      memorySize: 512,
-    });
+    // Session Extract Lambda (Go version)
+    const sessionExtractLambda = goLambdaConstruct.createSessionExtractFunction();
     lambdaFunctions.push(sessionExtractLambda);
 
-    // Session Observe Lambda
-    const sessionObserveLambda = new cdk.aws_lambda.Function(this, 'SessionObserveFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'session-observe.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.minutes(2),
-      memorySize: 512,
-    });
+    // Session Observe Lambda (Go version)
+    const sessionObserveLambda = goLambdaConstruct.createSessionObserveFunction();
     lambdaFunctions.push(sessionObserveLambda);
 
-    // Session End Lambda
-    const sessionEndLambda = new cdk.aws_lambda.Function(this, 'SessionEndFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'session-end.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-    });
+    // Session End Lambda (Go version)
+    const sessionEndLambda = goLambdaConstruct.createSessionEndFunction();
     lambdaFunctions.push(sessionEndLambda);
 
-    // Cleanup Sessions Lambda
-    const cleanupSessionsLambda = new cdk.aws_lambda.Function(this, 'CleanupSessionsFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'cleanup-sessions.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 256,
-    });
+    // Cleanup Sessions Lambda (Go version)
+    const cleanupSessionsLambda = goLambdaConstruct.createCleanupSessionsFunction();
     lambdaFunctions.push(cleanupSessionsLambda);
 
-    // WebSocket Lambda Functions
-    const websocketConnectLambda = new cdk.aws_lambda.Function(this, 'WebSocketConnectFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'websocket-connect.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: lambdaEnvironment,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-    });
-    lambdaFunctions.push(websocketConnectLambda);
-
-    const websocketDisconnectLambda = new cdk.aws_lambda.Function(this, 'WebSocketDisconnectFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'websocket-disconnect.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: {
-        ...lambdaEnvironment,
-        CONTAINER_SUBNETS: vpc.privateSubnets.map((s) => s.subnetId).join(','),
-        CONTAINER_SECURITY_GROUP_ID: containerSecurityGroup.securityGroupId,
-      },
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-    });
-    lambdaFunctions.push(websocketDisconnectLambda);
-
-    const websocketMessageLambda = new cdk.aws_lambda.Function(this, 'WebSocketMessageFunction', {
-      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
-      handler: 'websocket-message.handler',
-      code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda', 'functions')),
-      vpc,
-      vpcSubnets: {
-        subnets: vpc.privateSubnets,
-      },
-      securityGroups: [lambdaSecurityGroup],
-      environment: {
-        ...lambdaEnvironment,
-        CONTAINER_SUBNETS: vpc.privateSubnets.map((s) => s.subnetId).join(','),
-        CONTAINER_SECURITY_GROUP_ID: containerSecurityGroup.securityGroupId,
-      },
-      timeout: cdk.Duration.minutes(1),
-      memorySize: 512,
-    });
-    lambdaFunctions.push(websocketMessageLambda);
+    // ✅ WebSocket functions now use Go versions from GoLambdaConstruct above
+    // No need for TypeScript WebSocket functions anymore!
 
     // Grant permissions to Lambda functions
     lambdaFunctions.forEach(
@@ -466,8 +335,8 @@ export class ApplicationServicesStack extends cdk.Stack {
       }
     );
 
-    // Grant ECS permissions to cleanup Lambda and WebSocket disconnect Lambda
-    [cleanupSessionsLambda, websocketDisconnectLambda].forEach(fn => {
+    // Grant ECS permissions to cleanup Lambda and Go WebSocket disconnect Lambda
+    [cleanupSessionsLambda, goWebsocketDisconnectLambda].forEach(fn => {
       fn.addToRolePolicy(
         new cdk.aws_iam.PolicyStatement({
           actions: ['ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:StopTask'],
@@ -476,32 +345,32 @@ export class ApplicationServicesStack extends cdk.Stack {
       );
     });
 
-    // Grant ECS RunTask permissions to WebSocket message Lambda
-    websocketMessageLambda.addToRolePolicy(
+    // Grant ECS RunTask permissions to Go WebSocket message Lambda
+    goWebsocketMessageLambda.addToRolePolicy(
       new cdk.aws_iam.PolicyStatement({
         actions: ['ecs:RunTask', 'ecs:DescribeTasks'],
         resources: ['*'],
       })
     );
 
-    websocketMessageLambda.addToRolePolicy(
+    goWebsocketMessageLambda.addToRolePolicy(
       new cdk.aws_iam.PolicyStatement({
         actions: ['iam:PassRole'],
         resources: [browserTaskDefinition.taskRole.roleArn, browserTaskDefinition.executionRole!.roleArn],
       })
     );
 
-    // Add routes to the WebSocket API
+    // Add routes to the WebSocket API (using Go Lambda functions)
     webSocketApi.addRoute('$connect', {
-      integration: new apigatewayv2_integrations.WebSocketLambdaIntegration('ConnectIntegration', websocketConnectLambda),
+      integration: new apigatewayv2_integrations.WebSocketLambdaIntegration('ConnectIntegration', goWebsocketConnectLambda),
     });
 
     webSocketApi.addRoute('$disconnect', {
-      integration: new apigatewayv2_integrations.WebSocketLambdaIntegration('DisconnectIntegration', websocketDisconnectLambda),
+      integration: new apigatewayv2_integrations.WebSocketLambdaIntegration('DisconnectIntegration', goWebsocketDisconnectLambda),
     });
 
     webSocketApi.addRoute('$default', {
-      integration: new apigatewayv2_integrations.WebSocketLambdaIntegration('DefaultIntegration', websocketMessageLambda),
+      integration: new apigatewayv2_integrations.WebSocketLambdaIntegration('DefaultIntegration', goWebsocketMessageLambda),
     });
 
     // WebSocket API Stage
@@ -511,8 +380,8 @@ export class ApplicationServicesStack extends cdk.Stack {
       autoDeploy: true,
     });
 
-    // Grant WebSocket API permissions to Lambda functions
-    [websocketConnectLambda, websocketDisconnectLambda, websocketMessageLambda].forEach(fn => {
+    // Grant WebSocket API permissions to Go Lambda functions
+    [goWebsocketConnectLambda, goWebsocketDisconnectLambda, goWebsocketMessageLambda].forEach(fn => {
       fn.addToRolePolicy(
         new cdk.aws_iam.PolicyStatement({
           actions: ['execute-api:ManageConnections'],
@@ -612,16 +481,17 @@ export class ApplicationServicesStack extends cdk.Stack {
     const sessionEndResource = sessionResource.addResource('end');
     sessionEndResource.addMethod('POST', new cdk.aws_apigateway.LambdaIntegration(sessionEndLambda), methodOptions);
 
-    // Grant permissions to new Lambda functions
-    [sessionsStartLambda, sessionActLambda, sessionExtractLambda, sessionObserveLambda, sessionEndLambda].forEach(
+    // Grant permissions to Go Lambda functions (permissions are already configured in GoLambdaConstruct)
+    // Grant JWE secret access to all Go Lambda functions
+    [getSessionLambda, sessionsStartLambda, sessionActLambda, sessionExtractLambda, sessionObserveLambda, sessionEndLambda, cleanupSessionsLambda].forEach(
       (fn) => {
         jweSecret.grantRead(fn);
-        fn.addToRolePolicy(
-          new cdk.aws_iam.PolicyStatement({
-            actions: ['ecs:RunTask', 'ecs:DescribeTasks'],
-            resources: ['*'],
-          })
-        );
+      }
+    );
+
+    // Grant additional ECS permissions to functions that need them
+    [sessionsStartLambda, sessionActLambda, sessionExtractLambda, sessionObserveLambda].forEach(
+      (fn) => {
         fn.addToRolePolicy(
           new cdk.aws_iam.PolicyStatement({
             actions: ['iam:PassRole'],
