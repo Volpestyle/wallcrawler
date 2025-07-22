@@ -1,49 +1,37 @@
-import globals from 'globals';
-import pluginJs from '@eslint/js';
-import tseslint from 'typescript-eslint';
+import baseConfig from '@wallcrawler/eslint-config';
 
-/** @type {import('eslint').Linter.Config[]} */
 export default [
-  { files: ['**/*.{js,mjs,cjs,ts}'] },
+  // Global ignores including stagehand (forked repo - keep untouched)
   {
-    languageOptions: {
-      globals: { ...globals.browser, ...globals.node },
-      parserOptions: {
-        tsconfigRootDir: import.meta.dirname,
-        project: true,
-      },
-    },
+    ignores: [
+      '**/dist/**',
+      '**/lib/dom/build/**',
+      '**/.next/**',
+      '**/node_modules/**',
+      '**/build/**',
+      '**/cdk.out/**',
+      '**/tmp/**',
+      '**/*.log',
+      '**/*.tmp',
+      '**/generated-*/**',
+      '**/coverage/**',
+      '**/artifacts/**',
+      '**/.vscode/**',
+      '**/.git/**',
+      '**/pnpm-lock.yaml',
+      '**/*.d.ts',
+      'packages/stagehand/**', // Exclude stagehand from this config
+    ],
   },
-  { ignores: ['**/dist/**', '**/lib/dom/build/**', '**/.next/**', '**/node_modules/**'] },
-  pluginJs.configs.recommended,
-  ...tseslint.configs.recommended,
+
+  // Use shared base configuration
+  ...baseConfig,
+
+  // Monorepo-specific overrides
   {
     rules: {
-      '@typescript-eslint/no-unused-vars': [
-        'error',
-        {
-          argsIgnorePattern: '^_',
-          varsIgnorePattern: '^_',
-          ignoreRestSiblings: true,
-        },
-      ],
-      '@typescript-eslint/no-unused-expressions': [
-        'error',
-        {
-          allowShortCircuit: true,
-          allowTernary: true,
-          allowTaggedTemplates: true,
-        },
-      ],
-      '@typescript-eslint/no-explicit-any': 'warn',
-    },
-  },
-  // Config files can be more lenient
-  {
-    files: ['**/*.config.{js,mjs,ts}', '**/tailwind.config.{js,ts}'],
-    rules: {
-      '@typescript-eslint/no-require-imports': 'off',
-      'no-undef': 'off',
+      // Allow console in monorepo root scripts
+      'no-console': 'off',
     },
   },
 ];

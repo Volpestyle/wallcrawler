@@ -1,5 +1,0 @@
-{
-  "key": "cmd+shift+l",
-  "command": "workbench.action.tasks.runTask",
-  "args": "Claude Code Lint Current File"
-}
