@@ -72,18 +72,9 @@ echo ""
 echo -e "${BLUE}🐳 Step 2: Building & Pushing Docker Image${NC}"
 echo -e "${BLUE}==========================================${NC}"
 
-# Build and push container app
-echo -e "${YELLOW}🏗️  Building browser container...${NC}"
+# Build and push container app using existing Go build script
+echo -e "${YELLOW}🏗️  Building Go browser container...${NC}"
 cd ../browser-container
-
-# Build TypeScript first
-echo -e "${YELLOW}🔧 Building TypeScript...${NC}"
-pnpm install
-pnpm build
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to build TypeScript${NC}"
-    exit 1
-fi
 
 # Create ECR repository if it doesn't exist
 echo -e "${YELLOW}📋 Creating ECR repository if needed...${NC}"
@@ -96,36 +87,16 @@ aws ecr describe-repositories --repository-names ${REPO_NAME} --region ${AWS_REG
     fi
 }
 
-# Get ECR login token
-echo -e "${YELLOW}🔐 Logging into ECR...${NC}"
-aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+# Use the existing build-and-push.sh script
+echo -e "${YELLOW}🚀 Running Go container build and push script...${NC}"
+./build-and-push.sh "${ECR_URI}" "${AWS_REGION}" "${ENVIRONMENT}"
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to login to ECR${NC}"
+    echo -e "${RED}❌ Failed to build and push Go container${NC}"
     exit 1
 fi
 
-# Build Docker image
-echo -e "${YELLOW}🔨 Building Docker image...${NC}"
-docker build -t ${REPO_NAME}:${IMAGE_TAG} .
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to build Docker image${NC}"
-    exit 1
-fi
-
-# Tag for ECR
-echo -e "${YELLOW}🏷️  Tagging image for ECR...${NC}"
-docker tag ${REPO_NAME}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
-
-# Push to ECR
-echo -e "${YELLOW}📤 Pushing image to ECR...${NC}"
-docker push ${ECR_URI}:${IMAGE_TAG}
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to push image to ECR${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✅ Docker image pushed successfully${NC}"
-echo -e "${GREEN}🎯 Image URI: ${ECR_URI}:${IMAGE_TAG}${NC}"
+echo -e "${GREEN}✅ Go container built and pushed successfully${NC}"
+echo -e "${GREEN}🎯 Image URI: ${ECR_URI}:${ENVIRONMENT} (and other tags)${NC}"
 
 # Go back to CDK directory
 cd ../aws-cdk
@@ -191,7 +162,7 @@ echo -e "${GREEN}🎉 Deployment Complete!${NC}"
 echo -e "${GREEN}======================${NC}"
 echo ""
 echo -e "${GREEN}📋 Deployment Summary:${NC}"
-echo -e "   🐳 Container Image: ${ECR_URI}:${IMAGE_TAG}"
+echo -e "   🐳 Container Images: ${ECR_URI}:${ENVIRONMENT}, :latest, and timestamped tags"
 echo -e "   ☁️  Environment: ${ENVIRONMENT}"
 echo -e "   🌍 Region: ${AWS_REGION}"
 echo -e "   🔢 Max Sessions per Container: 20"
