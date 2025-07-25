@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Wallcrawler } from '@wallcrawler/wallcrawler-sdk';
+import { Wallcrawler } from '@wallcrawler/sdk';
 import { StreamData } from '@wallcrawler/util-ts';
 
 interface BrowserViewerProps {

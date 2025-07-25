@@ -3,6 +3,8 @@
 - This is a Typescript and GO package which leverages AWS to create a remote browser ecosystem leveraging Stagehands LLM browsing capabilities. Wallcrawler is similar to Browserbase or Browserless.io, but an in-house solution for us to use in our own suite of applications.
 - Always refer to wallcrawler/docs/wallcrawler-design-doc.md (Wallcrawler design doc) as the source of truth when working in monorepo. Additionally there is supplemental documentation in /docs. The prompts.md, is simply guidance for building this in steps, but the design doc is the overall source of truth.
 - Don't try to test new features on your own, always leave the testing to me. You should try building packages though to make sure they are sound.
+- Before creating new utils, or types, always search the Wallcrawler monorepo to see if it already exists
+- Before creating new classes, always search the Wallcrawler monorepo to make sure we haven't already created it.
 
 # General
 
