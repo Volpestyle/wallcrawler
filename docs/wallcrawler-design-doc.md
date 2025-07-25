@@ -1,839 +1,248 @@
-To integrate the Wallcrawler platform with the provided requirements, we need to create a `Wallcrawler` package equivalent to the `Browserbase` class shown in the code. This package will serve as a client-side SDK to interact with the AWS-based infrastructure, replacing Browserbase’s functionality while maintaining compatibility with the forked Stagehand library. The `Wallcrawler` package will be a standalone package within the pnpm monorepo, designed to handle session management, CDP connections, and interactions with the AWS API Gateway endpoints for browser automation. It will support the same key operations (e.g., session creation, retrieval, and debugging) as Browserbase, but tailored to the Wallcrawler architecture (AWS Lambda, ECS Fargate, EventBridge, Redis, and API Gateway).
+# Wallcrawler
 
-The `Wallcrawler` package will:
+The documentation is structured as follows:
 
-- Replace Browserbase’s SDK in `getBrowser` to connect to remote browser sessions in ECS Fargate containers via CDP.
-- Provide a TypeScript SDK for session management (`create`, `retrieve`, `debug`, etc.), mirroring Browserbase’s API structure.
-- Integrate with the AWS infrastructure, using API Gateway for REST calls and WebSocket for screencasting.
-- Be a dependency for the `stagehand` package, ensuring seamless integration with the forked Stagehand.
+- **Consolidated File Structure**: Updated to include the `components` package.
+- **Mermaid Diagrams**: Included with fixed syntax for core flows and architecture.
+- **In-Depth Notes and Code Examples for Adapted Stagehand Pieces**: Enhanced with more details, including how the new `components` package integrates.
+- **New Package Spec: `components`**: Detailed spec, rationale, and code examples.
 
-Below, I’ll update the holistic documentation to include the new `Wallcrawler` package, modify the `getBrowser` function to use it, and provide artifacts for the package implementation, monorepo structure, and necessary infrastructure changes. I’ll also ensure all shared types and utilities are centralized in `packages/util-ts` to avoid duplication, maintaining the serverless, pay-per-use model.
+## Consolidated File Structure
 
----
+The monorepo now includes the `components` package, which exports React components like `BrowserViewer`. It depends on `util-ts` for shared types (e.g., stream data formats) and is used in `client-nextjs` for stream rendering.
 
-### Updated Holistic Product, Infrastructure, and Design Documentation
-
-#### Product Overview
-
-**Wallcrawler** is a serverless browser automation platform that integrates a forked Stagehand (as a git submodule) to process natural language instructions client-side via LLMs, executing them in persistent, remote browser sessions on AWS. It supports decoupled screencasting, pause/resume for user input, and scalable session management. The new `Wallcrawler` package replaces Browserbase as the client-side SDK, interfacing with AWS API Gateway to manage sessions and connect to headless Chrome instances in ECS Fargate containers.
-
-**Key Features**:
-
-- **LLM-Driven Automation**: Stagehand handles client-side LLM calls (e.g., OpenAI, xAI) to translate instructions into browser actions (`act`, `observe`, `agent.execute`).
-- **Persistent Sessions**: ECS Fargate containers run Chrome, maintaining state via Redis, even after client disconnects.
-- **Screencasting**: WebSocket streams browser frames, independent of automation.
-- **Event-Driven**: EventBridge manages `ExecuteScript`, `ResumeSession`, and `PauseNotification` events.
-- **Wallcrawler SDK**: A TypeScript package mimicking Browserbase’s API, handling session creation, retrieval, and CDP connections.
-
-**Target Users**: Developers building AI agents, web scrapers, or testing tools with natural language control.
-
-#### Infrastructure Design
-
-Fully serverless, deployed via AWS CDK (TypeScript). Each session runs in an isolated Fargate container, with the `Wallcrawler` SDK interfacing with API Gateway.
-
-##### AWS Services
-
-1. **Amazon API Gateway**:
-   - **Purpose**: Exposes REST endpoints (`/start-session`, `/sessions/{sessionId}/{act,observe,agentExecute,end,debug,retrieve}`) and WebSocket for screencasting.
-   - **Config**: HTTP API for cost efficiency; WebSocket for frame streaming. Auth via API keys or Cognito.
-   - **CDK**:
-     ```typescript
-     new apigateway.HttpApi(stack, 'WallcrawlerApi', { apiName: 'WallcrawlerApi' });
-     new apigateway.WebSocketApi(stack, 'ScreencastApi', { routes: { screencast: screencastLambda } });
-     ```
-   - **Cost**: ~$3.50/million requests.
-
-2. **AWS Lambda**:
-   - **Purpose**: Handles API requests, triggers ECS tasks, manages events.
-   - **Handlers** (Go):
-     - `StartSessionLambda`: Launches ECS task, stores session metadata in Redis.
-     - `ActLambda`: Processes `act` requests (e.g., `click:#button`).
-     - `ObserveLambda`: Handles `observe`, returns DOM data.
-     - `AgentExecuteLambda`: Executes agent scripts from Stagehand.
-     - `ResumeSessionLambda`: Processes user inputs.
-     - `StopSessionLambda`: Terminates tasks.
-     - `PauseNotificationLambda`: Notifies clients of pauses.
-     - `ScreencastLambda`: Routes WebSocket to ECS CDP.
-     - `RetrieveSessionLambda`: Fetches session status from Redis.
-     - `DebugSessionLambda`: Returns CDP endpoint for debugging.
-   - **CDK**:
-     ```typescript
-     new lambda.Function(stack, 'StartSessionLambda', {
-       runtime: lambda.Runtime.GO_1_X,
-       code: lambda.Code.fromAsset('packages/backend-go/bin/start-session'),
-       handler: 'start-session',
-     });
-     ```
-   - **Cost**: ~$0.20/million invocations.
-
-3. **Amazon ECS (Fargate)**:
-   - **Purpose**: Runs headless Chrome + Go controller per session.
-   - **Config**: Custom Docker image (`browserless/chrome` + Go app), CDP on port 9222.
-   - **CDK**:
-     ```typescript
-     const taskDef = new ecs.FargateTaskDefinition(stack, 'ChromeTask', { cpu: 512, memoryLimitMiB: 1024 });
-     taskDef.addContainer('ChromeContainer', {
-       image: ecs.ContainerImage.fromAsset('../backend-go'),
-       environment: { REDIS_ADDR: 'redis-endpoint' },
-     });
-     ```
-   - **Cost**: ~$0.01/hour per task (spot instances).
-
-4. **Amazon ElastiCache (Redis)**:
-   - **Purpose**: Stores session state (`id`, `script`, `state`, `cdpEndpoint`, `results`, `pauseReason`).
-   - **Config**: Serverless Redis, VPC-private, pub/sub for events.
-   - **CDK**:
-     ```typescript
-     new elasticache.CfnServerlessCache(stack, 'WallcrawlerRedis', {
-       engine: 'redis',
-       cacheUsageLimits: { dataStorage: { maximum: 10 } },
-     });
-     ```
-   - **Cost**: ~$0.017/hour.
-
-5. **AWS EventBridge**:
-   - **Purpose**: Triggers `ExecuteScript`, `ResumeSession`, `PauseNotification`.
-   - **CDK**:
-     ```typescript
-     new events.Rule(stack, 'ExecuteScriptRule', {
-       eventPattern: { source: ['browser.automation'], detailType: ['ExecuteScript'] },
-       targets: [new targets.EcsTask({ cluster, taskDefinition })],
-     });
-     ```
-   - **Cost**: ~$1/million events.
-
-6. **Amazon CloudWatch**:
-   - **Purpose**: Logs, metrics, alarms.
-   - **CDK**: Enabled by default.
-
-7. **AWS Secrets Manager**:
-   - **Purpose**: Stores API keys (e.g., LLM keys for Stagehand).
-   - **CDK**:
-     ```typescript
-     new secretsmanager.Secret(stack, 'LlmKey');
-     ```
-
-8. **Amazon VPC**:
-   - **Purpose**: Secures ECS, Redis.
-   - **CDK**:
-     ```typescript
-     new ec2.Vpc(stack, 'WallcrawlerVpc', { natGateways: 1 });
-     ```
-
-#### Monorepo Structure
-
-````plaintext
+```
 wallcrawler/
 ├── packages/
-│   ├── util-ts/          # Shared TypeScript types/utils
+│   ├── util-ts/          # Shared TypeScript types and utilities (centralized to avoid duplication)
 │   │   └── src/
-│   │       ├── types.ts
-│   │       ├── utils.ts
-```typescript
-export interface SessionMetadata {
-  id: string;
-  state: 'initializing' | 'running' | 'paused' | 'completed';
-  script: string;
-  cdpEndpoint?: string;
-  results?: any;
-  pauseReason?: string;
-}
-
-export interface ActOptions {
-  action: string;
-  selector?: string;
-  timeoutMs?: number;
-  variables?: Record<string, string>;
-}
-
-export interface ObserveResult {
-  selector: string;
-  method: string;
-  arguments?: string[];
-  description?: string;
-}
-
-export interface Session {
-  id: string;
-  status: 'RUNNING' | 'STOPPED' | 'ERROR';
-  connectUrl: string;
-}
-
-export interface SessionCreateParams {
-  projectId: string;
-  script?: string;
-  userMetadata?: Record<string, string>;
-}
-
-export interface SessionCreateResponse {
-  id: string;
-  connectUrl: string;
-}
-````
-
-```typescript
-export function parseLLMResponse(response: string): string[] {
-  return response.split(';').map((action) => action.trim());
-}
-
-export function validateScript(script: string): boolean {
-  const validActions = ['navigate', 'click', 'type', 'observe', 'pause'];
-  return script.split(';').every((action) => {
-    const [type] = action.split(':');
-    return validActions.includes(type);
-  });
-}
+│   │       ├── types.ts  # Shared types: SessionMetadata, ActOptions, ObserveResult, Session, SessionCreateParams, StreamData (new for BrowserViewer)
+│   │       └── utils.ts  # Shared functions: parseLLMResponse, validateScript, decodeStreamFrame (new)
+│   ├── util-go/          # Shared Go utilities (modules for backend handlers and ECS controller)
+│   │   ├── parse_script.go  # Parses script strings into Action structs
+│   │   └── redis_client.go  # Helpers for Redis operations (e.g., UpdateState, StoreScript, StoreCdpEndpoint)
+│   ├── wallcrawler-sdk/  # Client-side SDK package (equivalent to Browserbase)
+│   │   └── src/
+│   │       ├── index.ts  # Main Wallcrawler class with APIClient
+│   │       ├── sessions.ts  # Sessions resource for create/retrieve/debug
+│   │       ├── core.ts   # Core APIClient and APIResource classes
+│   │       └── error.ts  # Custom errors (e.g., WallcrawlerError)
+│   ├── components/       # New package: React components for client-side UI (e.g., BrowserViewer for screencast stream)
+│   │   └── src/
+│   │       ├── BrowserViewer.tsx  # React component to display WebSocket stream
+│   │       └── index.ts          # Exports BrowserViewer
+│   ├── aws-cdk/          # AWS Infrastructure as Code (TypeScript CDK stack)
+│   │   ├── lib/
+│   │   │   └── wallcrawler-stack.ts  # Defines AWS resources (API Gateway, Lambda, ECS, Redis, EventBridge)
+│   │   └── bin/
+│   │       └── wallcrawler.ts  # CDK app entry
+│   ├── backend-go/       # Go code for Lambda handlers and ECS controller
+│   │   ├── cmd/
+│   │   │   ├── start-session/   # StartSessionLambda: Launches ECS task, stores metadata
+│   │   │   │   └── main.go
+│   │   │   ├── act/            # ActLambda: Processes act requests
+│   │   │   │   └── main.go
+│   │   │   ├── observe/        # ObserveLambda: Handles observe requests
+│   │   │   │   └── main.go
+│   │   │   ├── agent-execute/  # AgentExecuteLambda: Executes agent scripts
+│   │   │   │   └── main.go
+│   │   │   ├── resume-session/ # ResumeSessionLambda: Handles user inputs
+│   │   │   │   └── main.go
+│   │   │   ├── stop-session/   # StopSessionLambda: Terminates ECS tasks
+│   │   │   │   └── main.go
+│   │   │   ├── pause-notification/ # PauseNotificationLambda: Notifies clients of pauses
+│   │   │   │   └── main.go
+│   │   │   ├── retrieve/       # RetrieveSessionLambda: Fetches session status
+│   │   │   │   └── main.go
+│   │   │   ├── debug/          # DebugSessionLambda: Returns CDP endpoint
+│   │   │   │   └── main.go
+│   │   │   ├── screencast/     # ScreencastLambda: Handles WebSocket for frames
+│   │   │   │   └── main.go
+│   │   │   └── ecs-controller/ # ECS Go controller: Executes scripts via CDP
+│   │   │       └── main.go
+│   │   ├── Dockerfile          # Docker image for ECS container (headless Chrome + Go)
+│   │   └── go.mod              # Go dependencies (e.g., chromedp, redis, aws-sdk)
+│   ├── client-nextjs/    # Demo Next.js app using Stagehand, Wallcrawler SDK, and components
+│   │   ├── src/
+│   │   │   └── pages/index.tsx  # Example usage: Init session, act, screencast with BrowserViewer
+│   │   └── package.json
+│   └── stagehand/        # Git submodule: Forked Stagehand library
+│       ├── src/
+│       │   ├── Stagehand.ts    # Adapted Stagehand class using Wallcrawler SDK
+│       │   ├── getBrowser.ts   # Adapted getBrowser using Wallcrawler
+│       │   ├── StagehandPage.ts # Adapted for CDP connection via Wallcrawler
+│       │   └── ... (other Stagehand files)
+│       └── package.json
+├── pnpm-workspace.yaml   # Defines monorepo packages
+├── .gitmodules           # Config for stagehand submodule
+└── README.md             # Project overview, setup instructions, and diagrams
 ```
 
-│ ├── util-go/ # Shared Go utilities
-│ │ ├── parse_script.go
-│ │ ├── redis_client.go
+## Mermaid Diagrams
 
-```go
-package util
+Mermaid diagrams are used to visualize the architecture and flows. Copy the code into a Mermaid renderer (e.g., https://mermaid.live/) for graphical output. Below are the diagrams with fixed syntax (e.g., replaced `{id}` with `id` to avoid parse errors).
 
-import "strings"
+### 1. Architecture Overview (Class Diagram Style)
 
-type Action struct {
-    Type  string
-    Value string
-    Extra string
-}
+This diagram shows component relationships. Fixed by changing method names to `/sessions/id/act (POST)` to avoid `{` parse issues.
 
-func ParseScript(script string) []Action {
-    var actions []Action
-    parts := strings.Split(script, ";")
-    for _, part := range parts {
-        if part == "" {
-            continue
-        }
-        split := strings.SplitN(part, ":", 2)
-        action := Action{Type: split[0]}
-        if len(split) > 1 {
-            if action.Type == "type" {
-                extraSplit := strings.SplitN(split[1], ",", 2)
-                action.Value = extraSplit[0]
-                if len(extraSplit) > 1 {
-                    action.Extra = extraSplit[1]
-                }
-            } else {
-                action.Value = split[1]
-            }
-        }
-        actions = append(actions, action)
+```mermaid
+classDiagram
+    class Client["Client (Next.js + Stagehand)"] {
+        +initSession()
+        +act(instruction)
+        +observe(instruction)
+        +agent.execute(goal)
+        +renderStream(BrowserViewer)
     }
-    return actions
-}
+    class SDK["Wallcrawler SDK"] {
+        +createSession(params)
+        +retrieve(sessionId)
+        +debug(sessionId)
+        +request(path, opts)
+    }
+    class API["API Gateway"] {
+        +/start-session (POST)
+        +/sessions/id/act (POST)
+        +/sessions/id/observe (POST)
+        +/sessions/id/agent-execute (POST)
+        +/sessions/id/resume-session (POST)
+        +/sessions/id/end (POST)
+        +/sessions/id/retrieve (GET)
+        +/sessions/id/debug (GET)
+        +/screencast (WebSocket)
+    }
+    class Lambda["Lambda Handlers"] {
+        +StartSessionLambda
+        +ActLambda
+        +ObserveLambda
+        +AgentExecuteLambda
+        +ResumeSessionLambda
+        +StopSessionLambda
+        +PauseNotificationLambda
+        +RetrieveSessionLambda
+        +DebugSessionLambda
+        +ScreencastLambda
+    }
+    class Redis["Redis (ElastiCache)"] {
+        +storeSession(id, state, script, cdpEndpoint, results)
+        +updateState(id, state)
+        +pub/sub for events
+    }
+    class EventBridge["EventBridge"] {
+        +ExecuteScript {sessionId, script}
+        +ResumeSession {sessionId, input}
+        +PauseNotification {sessionId, reason}
+    }
+    class ECS["ECS Fargate Container"] {
+        +Headless Chrome (CDP:9222)
+        +Go Controller: parseScript, execute via chromedp
+        +Listen for events
+        +Stream frames to WebSocket
+    }
+    class Chrome["Headless Chrome"]
+
+    Client --> SDK : Uses SDK for API calls
+    SDK --> API : HTTP/WebSocket requests
+    API --> Lambda : Invokes handlers
+    Lambda --> Redis : Store/Retrieve state
+    Lambda --> EventBridge : Publish events
+    EventBridge --> ECS : Trigger controller
+    ECS --> Redis : Update state/results
+    ECS --> Chrome : Execute CDP commands
+    ECS --> API : Stream frames via API
 ```
 
-```go
-package util
+### 2. Session Initialization and Act Execution (Sequence Diagram)
 
-import (
-    "context"
-    "github.com/redis/go-redis/v9"
-)
+This diagram illustrates the flow from client init to act execution.
 
-func UpdateState(client *redis.Client, sessionID, state string) error {
-    return client.HSet(context.Background(), "session:"+sessionID, "state", state).Err()
-}
+```mermaid
+sequenceDiagram
+    participant Client as Client (Next.js + Stagehand)
+    participant SDK as Wallcrawler SDK
+    participant API as API Gateway
+    participant Lambda as Lambda (StartSession/Act)
+    participant Redis as Redis
+    participant EventBridge as EventBridge
+    participant ECS as ECS Container (Go Controller)
+    participant Chrome as Chrome (CDP)
 
-func StoreScript(client *redis.Client, sessionID, script string) error {
-    return client.HSet(context.Background(), "session:"+sessionID, "script", script).Err()
-}
+    Client->>SDK: init() / createSession({projectId})
+    SDK->>API: POST /start-session {projectId}
+    API->>Lambda: Invoke StartSessionLambda
+    Lambda->>Redis: Store session metadata (id, state: initializing)
+    Lambda->>ECS: Run Fargate task with SESSION_ID
+    Lambda->>Redis: Store cdpEndpoint (ws://container:9222)
+    Lambda->>SDK: Return {id, connectUrl: cdpEndpoint}
+    SDK->>Client: Return session details
 
-func StoreCdpEndpoint(client *redis.Client, sessionID, endpoint string) error {
-    return client.HSet(context.Background(), "session:"+sessionID, "cdpEndpoint", endpoint).Err()
-}
+    Client->>SDK: act("click #button")
+    SDK->>API: POST /sessions/{id}/act {action: "click #button"}
+    API->>Lambda: Invoke ActLambda
+    Lambda->>Redis: Validate session, store script "click:#button"
+    Lambda->>EventBridge: Publish ExecuteScript {id, script}
+    EventBridge->>ECS: Trigger Go Controller
+    ECS->>Chrome: chromedp.Click("#button")
+    ECS->>Redis: Update state: running, store results
+    ECS->>SDK: Stream logs/results via WebSocket (client subscribes)
+    SDK->>Client: Return act results
 ```
 
-│ ├── wallcrawler-sdk/ # New Wallcrawler SDK package
-│ │ └── src/
-│ │ ├── index.ts
-│ │ ├── sessions.ts
+### 3. Pause and Resume Flow (Sequence Diagram)
 
-```typescript
-import * as Core from './core';
-import * as Errors from './error';
-import { Sessions, Session, SessionCreateParams, SessionCreateResponse } from './sessions';
+This diagram shows how pauses are handled and resumed.
 
-export interface ClientOptions {
-  apiKey?: string | undefined;
-  baseURL?: string | null | undefined;
-  timeout?: number | undefined;
-  maxRetries?: number | undefined;
-  defaultHeaders?: Core.Headers | undefined;
-  defaultQuery?: Core.DefaultQuery | undefined;
-}
+```mermaid
+sequenceDiagram
+    participant Client as Client (Next.js + Stagehand)
+    participant SDK as Wallcrawler SDK
+    participant API as API Gateway
+    participant Lambda as Lambda (PauseNotification/Resume)
+    participant Redis as Redis
+    participant EventBridge as EventBridge
+    participant ECS as ECS Container (Go Controller)
+    participant Chrome as Chrome (CDP)
 
-export class Wallcrawler extends Core.APIClient {
-  apiKey: string;
+    ECS->>Chrome: Execute script, hit "pause"
+    ECS->>Redis: Update state: paused, pauseReason: "waiting for input"
+    ECS->>EventBridge: Publish PauseNotification {id, reason}
+    EventBridge->>Lambda: Invoke PauseNotificationLambda
+    Lambda->>API: Push notification via WebSocket
+    API->>SDK: WebSocket message {type: "pause", reason}
+    SDK->>Client: Notify user (e.g., prompt for input)
 
-  private _options: ClientOptions;
-
-  constructor({
-    baseURL = process.env['WALLCRAWLER_BASE_URL'] || 'https://api.yourdomain.com/v1',
-    apiKey = process.env['WALLCRAWLER_API_KEY'],
-    ...opts
-  }: ClientOptions = {}) {
-    if (!apiKey) {
-      throw new Errors.WallcrawlerError('WALLCRAWLER_API_KEY is required');
-    }
-
-    super({
-      baseURL,
-      timeout: opts.timeout ?? 60000,
-      maxRetries: opts.maxRetries ?? 2,
-    });
-
-    this._options = { apiKey, ...opts, baseURL };
-    this.apiKey = apiKey;
-  }
-
-  sessions: Sessions = new Sessions(this);
-
-  protected override defaultHeaders(): Core.Headers {
-    return {
-      ...super.defaultHeaders(),
-      'X-Wallcrawler-API-Key': this.apiKey,
-      ...this._options.defaultHeaders,
-    };
-  }
-
-  static WallcrawlerError = Errors.WallcrawlerError;
-}
-
-export default Wallcrawler;
-export { Sessions, Session, SessionCreateParams, SessionCreateResponse };
+    Client->>SDK: resume-session {input: "text"}
+    SDK->>API: POST /resume-session {id, input: "text"}
+    API->>Lambda: Invoke ResumeSessionLambda
+    Lambda->>EventBridge: Publish ResumeSession {id, input}
+    EventBridge->>ECS: Trigger resume
+    ECS->>Chrome: e.g., SendKeys("input", "text")
+    ECS->>Redis: Update state: running
+    ECS->>SDK: Stream updated frames via WebSocket
+    SDK->>Client: Resume confirmation
 ```
 
-```typescript
-import * as Core from './core';
-import { SessionMetadata } from '@wallcrawler/util-ts';
+## In-Depth Notes and Code Examples for Adapted Stagehand Pieces
 
-export interface Session {
-  id: string;
-  status: 'RUNNING' | 'STOPPED' | 'ERROR';
-  connectUrl: string;
-}
+The adaptations focus on replacing Browserbase with Wallcrawler SDK, ensuring CDP connections to remote ECS containers, and integrating the `BrowserViewer` component from the new `components` package for stream rendering. Below are enhanced notes with more depth, including potential edge cases, performance considerations, and code examples.
 
-export interface SessionCreateParams {
-  projectId: string;
-  script?: string;
-  userMetadata?: Record<string, string>;
-}
+### 1. `getBrowser` Function
 
-export interface SessionCreateResponse {
-  id: string;
-  connectUrl: string;
-}
+**In-Depth Notes**:
 
-export class Sessions extends Core.APIResource {
-  constructor(client: Core.APIClient) {
-    super(client);
-  }
+- Original: Creates or retrieves Browserbase sessions, connects via CDP, supports local fallback with persistent context and stealth scripts. Handles session resumption and logging.
+- Adaptation Rationale: Replace Browserbase with Wallcrawler SDK to interface with AWS. When `env: 'WALLCRAWLER'`, create/retrieve sessions, fetch `connectUrl` (CDP endpoint from ECS), and connect. Maintain local env for development. Add Wallcrawler-specific error handling (e.g., session not running). Apply stealth scripts to remote context via CDP. Performance: Cold starts in ECS may delay connection (mitigate with provisioned tasks). Edge Cases: Invalid API keys (throw error); session expiration (auto-recreate); no geo-tagged posts (irrelevant, but ensure robust logging); WebSocket disconnect during init (retry logic).
+- Key Changes: Import `Wallcrawler`; map `browserbaseSessionID` to Wallcrawler; return compatible `BrowserResult`; log with Wallcrawler-specific messages.
+- Potential Issues: CDP latency over network (optimize with AWS regions close to client); secure connectUrl (use wss:// with auth).
 
-  async create(params: SessionCreateParams, options?: Core.RequestOptions): Promise<SessionCreateResponse> {
-    const response = await this.request('/start-session', {
-      method: 'POST',
-      body: JSON.stringify(params),
-      ...options,
-    });
-    const body = await response.json();
-    if (!body.success) {
-      throw new Error(body.message);
-    }
-    return body.data;
-  }
-
-  async retrieve(sessionId: string, options?: Core.RequestOptions): Promise<Session> {
-    const response = await this.request(`/sessions/${sessionId}/retrieve`, {
-      method: 'GET',
-      ...options,
-    });
-    const body = await response.json();
-    if (!body.success) {
-      throw new Error(body.message);
-    }
-    return body.data;
-  }
-
-  async debug(sessionId: string, options?: Core.RequestOptions): Promise<{ debuggerUrl: string }> {
-    const response = await this.request(`/sessions/${sessionId}/debug`, {
-      method: 'GET',
-      ...options,
-    });
-    const body = await response.json();
-    if (!body.success) {
-      throw new Error(body.message);
-    }
-    return body.data;
-  }
-}
-```
+**Code Example**:
 
 ```typescript
-export type Headers = Record<string, string | undefined>;
-export type DefaultQuery = Record<string, string | undefined>;
-export type RequestOptions = {
-  method?: string;
-  headers?: Headers;
-  body?: string;
-};
-
-export abstract class APIClient {
-  constructor(protected options: { baseURL: string; timeout?: number; maxRetries?: number }) {}
-
-  async request(path: string, opts: RequestOptions): Promise<Response> {
-    return fetch(`${this.options.baseURL}${path}`, {
-      method: opts.method || 'GET',
-      headers: this.defaultHeaders(),
-      body: opts.body,
-      signal: AbortSignal.timeout(this.options.timeout || 60000),
-    });
-  }
-
-  protected defaultHeaders(): Headers {
-    return {};
-  }
-}
-
-export abstract class APIResource {
-  constructor(protected client: APIClient) {}
-}
-```
-
-```typescript
-export class WallcrawlerError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'WallcrawlerError';
-  }
-}
-```
-
-│ ├── aws-cdk/ # Infrastructure as Code
-│ │ └── lib/wallcrawler-stack.ts
-
-```typescript
-import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as elasticache from 'aws-cdk-lib/aws-elasticache';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
-
-export class WallcrawlerStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
-
-    const vpc = new ec2.Vpc(this, 'WallcrawlerVpc', { natGateways: 1 });
-    const cluster = new ecs.Cluster(this, 'WallcrawlerCluster', { vpc });
-
-    const taskDef = new ecs.FargateTaskDefinition(this, 'ChromeTask', {
-      cpu: 512,
-      memoryLimitMiB: 1024,
-    });
-    taskDef.addContainer('ChromeContainer', {
-      image: ecs.ContainerImage.fromAsset('../backend-go'),
-      environment: { REDIS_ADDR: 'redis-endpoint' },
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'wallcrawler' }),
-    });
-
-    const redis = new elasticache.CfnServerlessCache(this, 'WallcrawlerRedis', {
-      engine: 'redis',
-      cacheUsageLimits: { dataStorage: { maximum: 10 } },
-    });
-
-    const api = new apigateway.HttpApi(this, 'WallcrawlerApi', {
-      apiName: 'WallcrawlerApi',
-    });
-
-    const wsApi = new apigateway.WebSocketApi(this, 'ScreencastApi', {
-      connectRouteOptions: { integration: new apigateway.LambdaWebSocketIntegration({ handler: screencastLambda }) },
-    });
-
-    const handlers = [
-      'start-session',
-      'act',
-      'observe',
-      'agent-execute',
-      'resume-session',
-      'stop-session',
-      'retrieve',
-      'debug',
-      'screencast',
-    ];
-    handlers.forEach((handler) => {
-      const fn = new lambda.Function(this, `${handler}Lambda`, {
-        runtime: lambda.Runtime.GO_1_X,
-        code: lambda.Code.fromAsset(`../backend-go/bin/${handler}`),
-        handler: handler,
-      });
-      api.addRoutes({
-        path: handler === 'screencast' ? '/screencast' : `/sessions/{sessionId}/${handler}`,
-        methods: [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST],
-        integration: new apigateway.HttpLambdaIntegration(`${handler}Integration`, fn),
-      });
-    });
-
-    new events.Rule(this, 'ExecuteScriptRule', {
-      eventPattern: { source: ['browser.automation'], detailType: ['ExecuteScript'] },
-      targets: [new targets.EcsTask({ cluster, taskDefinition })],
-    });
-  }
-}
-```
-
-│ ├── backend-go/ # Go Lambda handlers and ECS controller
-│ │ ├── cmd/
-│ │ │ ├── start-session/main.go
-│ │ │ ├── act/main.go
-│ │ │ ├── observe/main.go
-│ │ │ ├── agent-execute/main.go
-│ │ │ ├── resume-session/main.go
-│ │ │ ├── stop-session/main.go
-│ │ │ ├── pause-notification/main.go
-│ │ │ ├── retrieve/main.go
-│ │ │ ├── debug/main.go
-│ │ │ ├── screencast/main.go
-│ │ │ └── ecs-controller/main.go
-
-```go
-package main
-
-import (
-    "context"
-    "github.com/aws/aws-lambda-go/lambda"
-    "github.com/redis/go-redis/v9"
-    "github.com/wallcrawler/util-go"
-)
-
-type RetrieveRequest struct {
-    SessionID string `json:"sessionId"`
-}
-
-type RetrieveResponse struct {
-    Success bool `json:"success"`
-    Data    struct {
-        ID        string `json:"id"`
-        Status    string `json:"status"`
-        ConnectUrl string `json:"connectUrl"`
-    } `json:"data"`
-}
-
-func Handler(ctx context.Context, req RetrieveRequest) (RetrieveResponse, error) {
-    redisClient := redis.NewClient(&redis.Options{Addr: "redis-endpoint"})
-    state, err := redisClient.HGet(ctx, "session:"+req.SessionID, "state").Result()
-    if err != nil || state == "" {
-        return RetrieveResponse{Success: false}, err
-    }
-    cdpEndpoint, _ := redisClient.HGet(ctx, "session:"+req.SessionID, "cdpEndpoint").Result()
-
-    return RetrieveResponse{
-        Success: true,
-        Data: struct {
-            ID        string `json:"id"`
-            Status    string `json:"status"`
-            ConnectUrl string `json:"connectUrl"`
-        }{
-            ID:        req.SessionID,
-            Status:    state,
-            ConnectUrl: cdpEndpoint,
-        },
-    }, nil
-}
-
-func main() {
-    lambda.Start(Handler)
-}
-```
-
-```go
-package main
-
-import (
-    "context"
-    "github.com/aws/aws-lambda-go/lambda"
-    "github.com/redis/go-redis/v9"
-)
-
-type DebugRequest struct {
-    SessionID string `json:"sessionId"`
-}
-
-type DebugResponse struct {
-    Success     bool   `json:"success"`
-    DebuggerUrl string `json:"debuggerUrl"`
-}
-
-func Handler(ctx context.Context, req DebugRequest) (DebugResponse, error) {
-    redisClient := redis.NewClient(&redis.Options{Addr: "redis-endpoint"})
-    cdpEndpoint, err := redisClient.HGet(ctx, "session:"+req.SessionID, "cdpEndpoint").Result()
-    if err != nil || cdpEndpoint == "" {
-        return DebugResponse{Success: false}, err
-    }
-
-    return DebugResponse{
-        Success:     true,
-        DebuggerUrl: cdpEndpoint,
-    }, nil
-}
-
-func main() {
-    lambda.Start(Handler)
-}
-```
-
-```go
-package main
-
-import (
-    "context"
-    "github.com/aws/aws-lambda-go/lambda"
-    "github.com/redis/go-redis/v9"
-    "github.com/aws/aws-sdk-go-v2/service/eventbridge"
-    "github.com/wallcrawler/util-go"
-)
-
-type ActRequest struct {
-    SessionID string `json:"sessionId"`
-    Action    string `json:"action"`
-    Selector  string `json:"selector,omitempty"`
-}
-
-type ActResponse struct {
-    Success bool   `json:"success"`
-    Message string `json:"message"`
-}
-
-func Handler(ctx context.Context, req ActRequest) (ActResponse, error) {
-    redisClient := redis.NewClient(&redis.Options{Addr: "redis-endpoint"})
-    sessionState, err := redisClient.HGet(ctx, "session:"+req.SessionID, "state").Result()
-    if err != nil || sessionState == "" {
-        return ActResponse{Success: false, Message: "Invalid session"}, err
-    }
-
-    script := req.Selector != "" ? req.Action+":"+req.Selector : req.Action
-    if !util.ValidateScript(script) {
-        return ActResponse{Success: false, Message: "Invalid script"}, nil
-    }
-
-    util.StoreScript(redisClient, req.SessionID, script)
-    ebClient := eventbridge.NewFromConfig(awsConfig)
-    _, err = ebClient.PutEvents(ctx, &eventbridge.PutEventsInput{
-        Entries: []eventbridge.PutEventsRequestEntry{
-            {
-                Source:       aws.String("browser.automation"),
-                DetailType:   aws.String("ExecuteScript"),
-                Detail:       aws.String(`{"sessionId":"`+req.SessionID+`","script":"`+script+`"}`),
-                EventBusName: aws.String("default"),
-            },
-        },
-    })
-    if err != nil {
-        return ActResponse{Success: false, Message: "Failed to trigger script"}, err
-    }
-
-    return ActResponse{Success: true, Message: "Action triggered"}, nil
-}
-
-func main() {
-    lambda.Start(Handler)
-}
-```
-
-│ ├── client-nextjs/ # Demo Next.js app
-│ │ ├── src/pages/index.tsx
-
-```typescript
-import { useEffect, useRef } from 'react';
-import { Stagehand } from '@wallcrawler/stagehand';
-
-export default function Home() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    const stagehand = new Stagehand({
-      env: 'WALLCRAWLER',
-      apiKey: process.env.NEXT_PUBLIC_WALLCRAWLER_API_KEY,
-      projectId: process.env.NEXT_PUBLIC_WALLCRAWLER_PROJECT_ID,
-      modelName: 'openai/gpt-4.1-mini',
-      modelClientOptions: { apiKey: process.env.NEXT_PUBLIC_MODEL_API_KEY },
-    });
-
-    const init = async () => {
-      await stagehand.init();
-      const page = stagehand.page;
-
-      await page.act('Navigate to example.com and click the login button');
-
-      const wsUrl = await stagehand.wallcrawler.getScreencastUrl();
-      const ws = new WebSocket(wsUrl);
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'frame') {
-          videoRef.current.src = `data:image/jpeg;base64,${data.data}`;
-        }
-      };
-
-      return () => {
-        ws.close();
-        stagehand.close();
-      };
-    };
-
-    init();
-  }, []);
-
-  return <video ref={videoRef} autoPlay />;
-}
-```
-
-│ └── stagehand/ # Git submodule (forked Stagehand)
-│ ├── src/
-│ │ ├── Stagehand.ts
-│ │ ├── getBrowser.ts
-
-```typescript
-import { Wallcrawler } from '@wallcrawler/wallcrawler-sdk';
-import { LLMProvider } from './llm/LLMProvider';
-import { StagehandLogger } from './logger';
-import { StagehandPage } from './StagehandPage';
-import { StagehandContext } from './StagehandContext';
-import { LogLine, ActOptions, ObserveResult, StartSessionResult } from '@wallcrawler/util-ts';
-import { StagehandNotInitializedError, StagehandError } from './types/stagehandErrors';
-
-export class Stagehand {
-  private stagehandPage!: StagehandPage;
-  private stagehandContext!: StagehandContext;
-  public wallcrawler: Wallcrawler;
-  private sessionId?: string;
-  public llmProvider: LLMProvider;
-  public logger: (logLine: LogLine) => void;
-  private stagehandLogger: StagehandLogger;
-  public verbose: 0 | 1 | 2;
-  public modelName: string;
-  private modelClientOptions: any;
-  public _env: 'LOCAL' | 'WALLCRAWLER';
-  public browserbaseSessionID?: string; // For compatibility
-
-  constructor({
-    env = 'WALLCRAWLER',
-    apiKey = process.env.WALLCRAWLER_API_KEY,
-    projectId = process.env.WALLCRAWLER_PROJECT_ID,
-    verbose = 0,
-    llmProvider,
-    modelName = 'openai/gpt-4.1-mini',
-    modelClientOptions,
-    logger,
-    browserbaseSessionID,
-  }: any = {}) {
-    this.stagehandLogger = new StagehandLogger({ pretty: true, usePino: true }, logger);
-    this.logger = (logLine: LogLine) => this.stagehandLogger.log(logLine);
-    this.wallcrawler = new Wallcrawler({ apiKey, baseURL: process.env.WALLCRAWLER_BASE_URL });
-    this.llmProvider = llmProvider || new LLMProvider(this.logger, false);
-    this.verbose = verbose;
-    this.modelName = modelName;
-    this.modelClientOptions = modelClientOptions;
-    this._env = env;
-    this.browserbaseSessionID = browserbaseSessionID;
-
-    if (this._env === 'WALLCRAWLER' && (!apiKey || !projectId)) {
-      throw new StagehandError('WALLCRAWLER_API_KEY and WALLCRAWLER_PROJECT_ID are required');
-    }
-  }
-
-  async init(): Promise<StartSessionResult> {
-    if (this._env === 'WALLCRAWLER') {
-      const result = await this.wallcrawler.sessions.create({
-        projectId: process.env.WALLCRAWLER_PROJECT_ID!,
-      });
-      this.sessionId = result.id;
-      this.browserbaseSessionID = result.id; // For compatibility
-      this.stagehandContext = new StagehandContext({});
-      this.stagehandPage = new StagehandPage(
-        {},
-        this,
-        this.stagehandContext,
-        this.llmProvider.getClient(this.modelName, this.modelClientOptions)
-      );
-      return {
-        sessionId: result.id,
-        debugUrl: result.connectUrl,
-        sessionUrl: `https://api.yourdomain.com/sessions/${result.id}`,
-      };
-    }
-    // LOCAL env handled by getBrowser
-    const result = await getBrowser(this);
-    this.sessionId = result.sessionId;
-    this.browserbaseSessionID = result.sessionId;
-    this.stagehandContext = await StagehandContext.init(result.context, this);
-    this.stagehandPage = (await this.stagehandContext.getStagehandPages())[0];
-    return result;
-  }
-
-  async close(): Promise<void> {
-    if (this.sessionId && this._env === 'WALLCRAWLER') {
-      await this.wallcrawler.sessions.request(`/sessions/${this.sessionId}/end`, { method: 'POST' });
-    }
-    if (this.stagehandContext) {
-      await this.stagehandContext.close();
-    }
-  }
-
-  get page() {
-    if (!this.stagehandContext) {
-      throw new StagehandNotInitializedError('page');
-    }
-    return this.stagehandPage;
-  }
-
-  async act(actionOrOptions: string | ActOptions | ObserveResult): Promise<any> {
-    return this.wallcrawler.sessions
-      .request(`/sessions/${this.sessionId}/act`, {
-        method: 'POST',
-        body: JSON.stringify(actionOrOptions),
-      })
-      .then((res) => res.json())
-      .then((body) => body.data);
-  }
-
-  async observe(instructionOrOptions?: string | any): Promise<any> {
-    return this.wallcrawler.sessions
-      .request(`/sessions/${this.sessionId}/observe`, {
-        method: 'POST',
-        body: JSON.stringify(instructionOrOptions || {}),
-      })
-      .then((res) => res.json())
-      .then((body) => body.data);
-  }
-
-  agent(options?: any): { execute: (instructionOrOptions: string | any) => Promise<any> } {
-    return {
-      execute: async (instructionOrOptions: string | any) => {
-        const executeOptions =
-          typeof instructionOrOptions === 'string' ? { instruction: instructionOrOptions } : instructionOrOptions;
-        return this.wallcrawler.sessions
-          .request(`/sessions/${this.sessionId}/agent-execute`, {
-            method: 'POST',
-            body: JSON.stringify({ agentConfig: options, executeOptions }),
-          })
-          .then((res) => res.json())
-          .then((body) => body.data);
-      },
-    };
-  }
-}
-```
-
-```typescript
+// packages/stagehand/src/getBrowser.ts
 import { chromium } from 'playwright';
 import { Wallcrawler } from '@wallcrawler/wallcrawler-sdk';
-import { LogLine, SessionCreateParams } from '@wallcrawler/util-ts';
+import { LogLine } from '@wallcrawler/util-ts';
 import { StagehandError } from './types/stagehandErrors';
 
 async function getBrowser(stagehand: any): Promise<any> {
@@ -897,6 +306,7 @@ async function getBrowser(stagehand: any): Promise<any> {
     });
 
     const context = browser.contexts()[0];
+    await applyStealthScripts(context); // Apply stealth as in original
     return {
       browser,
       context,
@@ -907,55 +317,376 @@ async function getBrowser(stagehand: any): Promise<any> {
     };
   }
 
-  // LOCAL env (unchanged from original)
+  // LOCAL env (unchanged from original, for fallback)
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext();
   logger({
     category: 'init',
     message: 'local browser started successfully.',
   });
+  await applyStealthScripts(context);
   return { browser, context, env: 'LOCAL' };
 }
 ```
 
-├── pnpm-workspace.yaml
+### 2. `Stagehand` Class
 
-```yaml
-packages:
-  - 'packages/*'
-  - 'packages/stagehand'
+**In-Depth Notes**:
+
+- Original: Handles initialization, LLM providers, session IDs, and env configuration. Uses Browserbase for remote sessions in `init`.
+- Adaptation Rationale: Support 'WALLCRAWLER' env; instantiate `Wallcrawler` SDK; map legacy `browserbaseSessionID` to Wallcrawler. In `init`, use Wallcrawler for session creation and CDP setup. Proxy methods like `act`, `observe`, `agent.execute` to Wallcrawler requests. Add `wallcrawler` property for access in `StagehandPage`. Performance: Cache session IDs to reduce API calls; use maxRetries in SDK for reliability. Edge Cases: Env mismatch (throw error); API key missing (error); cleanup on SIGINT/SIGTERM (register handlers); LLM failures (client-side, handle in LLMProvider).
+- Key Changes: Constructor adds `wallcrawler`; `init` uses Wallcrawler; `close` calls Wallcrawler end; methods proxy to Wallcrawler.
+- Potential Issues: LLM API keys in client (secure with env vars); rate limiting on Wallcrawler API (handle in SDK with retries); signal handling in browser environments (ignore if not Node).
+
+**Code Example**:
+
+```typescript
+// packages/stagehand/src/Stagehand.ts
+import { Wallcrawler } from '@wallcrawler/wallcrawler-sdk';
+import { LLMProvider } from './llm/LLMProvider';
+import { StagehandLogger } from './logger';
+import { StagehandPage } from './StagehandPage';
+import { StagehandContext } from './StagehandContext';
+import { LogLine, ActOptions, ObserveResult, StartSessionResult } from '@wallcrawler/util-ts';
+import { StagehandNotInitializedError, StagehandError } from './types/stagehandErrors';
+
+export class Stagehand {
+  private stagehandPage!: StagehandPage;
+  private stagehandContext!: StagehandContext;
+  public wallcrawler: Wallcrawler;
+  private sessionId?: string;
+  public llmProvider: LLMProvider;
+  public logger: (logLine: LogLine) => void;
+  private stagehandLogger: StagehandLogger;
+  public verbose: 0 | 1 | 2;
+  public modelName: string;
+  private modelClientOptions: any;
+  public _env: 'LOCAL' | 'WALLCRAWLER';
+  public browserbaseSessionID?: string; // For compatibility
+
+  constructor({
+    env = 'WALLCRAWLER',
+    apiKey = process.env.WALLCRAWLER_API_KEY,
+    projectId = process.env.WALLCRAWLER_PROJECT_ID,
+    verbose = 0,
+    llmProvider,
+    modelName = 'openai/gpt-4.1-mini',
+    modelClientOptions,
+    logger,
+    browserbaseSessionID,
+  }: any = {}) {
+    this.stagehandLogger = new StagehandLogger({ pretty: true, usePino: true }, logger);
+    this.logger = (logLine: LogLine) => this.stagehandLogger.log(logLine);
+    this.wallcrawler = new Wallcrawler({ apiKey, baseURL: process.env.WALLCRAWLER_BASE_URL });
+    this.llmProvider = llmProvider || new LLMProvider(this.logger, false);
+    this.verbose = verbose;
+    this.modelName = modelName;
+    this.modelClientOptions = modelClientOptions;
+    this._env = env;
+    this.browserbaseSessionID = browserbaseSessionID;
+
+    if (this._env === 'WALLCRAWLER' && (!apiKey || !projectId)) {
+      throw new StagehandError('WALLCRAWLER_API_KEY and WALLCRAWLER_PROJECT_ID are required');
+    }
+  }
+
+  async init(): Promise<StartSessionResult> {
+    if (this._env === 'WALLCRAWLER') {
+      const result = await this.wallcrawler.sessions.create({
+        projectId: process.env.WALLCRAWLER_PROJECT_ID!,
+      });
+      this.sessionId = result.id;
+      this.browserbaseSessionID = result.id;
+      this.stagehandContext = new StagehandContext({});
+      this.stagehandPage = new StagehandPage(
+        {},
+        this,
+        this.stagehandContext,
+        this.llmProvider.getClient(this.modelName, this.modelClientOptions)
+      );
+      return {
+        sessionId: result.id,
+        debugUrl: result.connectUrl,
+        sessionUrl: `https://api.yourdomain.com/sessions/${result.id}`,
+      };
+    }
+    // LOCAL env handled by original getBrowser logic
+    const result = await getBrowser(this);
+    this.sessionId = result.sessionId;
+    this.browserbaseSessionID = result.sessionId;
+    this.stagehandContext = await StagehandContext.init(result.context, this);
+    this.stagehandPage = (await this.stagehandContext.getStagehandPages())[0];
+    return result;
+  }
+
+  async close(): Promise<void> {
+    if (this.sessionId && this._env === 'WALLCRAWLER') {
+      await this.wallcrawler.sessions.request(`/sessions/${this.sessionId}/end`, { method: 'POST' });
+    }
+    if (this.stagehandContext) {
+      await this.stagehandContext.close();
+    }
+  }
+
+  get page() {
+    if (!this.stagehandContext) {
+      throw new StagehandNotInitializedError('page');
+    }
+    return this.stagehandPage;
+  }
+
+  async act(actionOrOptions: string | ActOptions | ObserveResult): Promise<any> {
+    return this.wallcrawler.sessions
+      .request(`/sessions/${this.sessionId}/act`, {
+        method: 'POST',
+        body: JSON.stringify(actionOrOptions),
+      })
+      .then((res) => res.json())
+      .then((body) => body.data);
+  }
+
+  async observe(instructionOrOptions?: string | any): Promise<any> {
+    return this.wallcrawler.sessions
+      .request(`/sessions/${this.sessionId}/observe`, {
+        method: 'POST',
+        body: JSON.stringify(instructionOrOptions || {}),
+      })
+      .then((res) => res.json())
+      .then((body) => body.data);
+  }
+
+  agent(options?: any): { execute: (instructionOrOptions: string | any) => Promise<any> } {
+    return {
+      execute: async (instructionOrOptions: string | any) => {
+        const executeOptions =
+          typeof instructionOrOptions === 'string' ? { instruction: instructionOrOptions } : instructionOrOptions;
+        return this.wallcrawler.sessions
+          .request(`/sessions/${this.sessionId}/agent-execute`, {
+            method: 'POST',
+            body: JSON.stringify({ agentConfig: options, executeOptions }),
+          })
+          .then((res) => res.json())
+          .then((body) => body.data);
+      },
+    };
+  }
+}
 ```
 
-├── .gitmodules
+### 3. `StagehandPage` Class
 
-[submodule "packages/stagehand"]
-path = packages/stagehand
-url = git@github.com:your-org/stagehand-fork.git
+**In-Depth Notes**:
 
-└── README.md
+- Original: Manages page interactions, CDP sessions, enhanced methods (`act`, `extract`, `observe`). Uses Browserbase for session retrieval and CDP.
+- Adaptation Rationale: Adapt `getCDPClient` to fetch CDP endpoint from Wallcrawler's `retrieve` and `debug`. For remote env, proxy actions to Wallcrawler requests. `_waitForSettledDom` uses remote CDP for network events (e.g., monitor inflight requests). Ensure stealth scripts are applied via CDP. Performance: Cache CDP sessions to reduce latency; handle timeouts in `_waitForSettledDom`. Edge Cases: OOPIF frames (use root session fallback); CAPTCHA waiting (adapt `waitForCaptchaSolve` to Wallcrawler notifications); DOM settle timeouts (log pending requests); frame ID encoding for multi-frames (use `ordinalForFrameId` with remote checks).
+- Key Changes: Constructor accepts Wallcrawler; `getCDPClient` uses Wallcrawler for remote; `act`/`observe` proxy to Wallcrawler if remote; init uses remote CDP.
+- Potential Issues: Network latency in remote CDP (mitigate with regional AWS); frame ID encoding for multi-frames.
 
+**Code Example**:
+
+```typescript
+// packages/stagehand/src/StagehandPage.ts
+import { CDPSession, Page as PlaywrightPage, Frame } from 'playwright';
+import { chromium } from 'playwright';
+import { Stagehand } from './Stagehand';
+import { StagehandContext } from './StagehandContext';
+import { LLMClient } from './llm/LLMClient';
+import { StagehandActHandler } from './handlers/actHandler';
+import { StagehandExtractHandler } from './handlers/extractHandler';
+import { StagehandObserveHandler } from './handlers/observeHandler';
+import {
+  ActOptions,
+  ActResult,
+  ExtractOptions,
+  ExtractResult,
+  ObserveOptions,
+  ObserveResult,
+} from '@wallcrawler/util-ts';
+import { StagehandNotInitializedError } from './types/stagehandErrors';
+
+export class StagehandPage {
+  private stagehand: Stagehand;
+  private rawPage: PlaywrightPage;
+  private intPage: PlaywrightPage; // Proxy page
+  private intContext: StagehandContext;
+  private actHandler: StagehandActHandler;
+  private extractHandler: StagehandExtractHandler;
+  private observeHandler: StagehandObserveHandler;
+  private llmClient: LLMClient;
+  private cdpClients = new WeakMap<PlaywrightPage | Frame, CDPSession>();
+
+  constructor(page: PlaywrightPage, stagehand: Stagehand, context: StagehandContext, llmClient: LLMClient) {
+    this.stagehand = stagehand;
+    this.rawPage = page;
+    this.intContext = context;
+    this.llmClient = llmClient;
+
+    // Proxy for method interception
+    this.intPage = new Proxy(page, {
+      get: (target, prop) => {
+        if (prop === 'getCDPClient') {
+          return this.getCDPClient.bind(this);
+        }
+        // Other proxies as in original
+        return target[prop as keyof PlaywrightPage];
+      },
+    });
+
+    this.actHandler = new StagehandActHandler({
+      logger: this.stagehand.logger,
+      stagehandPage: this,
+      selfHeal: this.stagehand.selfHeal,
+    });
+    // Similar for extractHandler, observeHandler
+  }
+
+  async getCDPClient(target: PlaywrightPage | Frame = this.rawPage): Promise<CDPSession> {
+    const cached = this.cdpClients.get(target);
+    if (cached) return cached;
+
+    if (this.stagehand._env === 'WALLCRAWLER') {
+      const session = await this.stagehand.wallcrawler.sessions.retrieve(this.stagehand.sessionId!);
+      const browser = await chromium.connectOverCDP(session.connectUrl);
+      const cdpSession = await browser.contexts()[0].newCDPSession(target);
+      this.cdpClients.set(target, cdpSession);
+      return cdpSession;
+    }
+
+    // Local fallback as in original
+    return this.intContext.newCDPSession(target);
+  }
+
+  async act(actionOrOptions: string | ActOptions | ObserveResult): Promise<ActResult> {
+    if (this.stagehand._env === 'WALLCRAWLER') {
+      return this.stagehand.wallcrawler.sessions
+        .request(`/sessions/${this.stagehand.sessionId}/act`, {
+          method: 'POST',
+          body: JSON.stringify(actionOrOptions),
+        })
+        .then((res) => res.json())
+        .then((body) => body.data);
+    }
+    // Original local act logic
+    return this.actHandler.actFromObserveResult(actionOrOptions as ObserveResult);
+  }
+
+  // Similar adaptations for observe, extract, init, _waitForSettledDom (use remote CDP for Network/Page events)
+}
 ```
 
-#### Implementation Notes
-- **Wallcrawler SDK**:
-  - Mimics Browserbase’s API for compatibility with Stagehand’s `getBrowser`.
-  - Uses `fetch` for HTTP requests to API Gateway; no external dependencies beyond `playwright` for CDP connections.
-  - Handles session creation (`/start-session`), retrieval (`/retrieve`), and debugging (`/debug`).
+## New Package Spec: `components`
 
-- **Stagehand Integration**:
-  - Replaced `Browserbase` with `Wallcrawler` in `getBrowser`.
-  - `Stagehand` constructor supports `env: 'WALLCRAWLER'` and uses `Wallcrawler` SDK for session management.
-  - `StagehandPage.getCDPClient` uses `wallcrawler.sessions.debug` to get the CDP endpoint.
+**Package Overview**: The `components` package is a React library providing UI components for Wallcrawler clients. It focuses on `BrowserViewer`, which connects to the screencast WebSocket, receives frames, and renders them in a canvas for video-like playback. This decouples UI from logic, allowing easy use in Next.js or other React apps.
 
-- **Backend Enhancements**:
-  - Added `RetrieveSessionLambda` and `DebugSessionLambda` to support `wallcrawler.sessions.retrieve` and `debug`.
-  - `StartSessionLambda` stores `cdpEndpoint` in Redis (e.g., `ws://container-ip:9222`).
+**Spec Details**:
 
-- **Deployment**:
-  - Build `wallcrawler-sdk`: `pnpm --filter wallcrawler-sdk build`.
-  - Build Go binaries: `pnpm --filter backend-go build`.
-  - Deploy CDK: `pnpm --filter aws-cdk deploy`.
-  - Update Stagehand submodule: `git submodule update --remote`.
+- **Dependencies**: `react`, `@wallcrawler/wallcrawler-sdk` (for fetching WebSocket URL), `@wallcrawler/util-ts` (for types like StreamData).
+- **Exports**: `BrowserViewer` (main component).
+- **Props for BrowserViewer**:
+  - `sessionId: string` (required): Session to stream from.
+  - `apiKey?: string`: For Wallcrawler SDK (optional, fallback to env).
+  - `onError?: (error: Error) => void`: Error callback.
+  - `width?: number`, `height?: number`: Canvas dimensions (default 1280x720).
+  - `frameRate?: number`: Throttle frame rendering (default 30 FPS).
+- **Features**: WebSocket connection with reconnect logic; base64 JPEG frame decoding; canvas rendering for smooth playback; loading/error states.
+- **Rationale**: Enables clients to easily visualize remote browser streams without custom code. Performance: Uses requestAnimationFrame for efficient rendering. Edge Cases: WebSocket disconnect (auto-reconnect); invalid frames (skip); browser compatibility (fallback to img tag).
+- **CDK/Backend Integration**: WebSocket endpoint (`/screencast`) streams frames from ECS via `ScreencastLambda`.
+- **Usage in client-nextjs**: Import and render `<BrowserViewer sessionId={id} />`.
 
-This updated documentation and artifacts provide a complete Wallcrawler implementation, with the `wallcrawler-sdk` package replacing Browserbase, ensuring seamless integration with Stagehand and the AWS infrastructure. Let me know if you need further refinements or additional artifacts!
+**Code Example for BrowserViewer**:
+
+```typescript
+// packages/components/src/BrowserViewer.tsx
+import React, { useEffect, useRef, useState } from 'react';
+import { Wallcrawler } from '@wallcrawler/wallcrawler-sdk';
+import { StreamData } from '@wallcrawler/util-ts'; // Shared type for frame data
+
+interface BrowserViewerProps {
+  sessionId: string;
+  apiKey?: string;
+  onError?: (error: Error) => void;
+  width?: number;
+  height?: number;
+  frameRate?: number;
+}
+
+const BrowserViewer: React.FC<BrowserViewerProps> = ({
+  sessionId,
+  apiKey,
+  onError,
+  width = 1280,
+  height = 720,
+  frameRate = 30,
+}) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [loading, setLoading] = useState(true);
+  const wallcrawler = new Wallcrawler({ apiKey });
+  const lastFrameTime = useRef(0);
+
+  useEffect(() => {
+    const connect = async () => {
+      try {
+        const wsUrl = `wss://api.yourdomain.com/screencast/${sessionId}`;
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => setLoading(false);
+        ws.onmessage = (event) => {
+          const now = performance.now();
+          if (now - lastFrameTime.current < 1000 / frameRate) return;
+
+          const data: StreamData = JSON.parse(event.data);
+          if (data.type === 'frame') {
+            const img = new Image();
+            img.src = `data:image/jpeg;base64,${data.data}`;
+            img.onload = () => {
+              const ctx = canvasRef.current?.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(img, 0, 0, width, height);
+              }
+              lastFrameTime.current = now;
+            };
+          }
+        };
+        ws.onclose = () => {
+          setLoading(true);
+          // Auto-reconnect after 1s
+          setTimeout(connect, 1000);
+        };
+        ws.onerror = (err) => onError?.(new Error('WebSocket error'));
+
+        return () => ws.close();
+      } catch (err) {
+        onError?.(err as Error);
+      }
+    };
+
+    connect();
+  }, [sessionId, apiKey, onError, frameRate, width, height]);
+
+  return (
+    <div>
+      {loading && <p>Loading stream...</p>}
+      <canvas ref={canvasRef} width={width} height={height} style={{ border: '1px solid black' }} />
+    </div>
+  );
+};
+
+export default BrowserViewer;
+```
+
+**Index Export**:
+
+```typescript
+// packages/components/src/index.ts
+export { default as BrowserViewer } from './BrowserViewer';
+```
+
+**Integration Example in client-nextjs**:
+
+```typescript
+// packages/client-nextjs/src/pages/index.tsx
+import BrowserViewer from '@wallcrawler/components/src/BrowserViewer';
+
+// Inside useEffect
+<BrowserViewer sessionId={sessionId} onError={(err) => console.error(err)} />
 ```
