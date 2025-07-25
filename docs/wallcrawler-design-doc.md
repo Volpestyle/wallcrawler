@@ -100,7 +100,7 @@ For development or when API is unavailable, Stagehand connects directly to remot
 ```mermaid
 classDiagram
     class Client["Client (Stagehand)"] {
-        +new Stagehand({env: "WALLCRAWLER"})
+        +Stagehand(env: "WALLCRAWLER")
         +init()
         +page.act(instruction)
         +page.extract(schema)
@@ -306,59 +306,6 @@ const corsHeaders = {
 };
 ```
 
-## Client Integration Example
-
-```typescript
-// packages/client-nextjs/src/pages/index.tsx
-import { Stagehand } from '@browserbasehq/stagehand';
-import { BrowserViewer } from '@wallcrawler/components';
-
-export default function Demo() {
-  const [sessionId, setSessionId] = useState<string>();
-
-  const runExample = async () => {
-    // Stagehand automatically uses Wallcrawler when env="WALLCRAWLER"
-    const stagehand = new Stagehand({
-      env: "WALLCRAWLER",
-      apiKey: process.env.WALLCRAWLER_API_KEY,
-      projectId: process.env.WALLCRAWLER_PROJECT_ID,
-    });
-
-    const { sessionId } = await stagehand.init();
-    setSessionId(sessionId);
-
-    // Navigate using direct browser connection
-    await stagehand.page.goto("https://example.com");
-
-    // Actions use Wallcrawler API for LLM processing
-    await stagehand.page.act("click the search button");
-
-    // Extract data using Wallcrawler API
-    const data = await stagehand.page.extract({
-      schema: z.object({
-        title: z.string(),
-        description: z.string(),
-      }),
-    });
-
-    console.log(data);
-  };
-
-  return (
-    <div>
-      <button onClick={runExample}>Run Example</button>
-      {sessionId && (
-        <BrowserViewer
-          sessionId={sessionId}
-          width={1280}
-          height={720}
-        />
-      )}
-    </div>
-  );
-}
-```
-
 ## API Endpoints Specification
 
 Wallcrawler API must implement these endpoints for Stagehand compatibility:
@@ -393,3 +340,115 @@ WebSocket /screencast           → Stream browser frames
   }
 }
 ```
+
+## Quickstart
+
+### Prerequisites
+
+- Node.js 20+ (recommended via nvm)
+- pnpm, npm, or yarn as package manager
+
+### Steps
+
+1. **Create a new project using create-browser-app** (adapted for Wallcrawler):
+
+```bash
+pnpm create browser-app my-wallcrawler-app
+```
+
+Answer the prompts:
+
+- Project name: my-wallcrawler-app
+- Quickstart example: Yes
+- AI model: e.g., Anthropic Claude 3.5 Sonnet
+- Run locally or on Browserbase: Browserbase (but we'll configure for Wallcrawler)
+- Headless mode: No
+
+2. **Install dependencies**:
+
+```bash
+cd my-wallcrawler-app
+pnpm install
+```
+
+3. **Set up environment variables** in .env:
+
+```
+WALLCRAWLER_API_KEY=your_wallcrawler_api_key
+WALLCRAWLER_PROJECT_ID=your_wallcrawler_project_id
+ANTHROPIC_API_KEY=your_anthropic_api_key  # Or appropriate model key
+```
+
+4. **Update the script** (e.g., in index.ts) to use Wallcrawler:
+
+```typescript
+// packages/client-nextjs/src/pages/index.tsx
+import { Stagehand } from '@browserbasehq/stagehand';  // Or use local packages/stagehand if developing in monorepo
+import { BrowserViewer } from '@wallcrawler/components';
+import { z } from 'zod';
+import { useState } from 'react';
+import dotenv from 'dotenv';
+
+dotenv.config();  // Load env vars (in production, use process.env directly)
+
+export default function Demo() {
+  const [sessionId, setSessionId] = useState<string>();
+
+  const runExample = async () => {
+    const stagehand = new Stagehand({
+      env: "WALLCRAWLER",
+      apiKey: process.env.WALLCRAWLER_API_KEY,
+      projectId: process.env.WALLCRAWLER_PROJECT_ID,
+      modelName: 'anthropic/claude-3-5-sonnet',  // Specify model
+      modelClientOptions: { apiKey: process.env.ANTHROPIC_API_KEY },  // Model API key
+    });
+
+    try {
+      const { sessionId } = await stagehand.init();
+      setSessionId(sessionId);
+
+      // Navigate using direct browser connection
+      await stagehand.page.goto("https://example.com");
+
+      // Actions use Wallcrawler API for LLM processing
+      await stagehand.page.act("click the search button");
+
+      // Extract data using Wallcrawler API (added instruction for reliability)
+      const data = await stagehand.page.extract({
+        instruction: "Extract the page title and meta description",
+        schema: z.object({
+          title: z.string(),
+          description: z.string(),
+        }),
+      });
+
+      console.log(data);
+    } catch (error) {
+      console.error("Error in example:", error);
+    } finally {
+      await stagehand.close();  // Clean up session
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={runExample}>Run Example</button>
+      {sessionId && (
+        <BrowserViewer
+          sessionId={sessionId}
+          width={1280}
+          height={720}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+5. **Run the script**:
+
+```bash
+pnpm run start
+```
+
+This quickstart uses Stagehand with Wallcrawler provider for remote browser control. For local mode, set env: 'LOCAL'."

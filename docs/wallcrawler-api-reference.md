@@ -148,15 +148,20 @@ x-stream-response: true
 }
 ```
 
-**Stream Result:**
+**Arguments (in JSON body):**
 
-```json
-{
-  "success": true,
-  "message": "Action completed successfully",
-  "action": "Clicked submit button"
-}
-```
+- action (string, required): Describes the action to perform
+- modelName (string, optional): Specifies the model to use
+- variables (object, optional): Variables for the action (e.g., {username: 'user'})
+- iframes (boolean, optional): Set true if element is in iframe
+- domSettleTimeoutMs (number, optional): DOM settle timeout in ms
+- timeoutMs (number, optional): Action timeout in ms
+
+**Returns (in stream):**
+
+- success (boolean): If action completed successfully
+- message (string): Details about execution
+- action (string): The action performed
 
 #### Extract Data
 
@@ -189,6 +194,17 @@ x-stream-response: true
 }
 ```
 
+**Arguments (in JSON body):**
+
+- instruction (string, required): Instructions for extraction
+- schemaDefinition (object, required): JSON schema for data structure
+- modelName (string, optional)
+- domSettleTimeoutMs (number, optional)
+- selector (string, optional): CSS selector to scope extraction
+- iframes (boolean, optional)
+
+**Returns (in stream):** Structured data matching the schema
+
 #### Observe Elements
 
 ```http
@@ -206,19 +222,20 @@ x-stream-response: true
 }
 ```
 
-**Stream Result:**
+**Arguments (in JSON body):**
 
-```json
-[
-  {
-    "selector": "#submit-btn",
-    "description": "Blue submit button",
-    "backendNodeId": 123,
-    "method": "click",
-    "arguments": []
-  }
-]
-```
+- instruction (string, optional): Specific observation instructions
+- returnAction (boolean, optional): Include suggested action (default: true)
+- iframes (boolean, optional)
+- modelName (string, optional)
+- domSettleTimeoutMs (number, optional)
+
+**Returns (in stream):** Array of objects with:
+
+- selector (string)
+- description (string)
+- method (string, if returnAction true)
+- arguments (array, if returnAction true)
 
 #### Navigate
 
@@ -345,12 +362,17 @@ x-stream-response: true
 
 ## SDK Integration
 
-The Wallcrawler SDK should provide a `request` method that matches this interface:
+The Wallcrawler SDK provides basic session management for direct browser mode. For API mode, Stagehand uses `StagehandAPI` directly with `provider="wallcrawler"` configuration:
 
 ```typescript
-class Sessions {
-  async request(path: string, options?: RequestOptions): Promise<Response>;
-}
-```
+// API Mode (primary) - No SDK needed
+const apiClient = new StagehandAPI({
+  apiKey: 'wc_...',
+  projectId: 'proj_123',
+  provider: 'wallcrawler',
+});
 
-This allows the Stagehand API client to route requests through the SDK seamlessly.
+// Direct Mode (fallback) - Uses SDK for session management only
+const wallcrawler = new Wallcrawler({ apiKey: 'wc_...' });
+const session = await wallcrawler.sessions.create({ projectId: 'proj_123' });
+```
