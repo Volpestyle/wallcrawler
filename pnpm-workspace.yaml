@@ -1,7 +1,3 @@
 packages:
+  - 'packages/*'
   - 'packages/stagehand'
-  - 'packages/infra/*'
-  - 'packages/components'
-  - 'packages/demos/*'
-  - 'packages/utils'
-  - 'packages/eslint-config'
