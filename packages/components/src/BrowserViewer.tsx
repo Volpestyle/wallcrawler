@@ -1,6 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Wallcrawler } from '@wallcrawler/sdk';
-import { StreamData } from '@wallcrawler/util-ts';
+
+interface StreamData {
+  type: 'frame' | 'pause' | 'error';
+  data?: string;
+  reason?: string;
+}
 
 interface BrowserViewerProps {
   sessionId: string;
