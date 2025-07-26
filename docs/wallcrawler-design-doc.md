@@ -63,9 +63,15 @@ wallcrawler/
 
 ## Stagehand Integration Strategy
 
-**Key Insight**: Stagehand already supports provider configuration through `StagehandAPI`. No extensive modifications needed.
+**Key Insight**: We extended Stagehand's `StagehandAPI` to support custom providers, adding 'wallcrawler' with minimal modifications to enable compatibility without altering core logic.
 
-### API Mode (Primary)
+### Direct vs API Modes
+
+- **API Mode** (default): API mode offloads LLM inference and browser commands to Wallcrawler's remote API via HTTP requests, allowing seamless integration without local browser management. This is the primary mode for production use, where Stagehand acts as a client sending instructions and receiving streamed results.
+
+- **Direct Mode** (usingAPI: false): Similar to local mode in that commands are executed locally via Playwright, but uses Wallcrawler's SDK to manage remote browser sessions and connect via CDP. This provides remote browser benefits (e.g., scalability, anti-detection) without full API offloading. It's not identical to purely local mode, as the browser runs in the cloud—ideal for hybrid setups.
+
+For purely local execution (no remote infra), use env: "LOCAL".
 
 Stagehand uses `StagehandAPI` with `provider="wallcrawler"` configuration:
 
@@ -197,16 +203,57 @@ sequenceDiagram
     StagehandAPI->>Client: Return results
 ```
 
+### 3. Session Flow (Direct Mode)
+
+In direct mode (usingAPI: false), Stagehand uses the SDK for session management and connects directly via CDP for browser control, bypassing the API for operations. This is similar for Browserbase (using their SDK), but shown here for Wallcrawler.
+
+```mermaid
+sequenceDiagram
+    participant Client as Client (Stagehand)
+    participant SDK as Wallcrawler SDK
+    participant API as API Gateway
+    participant Lambda as Lambda
+    participant ECS as ECS Container
+    participant Chrome as Chrome Browser
+
+    Client->>SDK: init() → sessions.create()
+    SDK->>API: POST /start-session {projectId}
+    API->>Lambda: Invoke StartSessionLambda
+    Lambda->>ECS: Launch Fargate task
+    Lambda->>SDK: Return {id, connectUrl}
+
+    Client->>ECS: Connect via CDP (connectUrl)
+    Client->>Chrome: Execute commands directly via CDP (e.g., page.goto, local act/extract)
+
+    Client->>SDK: sessions.end() when done
+```
+
 ## Package Specifications
 
-### 1. Wallcrawler SDK (`packages/sdk`)
+### 1. Wallcrawler SDK (`packages/sdk-node`)
 
-**Purpose**: Minimal session management mirroring Browserbase SDK.
+We forked the Browserbase SDK and extended it to create the Wallcrawler SDK. This approach ensures compatibility with Stagehand while customizing for Wallcrawler's API endpoints, authentication, and session management. The SDK handles essential operations like session creation, retrieval, debugging, and termination, making it suitable for both API mode and direct (CDP) mode in Stagehand.
 
-**Core Methods**:
+**Approach**:
+
+- **Forked Structure**: Based on Browserbase's SDK, with core logic in `src/core.ts`, errors in `src/error.ts`, and resources in `src/resources/`.
+- **Consolidated Implementation**: Class definitions for `Browserbase` and `Wallcrawler` are consolidated in `src/index.ts`, extending an abstract `BrowserClient` from `src/base.ts`. This eliminates duplication by centralizing shared logic (e.g., API requests, headers, timeouts) in the base class, with service-specific overrides for base URL, auth headers, and environment variables.
+- **Key Customizations**:
+  - Uses Wallcrawler-specific headers (e.g., `x-wc-api-key`) and base URL (`https://api.wallcrawler.dev/v1`).
+  - Supports dual compatibility: Can instantiate either `Browserbase` or `Wallcrawler` clients.
+  - Removed redundant files (`browserbase.ts`, `wallcrawler.ts`) for a single source of truth in `index.ts`.
+- **TypeScript-Focused**: Full type safety with no `any` or `unknown`, including detailed types for sessions, contexts, extensions, and projects.
+- **Integration with Stagehand**: Used in Stagehand's `getBrowser()` for env: 'WALLCRAWLER' in direct mode, enabling remote session creation and CDP connection without full API dependency.
+
+**Core Methods** (via `Wallcrawler` class):
 
 ```typescript
-class Sessions {
+class Wallcrawler {
+  sessions: Sessions;
+  // Other resources: contexts, extensions, projects
+}
+
+interface Sessions {
   create(params: SessionCreateParams): Promise<SessionCreateResponse>;
   retrieve(sessionId: string): Promise<Session>;
   debug(sessionId: string): Promise<SessionDebugResponse>;
@@ -214,20 +261,17 @@ class Sessions {
 }
 ```
 
-**Usage**:
+**Usage Example**:
 
 ```typescript
-const wallcrawler = new Wallcrawler({
-  apiKey: process.env.WALLCRAWLER_API_KEY,
-});
+import { Wallcrawler } from '@wallcrawler/sdk';
 
-const session = await wallcrawler.sessions.create({
-  projectId: 'proj_123',
-});
-
-// Connect to browser via CDP
-const browser = await chromium.connectOverCDP(session.connectUrl);
+const wallcrawler = new Wallcrawler({ apiKey: 'wc_...' });
+const session = await wallcrawler.sessions.create({ projectId: 'proj_123' });
+// Connect via CDP: chromium.connectOverCDP(session.connectUrl)
 ```
+
+This forked and consolidated approach reduces maintenance overhead while ensuring seamless integration with Stagehand and full support for Wallcrawler's infrastructure.
 
 ### 2. Components Package (`packages/components`)
 
@@ -378,77 +422,3 @@ WALLCRAWLER_API_KEY=your_wallcrawler_api_key
 WALLCRAWLER_PROJECT_ID=your_wallcrawler_project_id
 ANTHROPIC_API_KEY=your_anthropic_api_key  # Or appropriate model key
 ```
-
-4. **Update the script** (e.g., in index.ts) to use Wallcrawler:
-
-```typescript
-// packages/client-nextjs/src/pages/index.tsx
-import { Stagehand } from '@browserbasehq/stagehand';  // Or use local packages/stagehand if developing in monorepo
-import { BrowserViewer } from '@wallcrawler/components';
-import { z } from 'zod';
-import { useState } from 'react';
-import dotenv from 'dotenv';
-
-dotenv.config();  // Load env vars (in production, use process.env directly)
-
-export default function Demo() {
-  const [sessionId, setSessionId] = useState<string>();
-
-  const runExample = async () => {
-    const stagehand = new Stagehand({
-      env: "WALLCRAWLER",
-      apiKey: process.env.WALLCRAWLER_API_KEY,
-      projectId: process.env.WALLCRAWLER_PROJECT_ID,
-      modelName: 'anthropic/claude-3-5-sonnet',  // Specify model
-      modelClientOptions: { apiKey: process.env.ANTHROPIC_API_KEY },  // Model API key
-    });
-
-    try {
-      const { sessionId } = await stagehand.init();
-      setSessionId(sessionId);
-
-      // Navigate using direct browser connection
-      await stagehand.page.goto("https://example.com");
-
-      // Actions use Wallcrawler API for LLM processing
-      await stagehand.page.act("click the search button");
-
-      // Extract data using Wallcrawler API (added instruction for reliability)
-      const data = await stagehand.page.extract({
-        instruction: "Extract the page title and meta description",
-        schema: z.object({
-          title: z.string(),
-          description: z.string(),
-        }),
-      });
-
-      console.log(data);
-    } catch (error) {
-      console.error("Error in example:", error);
-    } finally {
-      await stagehand.close();  // Clean up session
-    }
-  };
-
-  return (
-    <div>
-      <button onClick={runExample}>Run Example</button>
-      {sessionId && (
-        <BrowserViewer
-          sessionId={sessionId}
-          width={1280}
-          height={720}
-        />
-      )}
-    </div>
-  );
-}
-```
-
-5. **Run the script**:
-
-```bash
-pnpm run start
-```
-
-This quickstart uses Stagehand with Wallcrawler provider for remote browser control. For local mode, set env: 'LOCAL'."

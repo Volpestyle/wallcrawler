@@ -1,3 +1,6 @@
 [submodule "packages/stagehand"]
 	path = packages/stagehand
 	url = https://github.com/Volpestyle/stagehand.git
+[submodule "packages/sdk-node"]
+	path = packages/sdk-node
+	url = https://github.com/Volpestyle/sdk-node.git
