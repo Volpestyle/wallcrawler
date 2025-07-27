@@ -8,18 +8,21 @@ Wallcrawler provides a scalable, cloud-native solution for remote browser automa
 
 ### Direct Mode Support
 
-**Direct Mode** allows Stagehand clients to connect directly to remote Chrome browsers via WebSocket (Chrome DevTools Protocol). This mode provides:
+**Direct Mode** allows Stagehand clients to connect securely to remote Chrome browsers via an authenticated CDP proxy. This mode provides:
 
 - **Privacy**: LLM inference happens on client-side
+- **Enterprise Security**: JWT-authenticated CDP access with rate limiting
 - **Control**: Full customization of prompts and models
-- **Performance**: Direct CDP connection to browsers
+- **Performance**: Direct CDP connection through secure proxy
+- **Monitoring**: Comprehensive metrics and error tracking
 - **Flexibility**: Works with any LLM provider
 
 The infrastructure uses:
 
-- **ECS tasks with public IPs** for direct CDP access
-- **Security group allowing port 9222** from any IP
-- **Simple setup** for development and production
+- **ECS tasks with public IPs** for authenticated CDP proxy access
+- **Chrome on localhost** (127.0.0.1:9222) for security
+- **Authenticated CDP proxy** (port 9223) with JWT validation
+- **Enterprise features**: Rate limiting, circuit breaker, monitoring
 - **Deploy**: `cdk deploy`
 
 ### Core Components
@@ -42,6 +45,7 @@ The infrastructure deploys the following endpoints:
 - `POST /sessions/start` - Start session (Stagehand compatible)
 - `GET /sessions/{id}/retrieve` - Get session information
 - `GET /sessions/{id}/debug` - Get debug/CDP URL for Direct Mode
+- `POST /sessions/{id}/cdp-url` - Generate signed CDP URLs (Enterprise security)
 - `POST /sessions/{id}/end` - Terminate session
 
 #### Browser Operations (API Mode - Streaming)
@@ -73,6 +77,10 @@ npm install
 
 ### 2. Deploy Infrastructure
 
+🔐 **Automatic JWT Key Management**: The CDK automatically generates and stores a secure JWT signing key in AWS Secrets Manager. No manual key generation required!
+
+#### Basic Deployment
+
 ```bash
 cdk bootstrap  # First time only
 cdk deploy
@@ -84,33 +92,142 @@ cdk deploy
 cdk deploy -c domainName=api.yourdomain.com
 ```
 
-### 3. Configure Stagehand Client
+#### With Automatic Key Rotation (Recommended for Production)
+
+```bash
+# Enable 30-day automatic key rotation
+cdk deploy -c enableJwtRotation=true
+```
+
+#### Development Override (Manual Key)
+
+```bash
+# For development/testing only - override with manual key
+export DEV_JWT_KEY=$(openssl rand -base64 32)
+cdk deploy -c jwtSigningKey="$DEV_JWT_KEY"
+```
+
+⚠️ **Security Features:**
+
+- 🔐 **Automatically generated 64-character secure key**
+- 🔒 **Stored in AWS Secrets Manager (encrypted at rest)**
+- 🔄 **Optional 30-day automatic rotation**
+- 🚫 **Never exposed in environment variables or logs**
+- 🔑 **Proper IAM permissions for Lambda and ECS access**
+
+### 4. Configure Stagehand Client
 
 After deployment, use the stack outputs to configure your Stagehand client:
 
 ```typescript
-// For Direct Mode
+// For Direct Mode (Enterprise Security)
 const stagehand = new Stagehand({
-  env: 'WALLCRAWLER',
-  useAPI: false, // Direct Mode
-  apiKey: process.env.WALLCRAWLER_API_KEY,
-  projectId: process.env.WALLCRAWLER_PROJECT_ID,
+  env: 'LOCAL', // Use local CDP connection
 });
 
-await stagehand.init(); // Creates session, returns CDP URL
-await stagehand.page.goto('https://example.com');
-await stagehand.page.act('click button'); // Local LLM + Direct CDP
+// 1. Create session
+const sessionResponse = await fetch('/sessions/start', {
+  method: 'POST',
+  headers: { 'x-wc-api-key': process.env.WALLCRAWLER_API_KEY },
+  body: JSON.stringify({ modelName: 'gpt-4' }),
+});
+const { sessionId } = await sessionResponse.json();
+
+// 2. Get signed CDP URL
+const cdpResponse = await fetch(`/sessions/${sessionId}/cdp-url`, {
+  method: 'POST',
+  headers: { 'x-wc-api-key': process.env.WALLCRAWLER_API_KEY },
+  body: JSON.stringify({ scope: 'cdp-direct' }),
+});
+const { cdpUrl } = await cdpResponse.json();
+
+// 3. Connect to authenticated CDP proxy
+const page = await stagehand.page(cdpUrl);
+await page.goto('https://example.com');
+await page.act('click button'); // Local LLM + Secure CDP
 ```
 
-### 4. Stack Outputs
+### 5. Stack Outputs
 
 The deployment provides these important outputs:
 
 - **APIGatewayURL**: Base URL for API endpoints
-- **DirectModeSupported**: Confirmation of Direct Mode support
+- **DirectModeSupported**: Direct Mode with enterprise security features
+- **SecurityModel**: Chrome localhost-only + authenticated proxy configuration
 - **ECSClusterName**: ECS cluster for browser containers
 - **RedisEndpoint**: Session state storage
 - **ApiKeyId**: API key for authentication
+- **WebSocketAPIURL**: WebSocket endpoint for screencast streaming
+- **JWTSigningSecretArn**: AWS Secrets Manager ARN containing the JWT signing key
+
+## Security Configuration
+
+### Automatic JWT Signing Key Management
+
+🔐 **Wallcrawler automatically handles JWT signing key securitys!**
+
+#### Default Behavior (Recommended)
+
+```bash
+# Deploys with auto-generated secure key in Secrets Manager
+cdk deploy
+```
+
+**What happens automatically:**
+
+- 📝 **Generates**: 64-character cryptographically secure key
+- 🔒 **Stores**: Key encrypted in AWS Secrets Manager
+- 🔑 **Configures**: Proper IAM permissions for services
+- 🚫 **Protects**: Key never appears in logs or environment variables
+
+#### Enhanced Security (Production)
+
+```bash
+# Enable automatic 30-day rotation
+cdk deploy -c enableJwtRotation=true
+```
+
+**Additional security features:**
+
+- 🔄 **Automatic rotation** every 30 days
+- ⚡ **Zero-downtime** key rotation
+- 📊 **CloudWatch monitoring** of rotation events
+- 🔔 **SNS notifications** on rotation (optional)
+
+### Environment-Specific Deployments
+
+#### Multiple Environments
+
+```bash
+# Development (auto-generated key)
+cdk deploy WallcrawlerStack-dev
+
+# Staging (auto-generated key)
+cdk deploy WallcrawlerStack-staging
+
+# Production (auto-generated key + rotation)
+cdk deploy WallcrawlerStack-prod \
+  -c enableJwtRotation=true \
+  -c domainName=api.wallcrawler.com
+```
+
+#### CI/CD Pipeline
+
+```bash
+# Simplified CI/CD - no manual key management needed!
+cdk deploy --require-approval never \
+  -c enableJwtRotation=true \
+  -c environment=${ENVIRONMENT}
+```
+
+#### Manual Key Override (Development Only)
+
+```bash
+# Only for development/testing - not recommended for production
+export DEV_JWT_KEY=$(openssl rand -base64 32)
+cdk deploy WallcrawlerStack-dev \
+  -c jwtSigningKey="$DEV_JWT_KEY"
+```
 
 ## Configuration Options
 
@@ -147,9 +264,11 @@ cdk deploy -c environment=production
 
 ### Common Issues
 
-1. **CDP Connection Failed**: Check security groups allow port 9222
-2. **Task IP Resolution**: Verify EC2 permissions for Lambda
-3. **Session Creation**: Ensure ECS cluster and task definition are healthy
+1. **CDP Connection Failed**: Check security groups allow port 9223 (CDP proxy)
+2. **JWT Authentication Failed**: Verify JWT signing key is configured correctly
+3. **Task IP Resolution**: Verify EC2 permissions for Lambda
+4. **Session Creation**: Ensure ECS cluster and task definition are healthy
+5. **Signed URL Expired**: JWT tokens expire after 10 minutes, generate new ones
 
 ## Required AWS Permissions
 
@@ -221,6 +340,7 @@ Outputs:
 WallcrawlerStack.APIGatewayURL = https://xxxxxxxxxx.execute-api.us-west-2.amazonaws.com/prod/
 WallcrawlerStack.WebSocketAPIURL = wss://xxxxxxxxxx.execute-api.us-west-2.amazonaws.com/prod/
 WallcrawlerStack.ApiKeyId = xxxxxxxxxxxx
+WallcrawlerStack.JWTSigningSecretArn = arn:aws:secretsmanager:us-west-2:123456789012:secret:WallcrawlerStack-JWTSigningKey-xxxxxx
 WallcrawlerStack.RedisEndpoint = wallcrawler-redis.xxxxxx.cache.amazonaws.com
 WallcrawlerStack.ECSClusterName = wallcrawler-browsers
 WallcrawlerStack.VPCId = vpc-xxxxxxxxx
@@ -271,6 +391,45 @@ const stagehand = new Stagehand({
   projectId: 'your-project-id',
   baseURL: 'https://your-api-gateway-url/prod',
 });
+```
+
+## Quick Reference
+
+### Essential Commands
+
+```bash
+# 1. Deploy with automatic secure key generation
+cdk deploy
+
+# 2. Deploy production with key rotation
+cdk deploy -c enableJwtRotation=true -c domainName=api.yourdomain.com
+
+# 3. Get API key value
+aws apigateway get-api-key --api-key <ApiKeyId> --include-value
+
+# 4. Create session and get signed CDP URL
+curl -X POST https://your-api-gateway-url/sessions/start \
+  -H "x-wc-api-key: your-api-key" \
+  -d '{"modelName":"gpt-4"}'
+
+curl -X POST https://your-api-gateway-url/sessions/<session-id>/cdp-url \
+  -H "x-wc-api-key: your-api-key" \
+  -d '{"scope":"cdp-direct"}'
+
+# 5. View JWT secret in AWS console
+aws secretsmanager get-secret-value --secret-id <JWTSigningSecretArn-from-stack-output>
+```
+
+### Key Ports
+
+- **9222**: Chrome CDP (localhost only)
+- **9223**: Authenticated CDP proxy (public)
+- **6379**: Redis (VPC internal)
+
+### Security Model
+
+```
+Client → Port 9223 (CDP Proxy) → JWT Validation → Port 9222 (Chrome)
 ```
 
 ## Monitoring and Logging

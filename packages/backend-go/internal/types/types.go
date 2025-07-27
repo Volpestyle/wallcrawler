@@ -45,6 +45,18 @@ type StartSessionResponse struct {
 	Available bool   `json:"available"`
 }
 
+// Session status enum values
+const (
+	SessionStatusCreating     = "CREATING"
+	SessionStatusProvisioning = "PROVISIONING"
+	SessionStatusStarting     = "STARTING"
+	SessionStatusReady        = "READY"
+	SessionStatusActive       = "ACTIVE"
+	SessionStatusTerminating  = "TERMINATING"
+	SessionStatusStopped      = "STOPPED"
+	SessionStatusFailed       = "FAILED"
+)
+
 // Session info types
 type Session struct {
 	ID         string `json:"id"`
@@ -165,17 +177,62 @@ type LogMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// Session state for Redis
+// Enhanced session state for Redis matching design doc
 type SessionState struct {
-	ID          string            `json:"id"`
-	Status      string            `json:"status"`
-	ProjectID   string            `json:"projectId"`
-	ConnectURL  string            `json:"connectUrl"`
-	ECSTaskARN  string            `json:"ecsTaskArn,omitempty"`
+	// Core fields
+	ID         string `json:"id"`
+	Status     string `json:"status"`
+	ProjectID  string `json:"projectId"`
+	ConnectURL string `json:"connectUrl,omitempty"`
+	ECSTaskARN string `json:"ecsTaskArn,omitempty"`
+	PublicIP   string `json:"publicIP,omitempty"`
+	
+	// User-defined data
 	UserMetadata map[string]string `json:"userMetadata,omitempty"`
 	ModelConfig  *ModelConfig      `json:"modelConfig,omitempty"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	UpdatedAt   time.Time         `json:"updatedAt"`
+
+	// EventBridge Integration
+	EventHistory         []SessionEvent `json:"eventHistory,omitempty"`
+	LastEventTimestamp   *time.Time     `json:"lastEventTimestamp,omitempty"`
+	RetryCount           int            `json:"retryCount,omitempty"`
+
+	// Performance Tracking
+	CreatedAt             time.Time  `json:"createdAt"`
+	ProvisioningStartedAt *time.Time `json:"provisioningStartedAt,omitempty"`
+	ReadyAt               *time.Time `json:"readyAt,omitempty"`
+	LastActiveAt          *time.Time `json:"lastActiveAt,omitempty"`
+	TerminatedAt          *time.Time `json:"terminatedAt,omitempty"`
+	UpdatedAt             time.Time  `json:"updatedAt"`
+
+	// Resource Management
+	ResourceLimits *ResourceLimits `json:"resourceLimits,omitempty"`
+	BillingInfo    *BillingInfo    `json:"billingInfo,omitempty"`
+}
+
+// SessionEvent tracks EventBridge events for complete audit trail
+type SessionEvent struct {
+	EventType     string                 `json:"eventType"`
+	Timestamp     time.Time              `json:"timestamp"`
+	Source        string                 `json:"source"`
+	Detail        map[string]interface{} `json:"detail"`
+	CorrelationID string                 `json:"correlationId,omitempty"`
+}
+
+// ResourceLimits defines session resource constraints
+type ResourceLimits struct {
+	MaxCPU      int `json:"maxCPU"`           // Maximum CPU allocation
+	MaxMemory   int `json:"maxMemory"`        // Maximum memory (MB)
+	MaxDuration int `json:"maxDuration"`      // Maximum session duration (seconds)
+	MaxActions  int `json:"maxActions"`       // Maximum actions per session
+}
+
+// BillingInfo tracks usage for cost allocation
+type BillingInfo struct {
+	CostCenter     string    `json:"costCenter,omitempty"`
+	CPUSeconds     float64   `json:"cpuSeconds"`
+	MemoryMBHours  float64   `json:"memoryMBHours"`
+	ActionsCount   int       `json:"actionsCount"`
+	LastBillingAt  time.Time `json:"lastBillingAt"`
 }
 
 type ModelConfig struct {

@@ -11,6 +11,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
 export class WallcrawlerStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -19,6 +20,61 @@ export class WallcrawlerStack extends cdk.Stack {
         // Environment variables from context
         const environment = this.node.tryGetContext('environment') || 'development';
         const domainName = this.node.tryGetContext('domainName');
+
+        // JWT signing key for CDP authentication
+        // Automatically generated and stored in AWS Secrets Manager
+        const jwtSigningSecret = new secretsmanager.Secret(this, 'JWTSigningKey', {
+            description: 'JWT signing key for Wallcrawler CDP authentication',
+            generateSecretString: {
+                secretStringTemplate: JSON.stringify({ algorithm: 'HS256' }),
+                generateStringKey: 'signingKey',
+                excludeCharacters: '"@/\\\'',
+                includeSpace: false,
+                requireEachIncludedType: true,
+                passwordLength: 64,
+            },
+        });
+
+        // Optional automatic rotation (enabled by context parameter)
+        const enableRotation = this.node.tryGetContext('enableJwtRotation') === 'true';
+        if (enableRotation) {
+            new secretsmanager.RotationSchedule(this, 'JWTKeyRotation', {
+                secret: jwtSigningSecret,
+                rotationLambda: new lambda.Function(this, 'JWTRotationFunction', {
+                    runtime: lambda.Runtime.NODEJS_18_X,
+                    handler: 'index.handler',
+                    code: lambda.Code.fromInline(`
+                        const AWS = require('aws-sdk');
+                        const crypto = require('crypto');
+                        
+                        exports.handler = async (event) => {
+                            const secretsManager = new AWS.SecretsManager();
+                            
+                            // Generate new 64-character base64 key
+                            const newKey = crypto.randomBytes(48).toString('base64');
+                            
+                            const secretValue = {
+                                algorithm: 'HS256',
+                                signingKey: newKey
+                            };
+                            
+                            await secretsManager.updateSecret({
+                                SecretId: event.Step === 'createSecret' ? event.SecretId : event.SecretArn,
+                                SecretString: JSON.stringify(secretValue)
+                            }).promise();
+                            
+                            return { success: true };
+                        };
+                    `),
+                    timeout: cdk.Duration.minutes(1),
+                }),
+                automaticallyAfter: cdk.Duration.days(30), // Rotate every 30 days
+            });
+        }
+
+        // Allow overriding with context for development/testing
+        const manualJwtKey = this.node.tryGetContext('jwtSigningKey');
+        const jwtSigningKey = manualJwtKey || jwtSigningSecret.secretValue.unsafeUnwrap();
 
         // VPC for ECS and Redis
         const vpc = new ec2.Vpc(this, 'WallcrawlerVPC', {
@@ -73,19 +129,22 @@ export class WallcrawlerStack extends cdk.Stack {
             'ECS access to Redis'
         );
 
-        // Allow Lambda to access ECS tasks
+        // Allow Lambda to access ECS tasks (CDP proxy)
         ecsSecurityGroup.addIngressRule(
             lambdaSecurityGroup,
-            ec2.Port.tcp(9222),
-            'Lambda access to Chrome DevTools Protocol'
+            ec2.Port.tcp(9223),
+            'Lambda access to CDP Proxy'
         );
 
-        // Allow external access to CDP port for Direct Mode
+        // Allow external access to CDP Proxy port for authenticated Direct Mode
         ecsSecurityGroup.addIngressRule(
             ec2.Peer.anyIpv4(),
-            ec2.Port.tcp(9222),
-            'External access to Chrome DevTools Protocol for Direct Mode'
+            ec2.Port.tcp(9223),
+            'External access to authenticated CDP Proxy for Direct Mode'
         );
+
+        // Chrome CDP (port 9222) is only accessible from localhost for security
+        // External access goes through the authenticated CDP proxy on port 9223
 
         // ElastiCache Redis cluster for session state
         const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
@@ -128,6 +187,16 @@ export class WallcrawlerStack extends cdk.Stack {
             resources: ['*'], // Will be scoped after WebSocket API is created
         }));
 
+        // Add permissions for ECS task to read JWT signing key from Secrets Manager
+        browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'secretsmanager:GetSecretValue',
+                'secretsmanager:DescribeSecret',
+            ],
+            resources: [jwtSigningSecret.secretArn],
+        }));
+
         // Our Go controller container (includes Chrome with remote debugging)
         const controllerContainer = browserTaskDefinition.addContainer('controller', {
             image: ecs.ContainerImage.fromAsset('../../backend-go', {
@@ -141,6 +210,11 @@ export class WallcrawlerStack extends cdk.Stack {
                     protocol: ecs.Protocol.TCP,
                     name: 'chrome-cdp',
                 },
+                {
+                    containerPort: 9223,
+                    protocol: ecs.Protocol.TCP,
+                    name: 'cdp-proxy',
+                },
             ],
             environment: {
                 REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:6379`,
@@ -148,6 +222,8 @@ export class WallcrawlerStack extends cdk.Stack {
                 ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
                 AWS_REGION: this.region,
                 CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
+                WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
+                CDP_PROXY_PORT: '9223',
                 // WebSocket endpoint will be added after WebSocket API is created
             },
             logging: ecs.LogDrivers.awsLogs({
@@ -222,6 +298,14 @@ export class WallcrawlerStack extends cdk.Stack {
                             ],
                             resources: ['*'],
                         }),
+                        new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: [
+                                'secretsmanager:GetSecretValue',
+                                'secretsmanager:DescribeSecret',
+                            ],
+                            resources: [jwtSigningSecret.secretArn],
+                        }),
                     ],
                 }),
             },
@@ -234,6 +318,8 @@ export class WallcrawlerStack extends cdk.Stack {
             ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
             AWS_REGION: this.region,
             CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
+            WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
+            CDP_PROXY_PORT: '9223',
         };
 
         // Factory function for consistent Lambda configuration
@@ -303,6 +389,12 @@ export class WallcrawlerStack extends cdk.Stack {
             'DebugSessionLambda',
             'debug',
             'Get session debug/CDP URL'
+        );
+
+        const cdpUrlLambda = createLambdaFunction(
+            'CDPUrlLambda',
+            'cdp-url',
+            'Generate signed CDP URLs for authenticated access'
         );
 
         const endSessionLambda = createLambdaFunction(
@@ -434,6 +526,14 @@ export class WallcrawlerStack extends cdk.Stack {
             { apiKeyRequired: true }
         );
 
+        sessionResource.addResource('cdp-url').addMethod('POST',
+            new apigateway.LambdaIntegration(cdpUrlLambda, { proxy: true }),
+            {
+                apiKeyRequired: true,
+                requestValidator,
+            }
+        );
+
         sessionResource.addResource('end').addMethod('POST',
             new apigateway.LambdaIntegration(endSessionLambda, { proxy: true }),
             { apiKeyRequired: true }
@@ -544,7 +644,7 @@ export class WallcrawlerStack extends cdk.Stack {
         // Update all Lambda functions to include WebSocket endpoint
         [startSessionLambda, stagehandStartLambda, actLambda, extractLambda, observeLambda,
             navigateLambda, agentExecuteLambda, retrieveSessionLambda, debugSessionLambda,
-            endSessionLambda, screencastLambda].forEach(lambdaFn => {
+            cdpUrlLambda, endSessionLambda, screencastLambda].forEach(lambdaFn => {
                 lambdaFn.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketEndpoint);
             });
 
@@ -639,13 +739,23 @@ export class WallcrawlerStack extends cdk.Stack {
         });
 
         new cdk.CfnOutput(this, 'DirectModeSupported', {
-            description: 'Whether Direct Mode is supported with public IP access',
-            value: 'Standard (Public IP)',
+            description: 'Direct Mode with enterprise security (JWT authenticated CDP proxy)',
+            value: 'Enterprise (Authenticated CDP Proxy on port 9223)',
+        });
+
+        new cdk.CfnOutput(this, 'SecurityModel', {
+            description: 'Security configuration for CDP access',
+            value: 'Chrome localhost-only (9222) + Authenticated Proxy (9223)',
         });
 
         new cdk.CfnOutput(this, 'TaskDefinitionArn', {
             description: 'ECS Task Definition ARN for browser containers',
             value: browserTaskDefinition.taskDefinitionArn,
+        });
+
+        new cdk.CfnOutput(this, 'JWTSigningSecretArn', {
+            description: 'AWS Secrets Manager ARN for JWT signing key',
+            value: jwtSigningSecret.secretArn,
         });
     }
 } 

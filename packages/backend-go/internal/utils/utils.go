@@ -90,15 +90,48 @@ func GetSession(ctx context.Context, rdb *redis.Client, sessionID string) (*type
 	return &sessionState, nil
 }
 
-// UpdateSessionStatus updates session status in Redis
+// UpdateSessionStatus updates session status in Redis with proper lifecycle tracking
 func UpdateSessionStatus(ctx context.Context, rdb *redis.Client, sessionID, status string) error {
 	sessionState, err := GetSession(ctx, rdb, sessionID)
 	if err != nil {
 		return err
 	}
 
+	// Update status with proper lifecycle timing
+	previousStatus := sessionState.Status
 	sessionState.Status = status
 	sessionState.UpdatedAt = time.Now()
+
+	// Track specific lifecycle timestamps
+	now := time.Now()
+	switch status {
+	case types.SessionStatusProvisioning:
+		sessionState.ProvisioningStartedAt = &now
+	case types.SessionStatusReady:
+		sessionState.ReadyAt = &now
+	case types.SessionStatusActive:
+		sessionState.LastActiveAt = &now
+	case types.SessionStatusTerminating, types.SessionStatusStopped, types.SessionStatusFailed:
+		sessionState.TerminatedAt = &now
+	}
+
+	// Add event to history
+	sessionEvent := types.SessionEvent{
+		EventType:     "StatusChanged",
+		Timestamp:     now,
+		Source:        "wallcrawler.utils",
+		Detail: map[string]interface{}{
+			"previousStatus": previousStatus,
+			"newStatus":      status,
+			"sessionId":      sessionID,
+		},
+	}
+	
+	if sessionState.EventHistory == nil {
+		sessionState.EventHistory = []types.SessionEvent{}
+	}
+	sessionState.EventHistory = append(sessionState.EventHistory, sessionEvent)
+	sessionState.LastEventTimestamp = &now
 
 	return StoreSession(ctx, rdb, sessionState)
 }
@@ -449,4 +482,115 @@ func BroadcastToSessionViewers(ctx context.Context, rdb *redis.Client, sessionID
 func GetActiveViewerCount(ctx context.Context, rdb *redis.Client, sessionID string) (int64, error) {
 	viewersKey := fmt.Sprintf("session:%s:viewers", sessionID)
 	return rdb.SCard(ctx, viewersKey).Result()
+}
+
+// AddSessionEvent adds an event to session history and publishes to EventBridge
+func AddSessionEvent(ctx context.Context, rdb *redis.Client, sessionID, eventType, source string, detail map[string]interface{}) error {
+	sessionState, err := GetSession(ctx, rdb, sessionID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	sessionEvent := types.SessionEvent{
+		EventType: eventType,
+		Timestamp: now,
+		Source:    source,
+		Detail:    detail,
+	}
+
+	if sessionState.EventHistory == nil {
+		sessionState.EventHistory = []types.SessionEvent{}
+	}
+	sessionState.EventHistory = append(sessionState.EventHistory, sessionEvent)
+	sessionState.LastEventTimestamp = &now
+	sessionState.UpdatedAt = now
+
+	// Store updated session state
+	if err := StoreSession(ctx, rdb, sessionState); err != nil {
+		return err
+	}
+
+	// Publish to EventBridge
+	return PublishEvent(ctx, sessionID, eventType, detail)
+}
+
+// CreateSessionWithDefaults creates a new session with default resource limits and billing info
+func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.ModelConfig) *types.SessionState {
+	now := time.Now()
+	
+	// Default resource limits
+	defaultLimits := &types.ResourceLimits{
+		MaxCPU:      1024,      // 1 vCPU
+		MaxMemory:   2048,      // 2GB
+		MaxDuration: 3600,      // 1 hour
+		MaxActions:  1000,      // 1000 actions
+	}
+
+	// Initialize billing info
+	billingInfo := &types.BillingInfo{
+		CPUSeconds:    0,
+		MemoryMBHours: 0,
+		ActionsCount:  0,
+		LastBillingAt: now,
+	}
+
+	return &types.SessionState{
+		ID:             sessionID,
+		Status:         types.SessionStatusCreating,
+		ProjectID:      projectID,
+		ModelConfig:    modelConfig,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ResourceLimits: defaultLimits,
+		BillingInfo:    billingInfo,
+		EventHistory:   []types.SessionEvent{},
+		RetryCount:     0,
+	}
+}
+
+// IsSessionActive checks if session is in an active state
+func IsSessionActive(status string) bool {
+	return status == types.SessionStatusReady || 
+		   status == types.SessionStatusActive ||
+		   status == types.SessionStatusStarting
+}
+
+// IsSessionTerminal checks if session is in a terminal state
+func IsSessionTerminal(status string) bool {
+	return status == types.SessionStatusStopped ||
+		   status == types.SessionStatusFailed
+}
+
+// IncrementSessionRetryCount increments the retry count for a session
+func IncrementSessionRetryCount(ctx context.Context, rdb *redis.Client, sessionID string) error {
+	sessionState, err := GetSession(ctx, rdb, sessionID)
+	if err != nil {
+		return err
+	}
+
+	sessionState.RetryCount++
+	sessionState.UpdatedAt = time.Now()
+
+	return StoreSession(ctx, rdb, sessionState)
+}
+
+// UpdateSessionBilling updates billing information for a session
+func UpdateSessionBilling(ctx context.Context, rdb *redis.Client, sessionID string, cpuSeconds, memoryMBHours float64, actionCount int) error {
+	sessionState, err := GetSession(ctx, rdb, sessionID)
+	if err != nil {
+		return err
+	}
+
+	if sessionState.BillingInfo == nil {
+		sessionState.BillingInfo = &types.BillingInfo{}
+	}
+
+	sessionState.BillingInfo.CPUSeconds += cpuSeconds
+	sessionState.BillingInfo.MemoryMBHours += memoryMBHours
+	sessionState.BillingInfo.ActionsCount += actionCount
+	sessionState.BillingInfo.LastBillingAt = time.Now()
+	sessionState.UpdatedAt = time.Now()
+
+	return StoreSession(ctx, rdb, sessionState)
 } 

@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/wallcrawler/backend-go/internal/types"
 	"github.com/wallcrawler/backend-go/internal/utils"
 
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -24,8 +24,6 @@ type Controller struct {
 	sessionID       string
 	chromeCmd       *exec.Cmd
 	redisClient     *redis.Client
-	frameCapture    bool
-	captureCancel   context.CancelFunc
 	allocator       context.Context
 	allocatorCancel context.CancelFunc
 	ctx             context.Context
@@ -75,12 +73,30 @@ func main() {
 		log.Fatalf("Failed to initialize CDP connection: %v", err)
 	}
 
-	// Update session status to ready
-	if err := utils.UpdateSessionStatus(context.Background(), rdb, sessionID, "READY"); err != nil {
+	// Update session status to ready and record timing
+	ctx := context.Background()
+	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusReady); err != nil {
 		log.Printf("Failed to update session status: %v", err)
+	}
+	
+	// Add session ready event with connection details
+	readyEvent := map[string]interface{}{
+		"sessionId":   sessionID,
+		"connectUrl":  fmt.Sprintf("ws://127.0.0.1:9222"),
+		"chromeReady": true,
+	}
+	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionChromeReady", "wallcrawler.ecs-controller", readyEvent); err != nil {
+		log.Printf("Failed to add chrome ready event: %v", err)
 	}
 
 	log.Printf("Chrome ready for session %s on port 9222", sessionID)
+
+	// Start authenticated CDP proxy
+	if err := controller.startCDPProxy(); err != nil {
+		log.Printf("Failed to start CDP proxy: %v", err)
+	} else {
+		log.Printf("CDP proxy ready for session %s on port 9223", sessionID)
+	}
 
 	// Listen for frame capture events
 	go controller.listenForCaptureEvents(context.Background())
@@ -126,9 +142,9 @@ func (c *Controller) startChrome() error {
 		"--disable-component-update",
 		"--disable-background-networking",
 		"--disable-breakpad",
-		// Remote debugging settings - key for Direct Mode
+		// Remote debugging settings - SECURITY: localhost only, proxy will handle external access
 		"--remote-debugging-port=9222",
-		"--remote-debugging-address=0.0.0.0",
+		"--remote-debugging-address=127.0.0.1",
 		"--headless=new",
 		"--window-size=1920,1080",
 		"--virtual-time-budget=5000",
@@ -169,7 +185,7 @@ func (c *Controller) waitForChrome() error {
 		time.Sleep(1 * time.Second)
 	}
 
-	return fmt.Errorf("Chrome failed to start within 30 seconds")
+	return fmt.Errorf("chrome failed to start within 30 seconds")
 }
 
 func (c *Controller) initCDP() error {
@@ -195,6 +211,48 @@ func (c *Controller) initCDP() error {
 	}
 
 	c.ctx, c.cancel = chromedp.NewContext(c.allocator, chromedp.WithTargetID(pageTargetID))
+	return nil
+}
+
+func (c *Controller) startCDPProxy() error {
+	// Start the CDP proxy as a goroutine
+	go func() {
+		// Set environment for CDP proxy
+		os.Setenv("CDP_PROXY_PORT", "9223")
+		
+		log.Printf("Starting CDP proxy server on port 9223")
+		
+		// This would ideally import and run the CDP proxy
+		// For now, we'll use exec to run the compiled binary
+		cdpProxyCmd := exec.Command("./cdp-proxy")
+		cdpProxyCmd.Stdout = os.Stdout
+		cdpProxyCmd.Stderr = os.Stderr
+		
+		if err := cdpProxyCmd.Start(); err != nil {
+			log.Printf("Failed to start CDP proxy: %v", err)
+			return
+		}
+		
+		// Wait for process to finish
+		if err := cdpProxyCmd.Wait(); err != nil {
+			log.Printf("CDP proxy exited with error: %v", err)
+		}
+	}()
+	
+	// Give the proxy a moment to start
+	time.Sleep(2 * time.Second)
+	
+	// Test if proxy is responding
+	resp, err := http.Get("http://localhost:9223/health")
+	if err != nil {
+		return fmt.Errorf("CDP proxy health check failed: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("CDP proxy unhealthy, status: %d", resp.StatusCode)
+	}
+	
 	return nil
 }
 
@@ -232,100 +290,182 @@ func (c *Controller) listenForCaptureEvents(ctx context.Context) {
 
 			switch action {
 			case "start_capture":
-				if !c.frameCapture {
-					frameRate := 30 // Default frame rate
-					if fr, ok := event["frameRate"].(float64); ok {
-						frameRate = int(fr)
-					}
-					c.startFrameCapture(context.Background(), frameRate)
-				}
+				// Native Chrome screencast is now used via direct CDP connections
+				// Clients connect directly to Chrome DevTools screencast through the CDP proxy
+				log.Printf("Frame capture request received - using native Chrome screencast via CDP proxy")
 			case "stop_capture":
-				if c.frameCapture {
-					c.stopFrameCapture()
-				}
+				// Native Chrome screencast is now used via direct CDP connections
+				log.Printf("Stop capture request received - clients disconnect from CDP screencast directly")
+			// Add LLM processing handlers
+			case "extract":
+				go c.handleExtractRequest(ctx, event)
+			case "observe":
+				go c.handleObserveRequest(ctx, event)
+			case "navigate":
+				go c.handleNavigateRequest(ctx, event)
+			case "agentExecute":
+				go c.handleAgentExecuteRequest(ctx, event)
+			case "act":
+				go c.handleActRequest(ctx, event)
 			}
 		}
 	}
 }
 
-func (c *Controller) startFrameCapture(parentCtx context.Context, frameRate int) {
-	if c.frameCapture {
-		return // Already capturing
+// handleExtractRequest processes data extraction with LLM
+func (c *Controller) handleExtractRequest(ctx context.Context, event map[string]interface{}) {
+	log.Printf("Processing extract request for session %s", c.sessionID)
+	
+	// TODO: Implement actual extraction logic
+	// 1. Get accessibility tree via CDP
+	// 2. Send to LLM with instruction and schema
+	// 3. Parse LLM response
+	// 4. Return structured data via Redis pub/sub
+	
+	// For now, return placeholder
+	result := map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"extracted": "Sample data - implement actual LLM processing",
+		},
 	}
-
-	log.Printf("Starting frame capture at %d FPS for session %s", frameRate, c.sessionID)
-	c.frameCapture = true
-
-	captureCtx, cancel := context.WithCancel(parentCtx)
-	c.captureCancel = cancel
-
-	assumedFPS := 60
-	everyNth := assumedFPS / frameRate
-	if everyNth < 1 {
-		everyNth = 1
-	}
-
-	action := page.StartScreencast().
-		WithFormat(page.ScreencastFormatJpeg).
-		WithQuality(80).
-		WithMaxWidth(1920).
-		WithMaxHeight(1080).
-		WithEveryNthFrame(int64(everyNth))
-	err := chromedp.Run(c.ctx, action)
-	if err != nil {
-		log.Printf("Failed to start screencast: %v", err)
-		c.stopFrameCapture()
-		return
-	}
-
-	chromedp.ListenTarget(c.ctx, func(ev interface{}) {
-		if f, ok := ev.(*page.EventScreencastFrame); ok {
-			go func(frame *page.EventScreencastFrame) {
-				base64Data := frame.Data
-				frameData := map[string]interface{}{
-					"type":      "frame",
-					"data":      base64Data,
-					"timestamp": time.Time(*frame.Metadata.Timestamp).UnixMilli(),
-				}
-
-				websocketEndpoint := os.Getenv("WEBSOCKET_API_ENDPOINT")
-				if websocketEndpoint == "" {
-					log.Printf("WEBSOCKET_API_ENDPOINT not configured")
-					return
-				}
-
-				if err := utils.BroadcastToSessionViewers(context.Background(), c.redisClient, c.sessionID, frameData, websocketEndpoint); err != nil {
-					log.Printf("Error broadcasting frame: %v", err)
-				}
-
-				if err := chromedp.Run(c.ctx, page.ScreencastFrameAck(frame.SessionID)); err != nil {
-					log.Printf("Error acking frame: %v", err)
-				}
-			}(f)
-		}
-	})
-
-	go func() {
-		<-captureCtx.Done()
-		if err := chromedp.Run(c.ctx, page.StopScreencast()); err != nil {
-			log.Printf("Error stopping screencast: %v", err)
-		}
-		c.frameCapture = false
-		log.Printf("Frame capture stopped for session %s", c.sessionID)
-	}()
+	
+	c.publishResult(ctx, "extract_result", result)
 }
 
-func (c *Controller) stopFrameCapture() {
-	if !c.frameCapture {
+// handleObserveRequest processes DOM observation with LLM
+func (c *Controller) handleObserveRequest(ctx context.Context, event map[string]interface{}) {
+	log.Printf("Processing observe request for session %s", c.sessionID)
+	
+	// TODO: Implement actual observation logic
+	// 1. Get accessibility tree via CDP
+	// 2. Send to LLM with instruction
+	// 3. Parse LLM response for element identification
+	// 4. Return element selectors and actions via Redis pub/sub
+	
+	// For now, return placeholder
+	result := map[string]interface{}{
+		"success": true,
+		"elements": []map[string]interface{}{
+			{
+				"selector":    "#sample-element",
+				"description": "Sample element - implement actual LLM processing",
+				"method":      "click",
+				"arguments":   []string{},
+			},
+		},
+	}
+	
+	c.publishResult(ctx, "observe_result", result)
+}
+
+// handleNavigateRequest processes navigation with options
+func (c *Controller) handleNavigateRequest(ctx context.Context, event map[string]interface{}) {
+	log.Printf("Processing navigate request for session %s", c.sessionID)
+	
+	url, ok := event["url"].(string)
+	if !ok {
+		log.Printf("Invalid URL in navigate request")
 		return
 	}
-
-	log.Printf("Stopping frame capture for session %s", c.sessionID)
-
-	if c.captureCancel != nil {
-		c.captureCancel()
-		c.captureCancel = nil
+	
+	// TODO: Implement actual navigation logic via CDP
+	// 1. Use CDP Page.navigate
+	// 2. Wait for page load events
+	// 3. Handle navigation options (timeout, waitUntil)
+	// 4. Return navigation result via Redis pub/sub
+	
+	log.Printf("Navigating to URL: %s", url)
+	
+	// For now, return placeholder
+	result := map[string]interface{}{
+		"success":    true,
+		"url":        url,
+		"finalUrl":   url,
+		"statusCode": 200,
 	}
+	
+	c.publishResult(ctx, "navigate_result", result)
+}
+
+// handleAgentExecuteRequest processes autonomous agent workflows
+func (c *Controller) handleAgentExecuteRequest(ctx context.Context, event map[string]interface{}) {
+	log.Printf("Processing agent execute request for session %s", c.sessionID)
+	
+	// TODO: Implement actual agent execution logic
+	// 1. Multi-step workflow with observe -> act cycles
+	// 2. LLM planning and decision making
+	// 3. Action execution and result evaluation
+	// 4. Stream progress updates via Redis pub/sub
+	
+	// For now, return placeholder
+	result := map[string]interface{}{
+		"success":   true,
+		"message":   "Agent workflow completed - implement actual LLM processing",
+		"actions":   []map[string]interface{}{},
+		"completed": true,
+	}
+	
+	c.publishResult(ctx, "agent_result", result)
+}
+
+// handleActRequest processes action execution
+func (c *Controller) handleActRequest(ctx context.Context, event map[string]interface{}) {
+	log.Printf("Processing act request for session %s", c.sessionID)
+	
+	action, ok := event["action"].(string)
+	if !ok {
+		log.Printf("Invalid action in act request")
+		return
+	}
+	
+	// TODO: Implement actual action execution logic
+	// 1. Use observe to find elements based on action description
+	// 2. Execute action via CDP
+	// 3. Return execution result via Redis pub/sub
+	
+	log.Printf("Executing action: %s", action)
+	
+	// For now, return placeholder
+	result := map[string]interface{}{
+		"success": true,
+		"message": "Action completed - implement actual LLM processing",
+		"action":  action,
+	}
+	
+	c.publishResult(ctx, "act_result", result)
+}
+
+// publishResult publishes operation results via Redis pub/sub
+func (c *Controller) publishResult(ctx context.Context, resultType string, result map[string]interface{}) {
+	resultChannel := fmt.Sprintf("session:%s:results", c.sessionID)
+	
+	resultData := map[string]interface{}{
+		"type":      resultType,
+		"sessionId": c.sessionID,
+		"result":    result,
+		"timestamp": time.Now().UnixMilli(),
+	}
+	
+	resultJSON, err := json.Marshal(resultData)
+	if err != nil {
+		log.Printf("Error marshaling result: %v", err)
+		return
+	}
+	
+	if err := c.redisClient.Publish(ctx, resultChannel, string(resultJSON)).Err(); err != nil {
+		log.Printf("Error publishing result: %v", err)
+	}
+}
+
+// Native Chrome screencast is now handled via direct CDP connections through the CDP proxy
+// Custom frame capture has been removed in favor of Chrome's built-in DevTools screencast
+// Clients can connect directly to Chrome's screencast via signed CDP URLs
+
+// stopFrameCapture is no longer needed as we use Chrome's native screencast
+// Kept for backwards compatibility but does nothing
+func (c *Controller) stopFrameCapture() {
+	log.Printf("Stop frame capture called for session %s - using native Chrome screencast", c.sessionID)
 }
 
 func (c *Controller) cleanup() {
@@ -341,9 +481,19 @@ func (c *Controller) cleanup() {
 		c.allocatorCancel()
 	}
 
-	// Update session status
-	if err := utils.UpdateSessionStatus(context.Background(), c.redisClient, c.sessionID, "STOPPED"); err != nil {
+	// Update session status to stopped
+	if err := utils.UpdateSessionStatus(context.Background(), c.redisClient, c.sessionID, types.SessionStatusStopped); err != nil {
 		log.Printf("Failed to update session status: %v", err)
+	}
+	
+	// Add cleanup completed event
+	cleanupEvent := map[string]interface{}{
+		"sessionId":       c.sessionID,
+		"resourcesCleaned": true,
+		"chromeShutdown":  true,
+	}
+	if err := utils.AddSessionEvent(context.Background(), c.redisClient, c.sessionID, "SessionCleanupCompleted", "wallcrawler.ecs-controller", cleanupEvent); err != nil {
+		log.Printf("Failed to add cleanup event: %v", err)
 	}
 
 	// Stop Chrome process

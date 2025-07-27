@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
 
-// Handler processes the /sessions/{sessionId}/act request
+// Handler processes the /sessions/{sessionId}/navigate request
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Extract session ID from path parameters
 	sessionID := request.PathParameters["sessionId"]
@@ -21,15 +22,15 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Parse request body
-	var req types.ActRequest
+	var req types.NavigateRequest
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		log.Printf("Error parsing request body: %v", err)
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Invalid request body"))
 	}
 
 	// Validate required fields
-	if req.Action == "" {
-		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing required field: action"))
+	if req.URL == "" {
+		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing required field: url"))
 	}
 
 	// Validate headers
@@ -50,12 +51,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Validate session status
 	if !utils.IsSessionActive(sessionState.Status) {
-		return utils.CreateAPIResponse(400, utils.ErrorResponse("Session is not in an active state"))
+		return utils.CreateAPIResponse(400, utils.ErrorResponse("Session is not ready for navigation"))
 	}
 
 	if !isStreaming {
 		// Non-streaming response (legacy support)
-		result, err := processActRequest(ctx, sessionID, &req, sessionState)
+		result, err := processNavigateRequest(ctx, sessionID, &req, sessionState)
 		if err != nil {
 			return utils.CreateAPIResponse(500, utils.ErrorResponse(err.Error()))
 		}
@@ -63,7 +64,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Streaming response
-	streamingBody := processActRequestStreaming(ctx, sessionID, &req, sessionState)
+	streamingBody := processNavigateRequestStreaming(ctx, sessionID, &req, sessionState)
 	
 	return events.APIGatewayProxyResponse{
 		StatusCode: 200,
@@ -79,85 +80,92 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}, nil
 }
 
-// processActRequest handles non-streaming act requests
-func processActRequest(ctx context.Context, sessionID string, req *types.ActRequest, sessionState *types.SessionState) (*types.ActResult, error) {
-	// Create action event for ECS controller
-	actionEvent := map[string]interface{}{
+// processNavigateRequest handles non-streaming navigate requests
+func processNavigateRequest(ctx context.Context, sessionID string, req *types.NavigateRequest, sessionState *types.SessionState) (interface{}, error) {
+	// Create navigate event for ECS controller
+	navigateEvent := map[string]interface{}{
 		"sessionId": sessionID,
-		"action":    req.Action,
-		"variables": req.Variables,
-		"iframes":   req.Iframes,
-		"timeout":   req.TimeoutMs,
-		"domSettle": req.DOMSettleTimeoutMs,
-		"modelName": req.ModelName,
+		"url":       req.URL,
+		"options":   req.Options,
 	}
 
 	// Publish event to EventBridge for ECS controller
-	if err := utils.PublishEvent(ctx, sessionID, "ActRequest", actionEvent); err != nil {
-		log.Printf("Error publishing act event: %v", err)
+	if err := utils.PublishEvent(ctx, sessionID, "NavigateRequest", navigateEvent); err != nil {
+		log.Printf("Error publishing navigate event: %v", err)
 		return nil, err
 	}
 
 	// For non-streaming, return immediate response
 	// In a real implementation, you'd wait for the result or use polling
-	result := &types.ActResult{
-		Success: true,
-		Message: "Action queued for execution",
-		Action:  req.Action,
+	result := map[string]interface{}{
+		"success": true,
+		"message": "Navigation queued for execution",
+		"url":     req.URL,
 	}
 
-	log.Printf("Queued action for session %s: %s", sessionID, req.Action)
+	log.Printf("Queued navigation for session %s to URL: %s", sessionID, req.URL)
 	return result, nil
 }
 
-// processActRequestStreaming handles streaming act requests
-func processActRequestStreaming(ctx context.Context, sessionID string, req *types.ActRequest, sessionState *types.SessionState) string {
+// processNavigateRequestStreaming handles streaming navigate requests
+func processNavigateRequestStreaming(ctx context.Context, sessionID string, req *types.NavigateRequest, sessionState *types.SessionState) string {
 	var streamingResponse strings.Builder
 
 	// Send initial log event
-	streamingResponse.WriteString(utils.SendLogEvent("info", "Starting action execution: "+req.Action))
+	streamingResponse.WriteString(utils.SendLogEvent("info", "Starting navigation to: "+req.URL))
 
-	// Create action event for ECS controller
-	actionEvent := map[string]interface{}{
+	// Create navigate event for ECS controller
+	navigateEvent := map[string]interface{}{
 		"sessionId": sessionID,
-		"action":    req.Action,
-		"variables": req.Variables,
-		"iframes":   req.Iframes,
-		"timeout":   req.TimeoutMs,
-		"domSettle": req.DOMSettleTimeoutMs,
-		"modelName": req.ModelName,
+		"url":       req.URL,
+		"options":   req.Options,
 	}
 
 	// Publish event to EventBridge for ECS controller
-	if err := utils.PublishEvent(ctx, sessionID, "ActRequest", actionEvent); err != nil {
-		log.Printf("Error publishing act event: %v", err)
+	if err := utils.PublishEvent(ctx, sessionID, "NavigateRequest", navigateEvent); err != nil {
+		log.Printf("Error publishing navigate event: %v", err)
 		
 		// Send error event
-		streamingResponse.WriteString(utils.SendSystemEvent("error", nil, "Failed to queue action: "+err.Error()))
+		streamingResponse.WriteString(utils.SendSystemEvent("error", nil, "Failed to queue navigation: "+err.Error()))
 		return streamingResponse.String()
 	}
 
 	// Send progress log
-	streamingResponse.WriteString(utils.SendLogEvent("info", "Action queued for browser execution"))
+	streamingResponse.WriteString(utils.SendLogEvent("info", "Navigation queued for browser execution"))
 
 	// In a real implementation, you would:
 	// 1. Subscribe to Redis pub/sub for real-time updates
-	// 2. Wait for the ECS controller to execute the action
+	// 2. Wait for the ECS controller to execute the navigation
 	// 3. Stream the results back in real-time
 	// 
 	// For now, simulate a successful completion
-	streamingResponse.WriteString(utils.SendLogEvent("info", "Action completed successfully"))
+	streamingResponse.WriteString(utils.SendLogEvent("info", "Initiating page navigation..."))
+	streamingResponse.WriteString(utils.SendLogEvent("info", "Waiting for page load..."))
+	
+	// Check for navigation options
+	if req.Options != nil {
+		if waitUntil, ok := req.Options["waitUntil"].(string); ok {
+			streamingResponse.WriteString(utils.SendLogEvent("info", "Waiting for: "+waitUntil))
+		}
+		if timeout, ok := req.Options["timeout"].(float64); ok {
+			streamingResponse.WriteString(utils.SendLogEvent("info", fmt.Sprintf("Using timeout: %.0fms", timeout)))
+		}
+	}
+	
+	streamingResponse.WriteString(utils.SendLogEvent("info", "Navigation completed successfully"))
 
 	// Send final result
-	result := types.ActResult{
-		Success: true,
-		Message: "Action completed",
-		Action:  req.Action,
+	result := map[string]interface{}{
+		"success":    true,
+		"message":    "Navigation completed",
+		"url":        req.URL,
+		"finalUrl":   req.URL, // In real implementation, this might be different due to redirects
+		"statusCode": 200,     // Sample status code
 	}
 
 	streamingResponse.WriteString(utils.SendSystemEvent("finished", result, ""))
 
-	log.Printf("Streamed action for session %s: %s", sessionID, req.Action)
+	log.Printf("Streamed navigation for session %s to URL: %s", sessionID, req.URL)
 	return streamingResponse.String()
 }
 

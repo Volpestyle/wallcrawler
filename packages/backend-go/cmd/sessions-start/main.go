@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"time"
 
@@ -78,15 +77,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		ActionTimeoutMs:        req.ActionTimeoutMs,
 	}
 
-	// Create session state (initially without connectURL)
-	sessionState := &types.SessionState{
-		ID:          sessionID,
-		Status:      "RUNNING",
-		ProjectID:   projectID,
-		ModelConfig: modelConfig,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
+	// Create session state with proper initial status and enhanced fields
+	sessionState := utils.CreateSessionWithDefaults(sessionID, projectID, modelConfig)
 
 	// Handle existing session ID (session resume)
 	if req.BrowserbaseSessionID != "" {
@@ -111,57 +103,36 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
-	// Store session in Redis
+	// Store session in Redis with initial CREATING status
 	rdb := utils.GetRedisClient()
 	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
 		log.Printf("Error storing session: %v", err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to create session"))
 	}
 
-	// Create ECS task for browser automation
-	taskARN, err := utils.CreateECSTask(ctx, sessionID, sessionState)
-	if err != nil {
-		log.Printf("Error creating ECS task: %v", err)
+	// Publish SessionCreateRequested event to EventBridge for async processing
+	createEvent := map[string]interface{}{
+		"sessionId":    sessionID,
+		"projectId":    projectID,
+		"modelConfig":  modelConfig,
+		"userMetadata": sessionState.UserMetadata,
+		"timestamp":    time.Now().Unix(),
+	}
+
+	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionCreateRequested", "wallcrawler.sessions-start", createEvent); err != nil {
+		log.Printf("Error publishing session create event: %v", err)
 		// Clean up session from Redis
 		utils.DeleteSession(ctx, rdb, sessionID)
-		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to start browser session"))
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initiate session creation"))
 	}
 
-	// Wait for task to be running and get its IP
-	var taskIP string
-	var connectURL string
-
-	// Wait up to 60 seconds for task to get an IP
-	for i := 0; i < 60; i++ {
-		taskIP, err = utils.GetECSTaskPublicIP(ctx, taskARN)
-		if err == nil && taskIP != "" {
-			connectURL = utils.CreateCDPURL(taskIP)
-			break
-		}
-		log.Printf("Waiting for task IP... (attempt %d/60)", i+1)
-		time.Sleep(1 * time.Second)
-	}
-
-	if connectURL == "" {
-		log.Printf("Failed to get task IP after 60 seconds")
-		// Fallback to a placeholder URL
-		connectURL = fmt.Sprintf("ws://task-%s.wallcrawler.internal:9222", sessionID)
-	}
-
-	// Update session with task ARN and connect URL
-	sessionState.ECSTaskARN = taskARN
-	sessionState.ConnectURL = connectURL
-	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
-		log.Printf("Error updating session with task ARN and URL: %v", err)
-	}
-
-	// Prepare response
+	// Return immediate response - EventBridge will handle async provisioning
 	response := types.StartSessionResponse{
 		SessionID: sessionID,
-		Available: true,
+		Available: true, // Indicates the session is being provisioned
 	}
 
-	log.Printf("Created Stagehand session %s with task %s", sessionID, taskARN)
+	log.Printf("Created Stagehand session %s (async provisioning initiated)", sessionID)
 	return utils.CreateAPIResponse(200, utils.SuccessResponse(response))
 }
 

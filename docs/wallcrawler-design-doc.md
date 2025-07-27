@@ -555,6 +555,7 @@ graph TB
         StartNative[POST /start-session<br/>Wallcrawler Native]
         RetrieveSession[GET /sessions/{id}/retrieve]
         DebugSession[GET /sessions/{id}/debug]
+        CDPURLSession[POST /sessions/{id}/cdp-url<br/>Signed CDP URLs]
         EndSession[POST /sessions/{id}/end]
     end
 
@@ -575,6 +576,7 @@ graph TB
     StartNative --> Lambda2[start-session Lambda]
     RetrieveSession --> Lambda3[retrieve Lambda]
     DebugSession --> Lambda4[debug Lambda]
+    CDPURLSession --> Lambda7[cdp-url Lambda]
     EndSession --> Lambda5[end Lambda]
 
     Act --> Lambda6[act Lambda]
@@ -824,7 +826,7 @@ graph TB
 
     subgraph "Security Groups"
         LambdaSG[Lambda Security Group<br/>Outbound: All]
-        ECSSG[ECS Security Group<br/>Inbound: 9222 from 0.0.0.0/0<br/>Outbound: All]
+                    ECSSG[ECS Security Group<br/>Inbound: 9223 from 0.0.0.0/0<br/>Outbound: All]
         RedisSG[Redis Security Group<br/>Inbound: 6379 from Lambda/ECS]
     end
 
@@ -909,26 +911,29 @@ graph TB
         end
 
         subgraph "Port Mappings"
-            Port9222[Container Port: 9222<br/>Protocol: TCP<br/>CDP Access]
+            Port9222[Container Port: 9222<br/>Protocol: TCP<br/>Chrome CDP (localhost)]
+            Port9223[Container Port: 9223<br/>Protocol: TCP<br/>CDP Proxy (public)]
         end
     end
 
     subgraph "External Access"
-        DirectCDP[Direct CDP Access<br/>ws://[public-ip]:9222]
+        SignedCDP[Signed CDP Access<br/>ws://[public-ip]:9223/cdp?signingKey=JWT]
         StagehandClient[Stagehand Client<br/>API Mode]
-        WebSocketClient[WebSocket Client<br/>Screencast]
+        WebSocketClient[WebSocket Client<br/>Screencast via CDP Proxy]
     end
 
     Chrome --> Port9222
     Controller --> Chrome
+    Controller --> Port9223
     Controller --> Stagehand
     Controller --> SessionID
     Controller --> RedisAddr
     Controller --> WSEndpoint
 
-    DirectCDP --> Port9222
+    SignedCDP --> Port9223
+    Port9223 --> Port9222
     StagehandClient --> Controller
-    WebSocketClient --> Controller
+    WebSocketClient --> Port9223
 
 
 ```
@@ -995,12 +1000,16 @@ graph TB
 
 ### Security Features
 
-1. **API Key Authentication**: All requests require valid API keys
-2. **Project Isolation**: Sessions are isolated by project ID
-3. **Network Security**: VPC with security groups and NACLs
-4. **WAF Protection**: DDoS protection and common attack mitigation
-5. **Encryption**: Data in transit and at rest encryption
-6. **IAM Roles**: Least privilege access for all components
+1. **API Key Authentication**: All REST API requests require valid API keys (`x-wc-api-key`)
+2. **JWT Signed CDP URLs**: Time-limited, scope-based authentication for CDP access
+3. **CDP Proxy Security**: Enterprise-grade proxy with rate limiting and circuit breaker
+4. **Network Isolation**: Chrome listens only on localhost (127.0.0.1:9222), proxy on 9223
+5. **Project Isolation**: Sessions are isolated by project ID
+6. **Enterprise Monitoring**: Rate limiting, error tracking, and comprehensive metrics
+7. **Network Security**: VPC with security groups and NACLs
+8. **WAF Protection**: DDoS protection and common attack mitigation
+9. **Encryption**: Data in transit and at rest encryption
+10. **IAM Roles**: Least privilege access for all components
 
 ## Performance & Scaling
 

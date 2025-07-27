@@ -41,19 +41,25 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
-	// Update session status to STOPPED
-	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, "STOPPED"); err != nil {
-		log.Printf("Error updating session status: %v", err)
+	// Update session status to TERMINATING, then STOPPED
+	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusTerminating); err != nil {
+		log.Printf("Error updating session status to terminating: %v", err)
 	}
 
 	// Publish termination event
 	terminationEvent := map[string]interface{}{
 		"sessionId": sessionID,
 		"reason":    "Session ended by user",
+		"taskArn":   sessionState.ECSTaskARN,
 	}
 	
-	if err := utils.PublishEvent(ctx, sessionID, "SessionTerminated", terminationEvent); err != nil {
+	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionTerminationRequested", "wallcrawler.end-session", terminationEvent); err != nil {
 		log.Printf("Error publishing termination event: %v", err)
+	}
+
+	// Mark session as stopped
+	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusStopped); err != nil {
+		log.Printf("Error updating session status to stopped: %v", err)
 	}
 
 	// Clean up session from Redis after a delay (allow ECS to finish cleanup)
