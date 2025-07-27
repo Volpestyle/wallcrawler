@@ -205,27 +205,45 @@ sequenceDiagram
 
 ### 3. Session Flow (Direct Mode)
 
-In direct mode (usingAPI: false), Stagehand uses the SDK for session management and connects directly via CDP for browser control, bypassing the API for operations. This is similar for Browserbase (using their SDK), but shown here for Wallcrawler.
+In direct mode (usingAPI: false), Stagehand uses the SDK for session management and connects directly via CDP for browser control, bypassing the API for operations. This diagram shows the complete flow including Chrome remote debugging setup and actual Stagehand operations:
 
 ```mermaid
 sequenceDiagram
-    participant Client as Client (Stagehand)
+    participant Client as Stagehand Client
     participant SDK as Wallcrawler SDK
     participant API as API Gateway
     participant Lambda as Lambda
-    participant ECS as ECS Container
+    participant ECS as ECS Task
     participant Chrome as Chrome Browser
 
-    Client->>SDK: init() → sessions.create()
-    SDK->>API: POST /start-session {projectId}
-    API->>Lambda: Invoke StartSessionLambda
+    Note over Client,Chrome: Session Setup Phase
+    Client->>SDK: wallcrawler.sessions.create()
+    SDK->>API: POST /start-session
+    API->>Lambda: StartSessionLambda
     Lambda->>ECS: Launch Fargate task
-    Lambda->>SDK: Return {id, connectUrl}
+    ECS->>Chrome: Start Chrome with --remote-debugging-port=9222
+    Lambda->>Lambda: Wait for task IP
+    Lambda->>SDK: Return {id, connectUrl: "ws://IP:9222"}
 
-    Client->>ECS: Connect via CDP (connectUrl)
-    Client->>Chrome: Execute commands directly via CDP (e.g., page.goto, local act/extract)
+    Note over Client,Chrome: Direct CDP Connection
+    Client->>Chrome: chromium.connectOverCDP(connectUrl)
+
+    Note over Client,Chrome: Stagehand Operations (Local LLM + Direct CDP)
+    Client->>Chrome: page.goto("https://example.com")
+    Client->>Chrome: page.act("click button") → CDP commands
+    Client->>Chrome: page.extract(schema) → CDP commands
+    Client->>Chrome: page.observe() → CDP commands
+
+    Note over Client,Chrome: Debug & Cleanup
+    Client->>SDK: sessions.debug() for DevTools
+    SDK->>API: GET /sessions/{id}/debug
+    API->>Lambda: DebugLambda
+    Lambda->>SDK: Return {debuggerUrl: "http://IP:9222"}
 
     Client->>SDK: sessions.end() when done
+    SDK->>API: POST /sessions/{id}/end
+    API->>Lambda: EndSessionLambda
+    Lambda->>ECS: Stop task
 ```
 
 ## Package Specifications
@@ -273,7 +291,156 @@ const session = await wallcrawler.sessions.create({ projectId: 'proj_123' });
 
 This forked and consolidated approach reduces maintenance overhead while ensuring seamless integration with Stagehand and full support for Wallcrawler's infrastructure.
 
-### 2. Components Package (`packages/components`)
+### 2. Stagehand Package (`packages/stagehand`)
+
+We forked the official Stagehand library and modified it to natively support Wallcrawler as a first-class provider. This approach ensures deep integration while maintaining compatibility with the original Stagehand API and ecosystem.
+
+**Approach**:
+
+- **Complete Fork**: Full fork of the official Stagehand repository with comprehensive modifications throughout the codebase
+- **Provider-First Architecture**: Wallcrawler is treated as a native provider alongside Browserbase and Local, not just an add-on
+- **Default Environment**: Changed default environment from "LOCAL" to "WALLCRAWLER" for streamlined usage
+- **Comprehensive Integration**: Modifications span across core libraries, types, session management, and API clients
+
+**Key Architectural Changes**:
+
+**Import Consolidation**:
+
+```typescript
+import { Browserbase, Wallcrawler } from '@wallcrawler/sdk';
+```
+
+**Environment Support**:
+
+```typescript
+env: "LOCAL" | "BROWSERBASE" | "WALLCRAWLER" = "WALLCRAWLER"  // Default changed
+
+constructor(params: ConstructorParams = { env: "WALLCRAWLER" })
+```
+
+**Provider Configuration** (in `lib/api.ts`):
+
+```typescript
+private getProviderConfig(): ProviderConfig {
+  switch (this.provider) {
+    case "wallcrawler":
+      return {
+        headers: {
+          apiKey: "x-wc-api-key",
+          projectId: "x-wc-project-id",
+          sessionId: "x-wc-session-id",
+          streamResponse: "x-stream-response",
+          // ... other wallcrawler headers
+        },
+        baseURL: process.env.WALLCRAWLER_API_URL ?? "https://api.wallcrawler.dev/v1",
+      };
+    // ... browserbase case remains unchanged
+  }
+}
+```
+
+**Session Management Integration** (in `getBrowser()` function):
+
+```typescript
+async function getBrowser(env: 'LOCAL' | 'BROWSERBASE' | 'WALLCRAWLER') {
+  if (env === 'WALLCRAWLER') {
+    const wallcrawler = new Wallcrawler({
+      apiKey,
+      baseURL: process.env.WALLCRAWLER_BASE_URL,
+    });
+
+    // Session creation/resumption logic
+    if (wallcrawlerSessionId) {
+      const session = await wallcrawler.sessions.retrieve(wallcrawlerSessionId);
+      // Validate session status and resume
+    } else {
+      const session = await wallcrawler.sessions.create({ projectId });
+      // Create new session
+    }
+
+    // CDP connection
+    const browser = await chromium.connectOverCDP(connectUrl);
+    const { debuggerUrl } = await wallcrawler.sessions.debug(sessionId);
+  }
+}
+```
+
+**Environment Variable Handling**:
+
+```typescript
+// Fallback chain prioritizes Wallcrawler
+this.apiKey = apiKey ?? process.env.WALLCRAWLER_API_KEY ?? process.env.BROWSERBASE_API_KEY;
+
+this.projectId = projectId ?? process.env.WALLCRAWLER_PROJECT_ID ?? process.env.BROWSERBASE_PROJECT_ID;
+```
+
+**API Client Selection**:
+
+```typescript
+// In init() method
+this.apiClient = new StagehandAPI({
+  provider: this.env === 'WALLCRAWLER' ? 'wallcrawler' : 'browserbase',
+  // ... other config
+});
+```
+
+**Core Modifications Summary**:
+
+1. **lib/index.ts**:
+   - Modified `getBrowser()` for Wallcrawler session management
+   - Updated constructor defaults and environment handling
+   - Added Wallcrawler-specific error handling and logging
+
+2. **lib/api.ts**:
+   - Added wallcrawler provider configuration
+   - Custom headers (x-wc-\*) and base URL support
+
+3. **lib/StagehandPage.ts**:
+   - Modified `_refreshPageFromAPI()` to use appropriate client (Wallcrawler vs Browserbase)
+
+4. **types/**:
+   - Updated all type definitions to include "WALLCRAWLER" environment
+   - Added wallcrawler to ProviderType union
+
+5. **package.json**:
+   - Added `@wallcrawler/sdk` dependency
+   - Maintained all original dependencies for compatibility
+
+**Benefits of the Fork Approach**:
+
+- **Native Integration**: Wallcrawler is a first-class citizen, not a plugin
+- **Performance**: No runtime provider detection overhead
+- **Developer Experience**: Simplified configuration with sensible Wallcrawler defaults
+- **Feature Parity**: Full support for all Stagehand features with Wallcrawler infrastructure
+- **Ecosystem Compatibility**: Works with existing Stagehand plugins, tools, and documentation
+
+**Usage Comparison**:
+
+```typescript
+// Original Stagehand (Browserbase)
+const stagehand = new Stagehand({
+  env: 'BROWSERBASE',
+  apiKey: process.env.BROWSERBASE_API_KEY,
+  projectId: process.env.BROWSERBASE_PROJECT_ID,
+});
+
+// Wallcrawler-enhanced Stagehand (simplified)
+const stagehand = new Stagehand({
+  // env: "WALLCRAWLER" is default
+  // apiKey and projectId auto-detected from WALLCRAWLER_* env vars
+});
+
+// Or explicitly
+const stagehand = new Stagehand({
+  env: 'WALLCRAWLER',
+  apiKey: process.env.WALLCRAWLER_API_KEY,
+  projectId: process.env.WALLCRAWLER_PROJECT_ID,
+});
+```
+
+This comprehensive fork ensures that Wallcrawler users get the best possible experience while maintaining full compatibility with the Stagehand ecosystem and API contract.
+
+### 3. Components Package (`packages/components`)
 
 **Purpose**: React components for UI integration.
 
@@ -297,7 +464,7 @@ interface BrowserViewerProps {
 />
 ```
 
-### 3. Backend Go (`packages/backend-go`)
+### 4. Backend Go (`packages/backend-go`)
 
 **Lambda Handlers**: Each handler implements the Stagehand API contract:
 
@@ -327,7 +494,7 @@ interface BrowserViewerProps {
 }
 ```
 
-### 4. AWS CDK (`packages/aws-cdk`)
+### 5. AWS CDK (`packages/aws-cdk`)
 
 **Infrastructure Components**:
 
