@@ -1,591 +1,1150 @@
-# Wallcrawler
+# Wallcrawler Design Document
 
-The documentation is structured as follows:
+## Table of Contents
 
-- **Consolidated File Structure**: Updated monorepo structure with minimal Stagehand integration
-- **Mermaid Diagrams**: Architecture and flow diagrams
-- **Stagehand Integration Strategy**: How Stagehand works with Wallcrawler via provider configuration
-- **Package Specifications**: Detailed specs for each package
+1. [Overview](#overview)
+2. [Architecture Overview](#architecture-overview)
+3. [Core Components](#core-components)
+4. [Data Flow](#data-flow)
+5. [API Design](#api-design)
+6. [Session Management](#session-management)
+7. [Infrastructure](#infrastructure)
+8. [Security](#security)
+9. [Performance & Scaling](#performance--scaling)
+10. [Deployment](#deployment)
 
-## Consolidated File Structure
+## Overview
 
-Wallcrawler integrates with the existing Stagehand library through provider configuration rather than extensive modifications. The monorepo includes packages for SDK, components, backend, and infrastructure.
+Wallcrawler is a serverless browser automation platform that provides Stagehand-compatible remote browser sessions running on AWS infrastructure. It enables LLM-driven browser automation through a modern, event-driven architecture powered by AWS EventBridge.
 
-```
-wallcrawler/
-├── packages/
-│   ├── util-ts/          # Shared TypeScript types and utilities
-│   │   └── src/
-│   │       ├── types.ts  # Shared types: SessionMetadata, ActOptions, ObserveResult, Session, SessionCreateParams, StreamData
-│   │       └── utils.ts  # Shared functions: parseLLMResponse, validateScript, decodeStreamFrame
-│   ├── util-go/          # Shared Go utilities for backend handlers and ECS controller
-│   │   ├── parse_script.go  # Parses script strings into Action structs
-│   │   └── redis_client.go  # Helpers for Redis operations
-│   ├── sdk/              # Wallcrawler SDK package (mirrors Browserbase SDK)
-│   │   └── src/
-│   │       ├── index.ts     # Main Wallcrawler class with APIClient
-│   │       ├── sessions.ts  # Sessions resource for create/retrieve/debug/end
-│   │       ├── core.ts      # Core APIClient and APIResource classes
-│   │       └── error.ts     # Custom errors (e.g., WallcrawlerError)
-│   ├── components/       # React components for client-side UI
-│   │   └── src/
-│   │       ├── BrowserViewer.tsx  # React component to display WebSocket stream
-│   │       └── index.ts          # Exports BrowserViewer
-│   ├── aws-cdk/          # AWS Infrastructure as Code (TypeScript CDK stack)
-│   │   ├── lib/
-│   │   │   └── wallcrawler-stack.ts  # Defines AWS resources
-│   │   └── bin/
-│   │       └── wallcrawler.ts  # CDK app entry
-│   ├── backend-go/       # Go code for Lambda handlers and ECS controller
-│   │   ├── cmd/
-│   │   │   ├── start-session/   # StartSessionLambda
-│   │   │   ├── act/            # ActLambda
-│   │   │   ├── observe/        # ObserveLambda
-│   │   │   ├── extract/        # ExtractLambda
-│   │   │   ├── navigate/       # NavigateLambda
-│   │   │   ├── agent-execute/  # AgentExecuteLambda
-│   │   │   ├── resume-session/ # ResumeSessionLambda
-│   │   │   ├── stop-session/   # StopSessionLambda
-│   │   │   ├── retrieve/       # RetrieveSessionLambda
-│   │   │   ├── debug/          # DebugSessionLambda
-│   │   │   ├── screencast/     # ScreencastLambda
-│   │   │   └── ecs-controller/ # ECS Go controller
-│   │   ├── Dockerfile          # Docker image for ECS container
-│   │   └── go.mod              # Go dependencies
-│   ├── client-nextjs/    # Demo Next.js app using Stagehand with Wallcrawler
-│   │   ├── src/
-│   │   │   └── pages/index.tsx  # Example usage with BrowserViewer
-│   │   └── package.json
-│   └── stagehand/        # Stagehand library (used as-is with provider config)
-├── pnpm-workspace.yaml   # Defines monorepo packages
-└── README.md             # Project overview and setup instructions
-```
+### Key Features
 
-## Stagehand Integration Strategy
+- **Event-Driven Architecture**: AWS EventBridge orchestrates all session lifecycle events for reliability and scalability
+- **Remote Browser Sessions**: ECS Fargate containers running Chrome with remote debugging
+- **Stagehand Integration**: Compatible API for seamless Stagehand integration
+- **Dual Mode Support**:
+  - **API Mode**: Full proxy through Wallcrawler APIs with streaming responses
+  - **Direct Mode**: Direct Chrome DevTools Protocol (CDP) access for privacy
+- **WebSocket Streaming**: Real-time browser viewport streaming with EventBridge coordination
+- **Serverless Architecture**: AWS Lambda functions with EventBridge-driven workflows
+- **Hybrid State Management**: EventBridge for lifecycle orchestration, Redis for real-time operations
+- **Enterprise Reliability**: Automatic retry, dead letter queues, and comprehensive observability
 
-**Key Insight**: We extended Stagehand's `StagehandAPI` to support custom providers, adding 'wallcrawler' with minimal modifications to enable compatibility without altering core logic.
-
-### Direct vs API Modes
-
-- **API Mode** (default): API mode offloads LLM inference and browser commands to Wallcrawler's remote API via HTTP requests, allowing seamless integration without local browser management. This is the primary mode for production use, where Stagehand acts as a client sending instructions and receiving streamed results.
-
-- **Direct Mode** (usingAPI: false): Similar to local mode in that commands are executed locally via Playwright, but uses Wallcrawler's SDK to manage remote browser sessions and connect via CDP. This provides remote browser benefits (e.g., scalability, anti-detection) without full API offloading. It's not identical to purely local mode, as the browser runs in the cloud—ideal for hybrid setups.
-
-For purely local execution (no remote infra), use env: "LOCAL".
-
-Stagehand uses `StagehandAPI` with `provider="wallcrawler"` configuration:
-
-```typescript
-// Stagehand automatically uses WallcrawlerAPI when env="WALLCRAWLER"
-const stagehand = new Stagehand({
-  env: 'WALLCRAWLER',
-  apiKey: process.env.WALLCRAWLER_API_KEY,
-  projectId: process.env.WALLCRAWLER_PROJECT_ID,
-});
-
-await stagehand.init();
-await stagehand.page.goto('https://example.com');
-await stagehand.page.act('click the button');
-const data = await stagehand.page.extract({ schema: mySchema });
-```
-
-**Hybrid Architecture**:
-
-- **LLM Operations** → HTTP requests to Wallcrawler API
-- **Browser Control** → Direct CDP connection to remote browser
-- **Session Management** → Wallcrawler SDK for session lifecycle
-
-### Direct Browser Mode (Fallback)
-
-For development or when API is unavailable, Stagehand connects directly to remote browser via CDP using Wallcrawler SDK for session management.
-
-## Mermaid Diagrams
-
-### 1. Architecture Overview
+### System Boundaries
 
 ```mermaid
-classDiagram
-    class Client["Client (Stagehand)"] {
-        +Stagehand(env: "WALLCRAWLER")
-        +init()
-        +page.act(instruction)
-        +page.extract(schema)
-        +page.observe()
-        +agent.execute(goal)
-    }
-    class StagehandAPI["StagehandAPI"] {
-        +provider: "wallcrawler"
-        +init(params)
-        +act(options)
-        +extract(options)
-        +observe(options)
-        +navigate(url)
-        +agentExecute(config)
-    }
-    class WallcrawlerSDK["Wallcrawler SDK"] {
-        +sessions.create(params)
-        +sessions.retrieve(sessionId)
-        +sessions.debug(sessionId)
-        +sessions.end(sessionId)
-    }
-    class API["API Gateway"] {
-        +/sessions/start (POST)
-        +/sessions/id/act (POST)
-        +/sessions/id/extract (POST)
-        +/sessions/id/observe (POST)
-        +/sessions/id/navigate (POST)
-        +/sessions/id/agentExecute (POST)
-        +/sessions/id/end (POST)
-        +/sessions/id/retrieve (GET)
-        +/sessions/id/debug (GET)
-        +/screencast (WebSocket)
-    }
-    class Lambda["Lambda Handlers"] {
-        +StartSessionLambda
-        +ActLambda
-        +ExtractLambda
-        +ObserveLambda
-        +NavigateLambda
-        +AgentExecuteLambda
-        +StopSessionLambda
-        +RetrieveSessionLambda
-        +DebugSessionLambda
-        +ScreencastLambda
-    }
-    class Redis["Redis (ElastiCache)"] {
-        +storeSession(id, state, cdpEndpoint)
-        +updateState(id, state)
-        +pub/sub for events
-    }
-    class ECS["ECS Fargate Container"] {
-        +Headless Chrome (CDP:9222)
-        +Go Controller
-        +Stream frames to WebSocket
-    }
+graph TB
+    subgraph "External"
+        Client[Client Application]
+        Stagehand[Stagehand Library]
+        LLM[LLM Provider<br/>OpenAI/Anthropic]
+    end
 
-    Client --> StagehandAPI : LLM operations (API mode)
-    Client --> WallcrawlerSDK : Session management
-    StagehandAPI --> API : HTTP requests with x-wc-* headers
-    WallcrawlerSDK --> API : Session lifecycle requests
-    API --> Lambda : Invokes handlers
-    Lambda --> Redis : Store/Retrieve state
-    Lambda --> ECS : Manage browser sessions
-    ECS --> API : Stream frames via WebSocket
+    subgraph "Wallcrawler Platform"
+        API[API Gateway]
+        Lambda[Lambda Functions]
+        ECS[ECS Browser Tasks]
+        Redis[Redis State Store]
+        WS[WebSocket API]
+    end
+
+    subgraph "AWS Infrastructure"
+        VPC[VPC Network]
+        ALB[Application Load Balancer]
+        EventBridge[EventBridge]
+    end
+
+    Client --> API
+    Stagehand --> API
+    Stagehand -.-> ECS
+    Client --> WS
+    API --> Lambda
+    Lambda --> ECS
+    Lambda --> Redis
+    Lambda --> EventBridge
+    ECS --> Redis
+    ECS --> WS
+
+    style API fill:#e1f5fe
+    style Lambda fill:#e1f5fe
+    style ECS fill:#e1f5fe
+    style Redis fill:#e1f5fe
+    style WS fill:#e1f5fe
+    style Client fill:#f3e5f5
+    style Stagehand fill:#f3e5f5
+    style LLM fill:#f3e5f5
+    style VPC fill:#e8f5e8
+    style ALB fill:#e8f5e8
+    style EventBridge fill:#e8f5e8
 ```
 
-### 2. Session Flow (API Mode)
+## Architecture Overview
+
+Wallcrawler follows a serverless, event-driven architecture designed for scalability and cost-effectiveness.
+
+### High-Level Architecture
 
 ```mermaid
-sequenceDiagram
-    participant Client as Client (Stagehand)
-    participant StagehandAPI as StagehandAPI
-    participant SDK as Wallcrawler SDK
-    participant API as API Gateway
-    participant Lambda as Lambda
-    participant ECS as ECS Container
-    participant Chrome as Chrome Browser
+graph TB
+    subgraph "Client Layer"
+        StagehandApp[Stagehand Application]
+        WebApp[Web Application]
+        SDK[Wallcrawler SDK]
+    end
 
-    Client->>SDK: init() → sessions.create()
-    SDK->>API: POST /start-session {projectId}
-    API->>Lambda: Invoke StartSessionLambda
-    Lambda->>ECS: Launch Fargate task
-    Lambda->>SDK: Return {id, connectUrl}
+    subgraph "API Layer"
+        RestAPI[REST API Gateway]
+        WebSocketAPI[WebSocket API Gateway]
+        WAF[Web Application Firewall]
+    end
 
-    Client->>ECS: Connect via CDP (connectUrl)
-    Client->>Client: page.goto("url") → Direct CDP
+    subgraph "Compute Layer"
+        StartLambda[Session Start Lambda]
+        ActLambda[Act Lambda]
+        ExtractLambda[Extract Lambda]
+        ObserveLambda[Observe Lambda]
+        NavigateLambda[Navigate Lambda]
+        AgentLambda[Agent Execute Lambda]
+        DebugLambda[Debug Lambda]
+        EndLambda[End Session Lambda]
+        ScreencastLambda[Screencast Lambda]
+    end
 
-    Client->>StagehandAPI: page.act("click button")
-    StagehandAPI->>API: POST /sessions/{id}/act
-    API->>Lambda: Invoke ActLambda
-    Lambda->>ECS: Execute via event
-    ECS->>Chrome: CDP commands
-    ECS->>StagehandAPI: Stream results
-    StagehandAPI->>Client: Return results
+    subgraph "Browser Layer"
+        ECSCluster[ECS Fargate Cluster]
+        BrowserTask1[Browser Task 1<br/>Chrome + Controller]
+        BrowserTask2[Browser Task 2<br/>Chrome + Controller]
+        BrowserTaskN[Browser Task N<br/>Chrome + Controller]
+    end
+
+    subgraph "Storage Layer"
+        RedisCluster[Redis ElastiCache<br/>Session State]
+    end
+
+    subgraph "Event Layer"
+        EventBridge[EventBridge<br/>Session Events]
+    end
+
+    subgraph "Monitoring Layer"
+        CloudWatch[CloudWatch Logs & Metrics]
+        XRay[X-Ray Tracing]
+    end
+
+    StagehandApp --> RestAPI
+    WebApp --> RestAPI
+    WebApp --> WebSocketAPI
+    SDK --> RestAPI
+
+    RestAPI --> WAF
+    WebSocketAPI --> WAF
+    WAF --> StartLambda
+    WAF --> ActLambda
+    WAF --> ExtractLambda
+    WAF --> ObserveLambda
+    WAF --> NavigateLambda
+    WAF --> AgentLambda
+    WAF --> DebugLambda
+    WAF --> EndLambda
+    WebSocketAPI --> ScreencastLambda
+
+    StartLambda --> ECSCluster
+    ActLambda --> BrowserTask1
+    ExtractLambda --> BrowserTask2
+    EndLambda --> BrowserTaskN
+
+    StartLambda --> RedisCluster
+    ActLambda --> RedisCluster
+    BrowserTask1 --> RedisCluster
+    BrowserTask2 --> RedisCluster
+
+    StartLambda --> EventBridge
+    EndLambda --> EventBridge
+    BrowserTask1 --> EventBridge
+
+    ECSCluster --> BrowserTask1
+    ECSCluster --> BrowserTask2
+    ECSCluster --> BrowserTaskN
+
+    ScreencastLambda --> CloudWatch
+    BrowserTask1 --> CloudWatch
+    StartLambda --> CloudWatch
+
+    style StagehandApp fill:#e3f2fd
+    style WebApp fill:#e3f2fd
+    style SDK fill:#e3f2fd
+    style RestAPI fill:#f3e5f5
+    style WebSocketAPI fill:#f3e5f5
+    style WAF fill:#f3e5f5
+    style StartLambda fill:#e8f5e8
+    style ActLambda fill:#e8f5e8
+    style ExtractLambda fill:#e8f5e8
+    style ECSCluster fill:#fff3e0
+    style BrowserTask1 fill:#fff3e0
+    style BrowserTask2 fill:#fff3e0
+    style RedisCluster fill:#fce4ec
+    style EventBridge fill:#f1f8e9
+    style CloudWatch fill:#e0f2f1
 ```
 
-### 3. Session Flow (Direct Mode)
+## Core Components
 
-In direct mode (usingAPI: false), Stagehand uses the SDK for session management and connects directly via CDP for browser control, bypassing the API for operations. This diagram shows the complete flow including Chrome remote debugging setup and actual Stagehand operations:
+### 1. API Gateway & Lambda Functions
+
+The API layer handles all incoming requests and routes them to appropriate Lambda functions.
+
+### 2. ECS Browser Tasks
+
+Each browser session runs in a dedicated ECS Fargate task containing:
+
+- Chrome browser with remote debugging enabled
+- Go controller for session management
+- WebSocket communication for real-time updates
+
+### 3. Redis State Store
+
+Centralized session state management with automatic expiration and cleanup.
+
+### 4. WebSocket API
+
+Real-time streaming for browser screencast and bidirectional communication.
+
+## Data Flow
+
+### EventBridge-Driven Session Creation Flow
+
+Wallcrawler uses EventBridge as the central coordination layer for all session lifecycle events, providing reliable, scalable, and observable session management.
 
 ```mermaid
 sequenceDiagram
     participant Client as Stagehand Client
-    participant SDK as Wallcrawler SDK
+    participant API as Session Start API
+    participant EventBridge as EventBridge
+    participant Provisioner as Session Provisioner Lambda
+    participant ECS as ECS Service
+    participant Browser as Browser Task
+    participant Redis as Redis State Store
+    participant Webhook as Webhook Lambda
+
+    Client->>API: POST /sessions/start
+    API->>API: Generate session ID
+    API->>Redis: Store session (status: CREATING)
+    API->>EventBridge: Publish SessionCreateRequested
+    API-->>Client: {"sessionId": "sess_123", "status": "creating"}
+
+    EventBridge->>Provisioner: Route creation event
+    Provisioner->>Redis: Update status: PROVISIONING
+    Provisioner->>ECS: Create Fargate task
+
+    ECS->>Browser: Launch container
+    Browser->>Browser: Start Chrome with CDP
+    Browser->>Redis: Update status: STARTING
+
+    Browser->>EventBridge: Publish SessionChromeReady
+    EventBridge->>Provisioner: Handle ready event
+
+    loop IP Assignment Wait
+        Provisioner->>ECS: Check task public IP
+        ECS-->>Provisioner: Task details + IP
+    end
+
+    Provisioner->>Redis: Update status: READY + connectURL
+    Provisioner->>EventBridge: Publish SessionReady
+
+    EventBridge->>Webhook: Notify ready (optional)
+
+    Note over Client: Client polls /sessions/{id}/status
+    Client->>API: GET /sessions/{id}/status
+    API->>Redis: Get session state
+    API-->>Client: {"status": "ready", "connectUrl": "ws://ip:9222"}
+
+    Note over Client, Browser: Session ready for CDP connection
+```
+
+### Session Interaction Flow (EventBridge Coordination)
+
+All session interactions are coordinated through EventBridge for reliability and observability:
+
+```mermaid
+sequenceDiagram
+    participant Client as Stagehand Client
     participant API as API Gateway
-    participant Lambda as Lambda
-    participant ECS as ECS Task
-    participant Chrome as Chrome Browser
+    participant ActLambda as Act Lambda
+    participant EventBridge as EventBridge
+    participant Browser as Browser Controller
+    participant Redis as Redis State Store
+    participant LLM as LLM Provider
 
-    Note over Client,Chrome: Session Setup Phase
-    Client->>SDK: wallcrawler.sessions.create()
-    SDK->>API: POST /start-session
-    API->>Lambda: StartSessionLambda
-    Lambda->>ECS: Launch Fargate task
-    ECS->>Chrome: Start Chrome with --remote-debugging-port=9222
-    Lambda->>Lambda: Wait for task IP
-    Lambda->>SDK: Return {id, connectUrl: "ws://IP:9222"}
+    Client->>API: POST /sessions/{id}/act
+    API->>ActLambda: Stream request
+    ActLambda->>Redis: Get session state
+    ActLambda->>EventBridge: Publish ActionStarted
 
-    Note over Client,Chrome: Direct CDP Connection
-    Client->>Chrome: chromium.connectOverCDP(connectUrl)
+    EventBridge->>Browser: Route action event (via Redis Pub/Sub)
+    Browser->>Redis: Update session: ACTIVE
+    Browser->>Browser: Get page DOM
+    Browser->>LLM: Send DOM + instruction
+    LLM-->>Browser: Return action plan
+    Browser->>Browser: Execute CDP commands
 
-    Note over Client,Chrome: Stagehand Operations (Local LLM + Direct CDP)
-    Client->>Chrome: page.goto("https://example.com")
-    Client->>Chrome: page.act("click button") → CDP commands
-    Client->>Chrome: page.extract(schema) → CDP commands
-    Client->>Chrome: page.observe() → CDP commands
+    loop Streaming Response
+        Browser->>EventBridge: Publish ActionProgress
+        EventBridge->>ActLambda: Route progress event
+        ActLambda-->>API: Forward stream
+        API-->>Client: Stream chunk
+    end
 
-    Note over Client,Chrome: Debug & Cleanup
-    Client->>SDK: sessions.debug() for DevTools
-    SDK->>API: GET /sessions/{id}/debug
-    API->>Lambda: DebugLambda
-    Lambda->>SDK: Return {debuggerUrl: "http://IP:9222"}
-
-    Client->>SDK: sessions.end() when done
-    SDK->>API: POST /sessions/{id}/end
-    API->>Lambda: EndSessionLambda
-    Lambda->>ECS: Stop task
+    Browser->>Redis: Update session: READY
+    Browser->>EventBridge: Publish ActionCompleted
+    EventBridge->>ActLambda: Route completion event
+    ActLambda-->>API: Complete response
+    API-->>Client: End stream
 ```
 
-## Package Specifications
+### Enhanced Session Termination Flow
 
-### 1. Wallcrawler SDK (`packages/sdk-node`)
+EventBridge orchestrates comprehensive session cleanup with automatic retry and error handling:
 
-We forked the Browserbase SDK and extended it to create the Wallcrawler SDK. This approach ensures compatibility with Stagehand while customizing for Wallcrawler's API endpoints, authentication, and session management. The SDK handles essential operations like session creation, retrieval, debugging, and termination, making it suitable for both API mode and direct (CDP) mode in Stagehand.
+```mermaid
+sequenceDiagram
+    participant Client as Stagehand Client
+    participant API as API Gateway
+    participant EndLambda as End Session Lambda
+    participant EventBridge as EventBridge
+    participant CleanupLambda as Cleanup Lambda
+    participant Browser as Browser Task
+    participant ECS as ECS Service
+    participant Redis as Redis State Store
+    participant Monitor as Monitoring Lambda
 
-**Approach**:
+    Client->>API: POST /sessions/{id}/end
+    API->>EndLambda: Terminate session
+    EndLambda->>Redis: Get session state
+    EndLambda->>EventBridge: Publish SessionTerminationRequested
+    EndLambda-->>API: {"status": "terminating"}
+    API-->>Client: Termination acknowledged
 
-- **Forked Structure**: Based on Browserbase's SDK, with core logic in `src/core.ts`, errors in `src/error.ts`, and resources in `src/resources/`.
-- **Consolidated Implementation**: Class definitions for `Browserbase` and `Wallcrawler` are consolidated in `src/index.ts`, extending an abstract `BrowserClient` from `src/base.ts`. This eliminates duplication by centralizing shared logic (e.g., API requests, headers, timeouts) in the base class, with service-specific overrides for base URL, auth headers, and environment variables.
-- **Key Customizations**:
-  - Uses Wallcrawler-specific headers (e.g., `x-wc-api-key`) and base URL (`https://api.wallcrawler.dev/v1`).
-  - Supports dual compatibility: Can instantiate either `Browserbase` or `Wallcrawler` clients.
-  - Removed redundant files (`browserbase.ts`, `wallcrawler.ts`) for a single source of truth in `index.ts`.
-- **TypeScript-Focused**: Full type safety with no `any` or `unknown`, including detailed types for sessions, contexts, extensions, and projects.
-- **Integration with Stagehand**: Used in Stagehand's `getBrowser()` for env: 'WALLCRAWLER' in direct mode, enabling remote session creation and CDP connection without full API dependency.
+    EventBridge->>CleanupLambda: Route termination event
+    CleanupLambda->>Redis: Update status: TERMINATING
+    CleanupLambda->>Browser: Signal graceful shutdown
+    CleanupLambda->>ECS: Stop Fargate task
 
-**Core Methods** (via `Wallcrawler` class):
+    Browser->>Browser: Stop Chrome gracefully
+    Browser->>EventBridge: Publish SessionResourcesReleased
+
+    EventBridge->>CleanupLambda: Handle resource release
+    CleanupLambda->>Redis: Update status: STOPPED
+    CleanupLambda->>EventBridge: Publish SessionTerminated
+
+    EventBridge->>Monitor: Update metrics & billing
+    EventBridge->>CleanupLambda: Final cleanup (delayed)
+
+    Note over CleanupLambda: Wait 60s for task shutdown
+    CleanupLambda->>Redis: Delete session data
+    CleanupLambda->>EventBridge: Publish SessionCleanupCompleted
+
+    Note over EventBridge: Session lifecycle complete
+```
+
+### Direct Mode Connection Flow
+
+```mermaid
+sequenceDiagram
+    participant Client as Stagehand Client
+    participant API as API Gateway
+    participant DebugLambda as Debug Lambda
+    participant Redis as Redis Cluster
+    participant Browser as Browser Task
+
+    Client->>API: GET /sessions/{id}/debug
+    API->>DebugLambda: Get debug URL
+    DebugLambda->>Redis: Get session state
+    Redis-->>DebugLambda: Session with public IP
+    DebugLambda-->>API: Return CDP URL
+    API-->>Client: ws://[public-ip]:9222
+
+    Client->>Browser: Direct CDP connection
+    Browser-->>Client: Chrome DevTools Protocol
+
+    Note over Client, Browser: Direct communication bypasses Wallcrawler APIs
+```
+
+### Enhanced WebSocket Flow with EventBridge Coordination
+
+WebSocket operations are coordinated through EventBridge for better reliability and monitoring:
+
+```mermaid
+sequenceDiagram
+    participant Client as Web Client
+    participant WSGateway as WebSocket Gateway
+    participant ScreencastLambda as Screencast Lambda
+    participant EventBridge as EventBridge
+    participant Redis as Redis State Store
+    participant Browser as Browser Controller
+
+    Client->>WSGateway: WebSocket connect
+    WSGateway->>ScreencastLambda: $connect event
+    ScreencastLambda->>Redis: Store connection ID
+    ScreencastLambda->>EventBridge: Publish WebSocketConnected
+
+    Client->>WSGateway: {"action": "start_screencast", "sessionId": "sess_123"}
+    WSGateway->>ScreencastLambda: Route message
+    ScreencastLambda->>Redis: Validate session
+    ScreencastLambda->>EventBridge: Publish ScreencastStartRequested
+
+    EventBridge->>Browser: Route capture event (via Redis Pub/Sub)
+    Browser->>Browser: Start Chrome screencast
+    Browser->>EventBridge: Publish ScreencastStarted
+
+    loop Frame Streaming
+        Browser->>Browser: Capture frame
+        Browser->>ScreencastLambda: Send frame via WebSocket
+        ScreencastLambda->>WSGateway: Broadcast frame
+        WSGateway->>Client: Frame data
+    end
+
+    Client->>WSGateway: {"action": "stop_screencast"}
+    WSGateway->>ScreencastLambda: Route message
+    ScreencastLambda->>EventBridge: Publish ScreencastStopRequested
+    EventBridge->>Browser: Route stop event (via Redis Pub/Sub)
+    Browser->>Browser: Stop screencast
+    Browser->>EventBridge: Publish ScreencastStopped
+```
+
+## Architecture Decision: EventBridge vs Redis
+
+Understanding the distinct roles of EventBridge and Redis is crucial to Wallcrawler's architecture design.
+
+### EventBridge: Session Lifecycle Orchestration
+
+**Primary Role**: Event-driven coordination of session lifecycle and cross-service communication
+
+```mermaid
+graph TB
+    subgraph "EventBridge Responsibilities"
+        SessionLifecycle[Session Lifecycle Events<br/>Create → Ready → Active → Terminated]
+        CrossService[Cross-Service Communication<br/>Lambda ↔ ECS ↔ Monitoring]
+        AsyncWorkflows[Async Workflow Coordination<br/>Retry Logic, Error Handling]
+        Observability[Event Auditing & Tracing<br/>Complete Session History]
+        Scaling[Auto-scaling Triggers<br/>Resource Management]
+    end
+
+    subgraph "Event Types"
+        Creation[SessionCreateRequested<br/>SessionReady<br/>SessionCreateFailed]
+        Operations[ActionStarted<br/>ActionCompleted<br/>ScreencastStarted]
+        Cleanup[SessionTerminationRequested<br/>SessionResourcesReleased<br/>SessionCleanupCompleted]
+        Monitoring[SessionMetrics<br/>BillingEvents<br/>ResourceUsage]
+    end
+
+    SessionLifecycle --> Creation
+    CrossService --> Operations
+    AsyncWorkflows --> Cleanup
+    Observability --> Monitoring
+```
+
+**Why EventBridge for Session Management:**
+
+1. **🔄 Reliable Event Delivery**: Built-in retry mechanisms and dead letter queues
+2. **📊 Complete Audit Trail**: Every session lifecycle event is tracked and traceable
+3. **🎯 Decoupled Architecture**: Services don't need direct communication
+4. **⚡ Auto-scaling**: Resource creation/cleanup based on demand patterns
+5. **🛡️ Error Resilience**: Automatic retry and failure handling workflows
+6. **🔍 Observability**: CloudWatch integration for metrics and monitoring
+
+### Redis: Real-time State and Communication
+
+**Primary Role**: High-performance state storage and real-time inter-service communication
+
+```mermaid
+graph TB
+    subgraph "Redis Responsibilities"
+        SessionState[Session State Storage<br/>Current Status, Metadata, Config]
+        RealTime[Real-time Communication<br/>Pub/Sub for Immediate Actions]
+        Caching[High-speed Data Cache<br/>Session Lookups, Connection Data]
+        Temporary[Temporary Data Storage<br/>Action Results, Frame Buffers]
+        Coordination[ECS Task Coordination<br/>Direct Browser ↔ Lambda Communication]
+    end
+
+    subgraph "Data Patterns"
+        StateData[session:{id} → Session State<br/>session:{id}:viewers → WebSocket Connections]
+        PubSubChannels[session:{id}:events → Real-time Commands<br/>screencast:{id} → Frame Data]
+        Cache[task_ips:{taskId} → Public IPs<br/>connection_sessions → WebSocket Mapping]
+    end
+
+    SessionState --> StateData
+    RealTime --> PubSubChannels
+    Caching --> Cache
+```
+
+**Why Redis for Real-time Operations:**
+
+1. **⚡ Sub-millisecond Performance**: Critical for real-time browser operations
+2. **🔄 Pub/Sub Messaging**: Direct communication between ECS tasks and Lambda functions
+3. **📱 WebSocket State**: Managing active WebSocket connections and viewers
+4. **🎯 Session Lookups**: Fast session state retrieval for API requests
+5. **🔄 Atomic Operations**: Session status updates and viewer count management
+6. **⏰ TTL Support**: Automatic cleanup of expired session data
+
+### Hybrid Communication Architecture
+
+```mermaid
+graph TB
+    subgraph "EventBridge Flow (Lifecycle Events)"
+        EB1[Session Creation] --> EB2[Resource Provisioning]
+        EB2 --> EB3[Session Ready]
+        EB3 --> EB4[Session Termination]
+        EB4 --> EB5[Cleanup Complete]
+    end
+
+    subgraph "Redis Flow (Real-time Operations)"
+        R1[Action Commands] --> R2[Browser Execution]
+        R2 --> R3[Status Updates]
+        R3 --> R4[Response Streaming]
+        R4 --> R5[WebSocket Broadcasting]
+    end
+
+    subgraph "Integration Points"
+        EventBridge --> Redis
+        Redis --> EventBridge
+    end
+
+    Note1[EventBridge: Reliable, Auditable, Async]
+    Note2[Redis: Fast, Real-time, Direct]
+
+    style EventBridge fill:#e3f2fd
+    style Redis fill:#fce4ec
+```
+
+### Event Types and Patterns
+
+| Category                | Event Type                    | Source                | Target                  | Purpose                        |
+| ----------------------- | ----------------------------- | --------------------- | ----------------------- | ------------------------------ |
+| **Session Lifecycle**   | `SessionCreateRequested`      | `sessions-start`      | `session-provisioner`   | Trigger async session creation |
+|                         | `SessionReady`                | `session-provisioner` | `webhook-notifications` | Notify session availability    |
+|                         | `SessionTerminationRequested` | `end-session`         | `cleanup-handler`       | Initiate graceful shutdown     |
+|                         | `SessionCleanupCompleted`     | `cleanup-handler`     | `monitoring`            | Session fully terminated       |
+| **Browser Operations**  | `ActionStarted`               | `act-lambda`          | `monitoring`            | Track action execution         |
+|                         | `ActionCompleted`             | `browser-controller`  | `act-lambda`            | Signal action completion       |
+|                         | `ScreencastStarted`           | `browser-controller`  | `monitoring`            | WebSocket streaming active     |
+| **Resource Management** | `ECSTaskStarted`              | `session-provisioner` | `monitoring`            | Track resource usage           |
+|                         | `ECSTaskFailed`               | `ecs-monitor`         | `error-handler`         | Handle task failures           |
+|                         | `ResourceQuotaExceeded`       | `resource-monitor`    | `scaling-handler`       | Trigger scaling decisions      |
+| **Error Handling**      | `SessionCreateFailed`         | `session-provisioner` | `retry-handler`         | Retry failed sessions          |
+|                         | `SessionTimeout`              | `timeout-monitor`     | `cleanup-handler`       | Clean up stale sessions        |
+
+### Performance Characteristics
+
+| Aspect         | EventBridge               | Redis                      |
+| -------------- | ------------------------- | -------------------------- |
+| **Latency**    | 10-100ms (async)          | <1ms (real-time)           |
+| **Durability** | Persistent, replicated    | In-memory with persistence |
+| **Ordering**   | Event ordering guarantees | Pub/Sub immediate delivery |
+| **Scaling**    | Auto-scaling, unlimited   | Single-node or cluster     |
+| **Use Case**   | Workflow coordination     | Real-time operations       |
+| **Cost**       | Pay per event             | Fixed infrastructure cost  |
+
+## API Design
+
+### REST API Endpoints
+
+Wallcrawler provides a Stagehand-compatible API with additional native endpoints.
+
+```mermaid
+graph TB
+    subgraph "Session Management"
+        StartSession[POST /sessions/start<br/>Stagehand Compatible]
+        StartNative[POST /start-session<br/>Wallcrawler Native]
+        RetrieveSession[GET /sessions/{id}/retrieve]
+        DebugSession[GET /sessions/{id}/debug]
+        EndSession[POST /sessions/{id}/end]
+    end
+
+    subgraph "Browser Operations (Streaming)"
+        Act[POST /sessions/{id}/act]
+        Extract[POST /sessions/{id}/extract]
+        Observe[POST /sessions/{id}/observe]
+        Navigate[POST /sessions/{id}/navigate]
+        AgentExecute[POST /sessions/{id}/agentExecute]
+    end
+
+    subgraph "Real-time Communication"
+        WSConnect[WebSocket /screencast]
+        WSEvents[Event Broadcasting]
+    end
+
+    StartSession --> Lambda1[sessions-start Lambda]
+    StartNative --> Lambda2[start-session Lambda]
+    RetrieveSession --> Lambda3[retrieve Lambda]
+    DebugSession --> Lambda4[debug Lambda]
+    EndSession --> Lambda5[end Lambda]
+
+    Act --> Lambda6[act Lambda]
+    Extract --> Lambda7[extract Lambda]
+    Observe --> Lambda8[observe Lambda]
+    Navigate --> Lambda9[navigate Lambda]
+    AgentExecute --> Lambda10[agent-execute Lambda]
+
+    WSConnect --> Lambda11[screencast Lambda]
+    WSEvents --> Lambda11
+
+
+```
+
+### Authentication & Headers
+
+All API requests require authentication and specific headers:
+
+```yaml
+Headers:
+  x-wc-api-key: 'your-api-key' # API authentication
+  x-wc-project-id: 'project-id' # Project identification
+  x-wc-session-id: 'session-id' # Session context (optional)
+  x-model-api-key: 'llm-api-key' # LLM provider API key
+  x-stream-response: 'true' # Enable streaming responses
+  Content-Type: 'application/json'
+```
+
+### Response Format
+
+All responses follow a consistent format:
 
 ```typescript
-class Wallcrawler {
-  sessions: Sessions;
-  // Other resources: contexts, extensions, projects
-}
-
-interface Sessions {
-  create(params: SessionCreateParams): Promise<SessionCreateResponse>;
-  retrieve(sessionId: string): Promise<Session>;
-  debug(sessionId: string): Promise<SessionDebugResponse>;
-  end(sessionId: string): Promise<void>;
-}
-```
-
-**Usage Example**:
-
-```typescript
-import { Wallcrawler } from '@wallcrawler/sdk';
-
-const wallcrawler = new Wallcrawler({ apiKey: 'wc_...' });
-const session = await wallcrawler.sessions.create({ projectId: 'proj_123' });
-// Connect via CDP: chromium.connectOverCDP(session.connectUrl)
-```
-
-This forked and consolidated approach reduces maintenance overhead while ensuring seamless integration with Stagehand and full support for Wallcrawler's infrastructure.
-
-### 2. Stagehand Package (`packages/stagehand`)
-
-We forked the official Stagehand library and modified it to natively support Wallcrawler as a first-class provider. This approach ensures deep integration while maintaining compatibility with the original Stagehand API and ecosystem.
-
-**Approach**:
-
-- **Complete Fork**: Full fork of the official Stagehand repository with comprehensive modifications throughout the codebase
-- **Provider-First Architecture**: Wallcrawler is treated as a native provider alongside Browserbase and Local, not just an add-on
-- **Default Environment**: Changed default environment from "LOCAL" to "WALLCRAWLER" for streamlined usage
-- **Comprehensive Integration**: Modifications span across core libraries, types, session management, and API clients
-
-**Key Architectural Changes**:
-
-**Import Consolidation**:
-
-```typescript
-import { Browserbase, Wallcrawler } from '@wallcrawler/sdk';
-```
-
-**Environment Support**:
-
-```typescript
-env: "LOCAL" | "BROWSERBASE" | "WALLCRAWLER" = "WALLCRAWLER"  // Default changed
-
-constructor(params: ConstructorParams = { env: "WALLCRAWLER" })
-```
-
-**Provider Configuration** (in `lib/api.ts`):
-
-```typescript
-private getProviderConfig(): ProviderConfig {
-  switch (this.provider) {
-    case "wallcrawler":
-      return {
-        headers: {
-          apiKey: "x-wc-api-key",
-          projectId: "x-wc-project-id",
-          sessionId: "x-wc-session-id",
-          streamResponse: "x-stream-response",
-          // ... other wallcrawler headers
-        },
-        baseURL: process.env.WALLCRAWLER_API_URL ?? "https://api.wallcrawler.dev/v1",
-      };
-    // ... browserbase case remains unchanged
-  }
-}
-```
-
-**Session Management Integration** (in `getBrowser()` function):
-
-```typescript
-async function getBrowser(env: 'LOCAL' | 'BROWSERBASE' | 'WALLCRAWLER') {
-  if (env === 'WALLCRAWLER') {
-    const wallcrawler = new Wallcrawler({
-      apiKey,
-      baseURL: process.env.WALLCRAWLER_BASE_URL,
-    });
-
-    // Session creation/resumption logic
-    if (wallcrawlerSessionId) {
-      const session = await wallcrawler.sessions.retrieve(wallcrawlerSessionId);
-      // Validate session status and resume
-    } else {
-      const session = await wallcrawler.sessions.create({ projectId });
-      // Create new session
-    }
-
-    // CDP connection
-    const browser = await chromium.connectOverCDP(connectUrl);
-    const { debuggerUrl } = await wallcrawler.sessions.debug(sessionId);
-  }
-}
-```
-
-**Environment Variable Handling**:
-
-```typescript
-// Fallback chain prioritizes Wallcrawler
-this.apiKey = apiKey ?? process.env.WALLCRAWLER_API_KEY ?? process.env.BROWSERBASE_API_KEY;
-
-this.projectId = projectId ?? process.env.WALLCRAWLER_PROJECT_ID ?? process.env.BROWSERBASE_PROJECT_ID;
-```
-
-**API Client Selection**:
-
-```typescript
-// In init() method
-this.apiClient = new StagehandAPI({
-  provider: this.env === 'WALLCRAWLER' ? 'wallcrawler' : 'browserbase',
-  // ... other config
-});
-```
-
-**Core Modifications Summary**:
-
-1. **lib/index.ts**:
-   - Modified `getBrowser()` for Wallcrawler session management
-   - Updated constructor defaults and environment handling
-   - Added Wallcrawler-specific error handling and logging
-
-2. **lib/api.ts**:
-   - Added wallcrawler provider configuration
-   - Custom headers (x-wc-\*) and base URL support
-
-3. **lib/StagehandPage.ts**:
-   - Modified `_refreshPageFromAPI()` to use appropriate client (Wallcrawler vs Browserbase)
-
-4. **types/**:
-   - Updated all type definitions to include "WALLCRAWLER" environment
-   - Added wallcrawler to ProviderType union
-
-5. **package.json**:
-   - Added `@wallcrawler/sdk` dependency
-   - Maintained all original dependencies for compatibility
-
-**Benefits of the Fork Approach**:
-
-- **Native Integration**: Wallcrawler is a first-class citizen, not a plugin
-- **Performance**: No runtime provider detection overhead
-- **Developer Experience**: Simplified configuration with sensible Wallcrawler defaults
-- **Feature Parity**: Full support for all Stagehand features with Wallcrawler infrastructure
-- **Ecosystem Compatibility**: Works with existing Stagehand plugins, tools, and documentation
-
-**Usage Comparison**:
-
-```typescript
-// Original Stagehand (Browserbase)
-const stagehand = new Stagehand({
-  env: 'BROWSERBASE',
-  apiKey: process.env.BROWSERBASE_API_KEY,
-  projectId: process.env.BROWSERBASE_PROJECT_ID,
-});
-
-// Wallcrawler-enhanced Stagehand (simplified)
-const stagehand = new Stagehand({
-  // env: "WALLCRAWLER" is default
-  // apiKey and projectId auto-detected from WALLCRAWLER_* env vars
-});
-
-// Or explicitly
-const stagehand = new Stagehand({
-  env: 'WALLCRAWLER',
-  apiKey: process.env.WALLCRAWLER_API_KEY,
-  projectId: process.env.WALLCRAWLER_PROJECT_ID,
-});
-```
-
-This comprehensive fork ensures that Wallcrawler users get the best possible experience while maintaining full compatibility with the Stagehand ecosystem and API contract.
-
-### 3. Components Package (`packages/components`)
-
-**Purpose**: React components for UI integration.
-
-**BrowserViewer Component**:
-
-```typescript
-interface BrowserViewerProps {
-  sessionId: string;
-  apiKey?: string;
-  onError?: (error: Error) => void;
-  width?: number;
-  height?: number;
-}
-
-// Usage
-<BrowserViewer
-  sessionId={sessionId}
-  width={1280}
-  height={720}
-  onError={(err) => console.error(err)}
-/>
-```
-
-### 4. Backend Go (`packages/backend-go`)
-
-**Lambda Handlers**: Each handler implements the Stagehand API contract:
-
-- **StartSessionLambda**: Creates ECS task, returns session metadata
-- **ActLambda**: Processes act requests with LLM integration
-- **ExtractLambda**: Handles data extraction with schema validation
-- **ObserveLambda**: Returns observable elements
-- **NavigateLambda**: Handles page navigation
-- **AgentExecuteLambda**: Executes multi-step agent workflows
-
-**Request/Response Format**:
-
-```json
-// Request
-{
-  "instruction": "click the submit button",
-  "useVision": true
-}
-
-// Response
+// Success Response
 {
   "success": true,
   "data": {
-    "result": "clicked submit button",
-    "screenshot": "base64..."
+    // Response data
   }
 }
+
+// Error Response
+{
+  "success": false,
+  "message": "Error description"
+}
+
+// Streaming Response (Server-Sent Events)
+data: {"type": "log", "data": {"level": "info", "message": "Starting action..."}}
+data: {"type": "result", "data": {"success": true, "action": "click"}}
+data: {"type": "system", "data": {"status": "complete"}}
 ```
 
-### 5. AWS CDK (`packages/aws-cdk`)
+## Session Management
 
-**Infrastructure Components**:
+### Enhanced Session Lifecycle with EventBridge
 
-- API Gateway with Wallcrawler-specific routing
-- Lambda functions for each action type
-- ECS Fargate cluster for browser sessions
-- Redis ElastiCache for session state
-- EventBridge for async communication
-- WebSocket API for screencast streaming
+```mermaid
+stateDiagram-v2
+    [*] --> CREATING: POST /sessions/start<br/>SessionCreateRequested
+    CREATING --> PROVISIONING: EventBridge routes to provisioner
+    PROVISIONING --> STARTING: ECS task launched<br/>SessionChromeReady
+    CREATING --> FAILED: Task creation failed<br/>SessionCreateFailed
+    PROVISIONING --> FAILED: ECS provisioning failed
 
-**Key Configuration**:
+    STARTING --> READY: Chrome CDP available<br/>SessionReady
+    STARTING --> FAILED: Chrome startup failed
+
+    READY --> ACTIVE: Action execution<br/>ActionStarted
+    ACTIVE --> READY: Action completed<br/>ActionCompleted
+    ACTIVE --> FAILED: Action failed<br/>ActionFailed
+
+    READY --> TERMINATING: POST /sessions/{id}/end<br/>SessionTerminationRequested
+    ACTIVE --> TERMINATING: Force terminate
+    FAILED --> TERMINATING: Auto-cleanup trigger
+
+    TERMINATING --> STOPPED: Resources released<br/>SessionResourcesReleased
+    STOPPED --> [*]: Cleanup completed<br/>SessionCleanupCompleted
+
+    note right of CREATING
+        - Session ID generated
+        - Initial state in Redis
+        - EventBridge orchestration starts
+    end note
+
+    note right of PROVISIONING
+        - ECS Fargate task creation
+        - Public IP assignment
+        - Container startup
+    end note
+
+    note right of READY
+        - Chrome CDP available (port 9222)
+        - Public IP accessible
+        - Ready for Stagehand connections
+    end note
+
+    note right of ACTIVE
+        - Processing browser actions
+        - Streaming API responses
+        - LLM interactions active
+    end note
+
+    note right of TERMINATING
+        - Graceful Chrome shutdown
+        - ECS task stopping
+        - Resource cleanup in progress
+    end note
+```
+
+### Session State Schema with EventBridge Integration
 
 ```typescript
-// API Gateway headers
-const corsHeaders = {
-  'x-wc-api-key': 'required',
-  'x-wc-project-id': 'required',
-  'x-wc-session-id': 'required',
-  'x-stream-response': 'true',
-};
-```
+interface EnhancedSessionState {
+  id: string; // Unique session identifier
+  status: SessionStatus; // Current lifecycle status
+  projectId: string; // Project identification
+  connectUrl?: string; // Chrome CDP WebSocket URL
+  ecsTaskArn?: string; // AWS ECS task ARN
+  publicIP?: string; // ECS task public IP
+  userMetadata?: object; // User-defined metadata
+  modelConfig?: ModelConfig; // LLM configuration
 
-## API Endpoints Specification
+  // EventBridge Integration
+  eventHistory: SessionEvent[]; // Complete event audit trail
+  lastEventTimestamp: Date; // Last EventBridge event
+  retryCount?: number; // Failed creation retry attempts
 
-Wallcrawler API must implement these endpoints for Stagehand compatibility:
+  // Performance Tracking
+  createdAt: Date; // Session creation time
+  provisioningStartedAt?: Date; // ECS task creation started
+  readyAt?: Date; // Chrome CDP available
+  lastActiveAt?: Date; // Last action execution
+  terminatedAt?: Date; // Session termination time
 
-```
-POST   /sessions/start          → Create session & return metadata
-POST   /sessions/{id}/act       → Execute actions with LLM
-POST   /sessions/{id}/extract   → Extract data with schema validation
-POST   /sessions/{id}/observe   → Return observable elements
-POST   /sessions/{id}/navigate  → Handle navigation requests
-POST   /sessions/{id}/agentExecute → Execute agent workflows
-POST   /sessions/{id}/end       → Terminate session
-GET    /sessions/{id}/retrieve  → Get session status
-GET    /sessions/{id}/debug     → Get CDP endpoint
-WebSocket /screencast           → Stream browser frames
-```
+  // Resource Management
+  resourceLimits?: ResourceLimits; // CPU, memory, timeout limits
+  billingInfo?: BillingInfo; // Usage tracking
+}
 
-**Headers**:
+interface SessionEvent {
+  eventType: string; // EventBridge event type
+  timestamp: Date; // Event occurrence time
+  source: string; // Event source service
+  detail: object; // Event-specific data
+  correlationId?: string; // Request correlation
+}
 
-- `x-wc-api-key`: Authentication
-- `x-wc-project-id`: Project identification
-- `x-wc-session-id`: Session identification
-- `x-stream-response: "true"`: Enable streaming responses
+interface ResourceLimits {
+  maxCPU: number; // Maximum CPU allocation
+  maxMemory: number; // Maximum memory (MB)
+  maxDuration: number; // Maximum session duration (seconds)
+  maxActions: number; // Maximum actions per session
+}
 
-**Response Format**:
-
-```json
-{
-  "success": true,
-  "data": {
-    /* action results */
-  }
+enum SessionStatus {
+  CREATING = 'CREATING', // Initial state, EventBridge triggered
+  PROVISIONING = 'PROVISIONING', // ECS task being created
+  STARTING = 'STARTING', // Chrome initializing
+  READY = 'READY', // Available for actions
+  ACTIVE = 'ACTIVE', // Processing actions
+  TERMINATING = 'TERMINATING', // Shutdown in progress
+  STOPPED = 'STOPPED', // Fully terminated
+  FAILED = 'FAILED', // Error state
 }
 ```
 
-## Quickstart
+### EventBridge-Driven Architecture Benefits
 
-### Prerequisites
+Leveraging EventBridge as the central coordination layer provides significant advantages over traditional synchronous architectures:
 
-- Node.js 20+ (recommended via nvm)
-- pnpm, npm, or yarn as package manager
+#### **1. Operational Resilience**
 
-### Steps
+- **Automatic Retry**: Failed session creation automatically retries with exponential backoff
+- **Dead Letter Queues**: Permanently failed requests are captured for analysis
+- **Circuit Breaker**: System automatically stops creating sessions when ECS is at capacity
+- **Graceful Degradation**: API remains responsive even during high load or ECS issues
 
-1. **Create a new project using create-browser-app** (adapted for Wallcrawler):
+#### **2. Cost Optimization**
 
-```bash
-pnpm create browser-app my-wallcrawler-app
+- **Reduced Lambda Duration**: Session start API returns immediately instead of waiting 60+ seconds
+- **Pay-per-Event**: Only pay for actual EventBridge events, not Lambda wait time
+- **Resource Efficiency**: Separate provisioner Lambda only runs during active work
+- **Auto-scaling**: Resources scale based on actual demand patterns
+
+#### **3. Enhanced Observability**
+
+- **Complete Audit Trail**: Every session event is tracked from creation to termination
+- **Performance Metrics**: Detailed timing data for each lifecycle stage
+- **Error Analysis**: Failed session patterns and retry statistics
+- **Billing Accuracy**: Precise resource usage tracking for cost allocation
+
+#### **4. Scalability & Performance**
+
+- **Decoupled Services**: Session creation doesn't block API availability
+- **Independent Scaling**: API and provisioning layers scale independently
+- **Burst Handling**: EventBridge can queue thousands of session requests
+- **Multi-Region**: Easy extension to multiple AWS regions
+
+#### **5. Developer Experience**
+
+- **Event-Driven Debugging**: Easy to trace session issues through event history
+- **A/B Testing**: Different provisioning strategies through event routing
+- **Feature Flags**: Conditional session creation based on user attributes
+- **Webhook Integration**: Real-time notifications to external systems
+
+```mermaid
+graph TB
+    subgraph "Traditional Sync Architecture"
+        SyncAPI[API Request] --> SyncWait[60s Wait] --> SyncResponse[Response]
+        SyncWait --> SyncTimeout[Timeout Risk]
+        SyncWait --> SyncCost[High Lambda Cost]
+    end
+
+    subgraph "EventBridge Architecture"
+        AsyncAPI[API Request] --> AsyncEvent[EventBridge] --> AsyncWork[Background Work]
+        AsyncAPI --> AsyncResponse[Immediate Response]
+        AsyncEvent --> AsyncRetry[Auto Retry]
+        AsyncEvent --> AsyncScale[Auto Scale]
+        AsyncEvent --> AsyncMonitor[Full Observability]
+    end
+
+    SyncTimeout --> AsyncRetry
+    SyncCost --> AsyncScale
+
+    style "Traditional Sync Architecture" fill:#ffebee
+    style "EventBridge Architecture" fill:#e8f5e8
 ```
 
-Answer the prompts:
+This EventBridge-driven approach transforms Wallcrawler from a traditional request-response system into a modern, event-driven platform capable of handling enterprise-scale browser automation workloads with reliability and cost efficiency.
 
-- Project name: my-wallcrawler-app
-- Quickstart example: Yes
-- AI model: e.g., Anthropic Claude 3.5 Sonnet
-- Run locally or on Browserbase: Browserbase (but we'll configure for Wallcrawler)
-- Headless mode: No
+## Infrastructure
 
-2. **Install dependencies**:
+### AWS Architecture Components
+
+```mermaid
+graph TB
+    subgraph "Network Layer"
+        VPC[VPC<br/>10.0.0.0/16]
+        PublicSubnet1[Public Subnet 1<br/>10.0.1.0/24]
+        PublicSubnet2[Public Subnet 2<br/>10.0.2.0/24]
+        PrivateSubnet1[Private Subnet 1<br/>10.0.3.0/24]
+        PrivateSubnet2[Private Subnet 2<br/>10.0.4.0/24]
+        IGW[Internet Gateway]
+        NAT[NAT Gateway]
+    end
+
+    subgraph "Security Groups"
+        LambdaSG[Lambda Security Group<br/>Outbound: All]
+        ECSSG[ECS Security Group<br/>Inbound: 9222 from 0.0.0.0/0<br/>Outbound: All]
+        RedisSG[Redis Security Group<br/>Inbound: 6379 from Lambda/ECS]
+    end
+
+    subgraph "Compute"
+        Lambda[Lambda Functions<br/>VPC: Private Subnets]
+        ECSCluster[ECS Fargate Cluster<br/>VPC: Public Subnets]
+        ECSService[ECS Service<br/>Desired Count: 0]
+    end
+
+    subgraph "Storage"
+        Redis[ElastiCache Redis<br/>VPC: Private Subnets<br/>Node Type: cache.t3.micro]
+    end
+
+    subgraph "API Layer"
+        APIGW[API Gateway<br/>Regional]
+        WSGW[WebSocket Gateway<br/>Regional]
+        WAF[Web Application Firewall<br/>Rate Limiting + Security Rules]
+    end
+
+    subgraph "Monitoring"
+        CloudWatch[CloudWatch<br/>Logs + Metrics]
+        EventBridge[EventBridge<br/>Session Events]
+    end
+
+    VPC --> PublicSubnet1
+    VPC --> PublicSubnet2
+    VPC --> PrivateSubnet1
+    VPC --> PrivateSubnet2
+
+    PublicSubnet1 --> IGW
+    PublicSubnet2 --> IGW
+    PrivateSubnet1 --> NAT
+    PrivateSubnet2 --> NAT
+
+    Lambda --> PrivateSubnet1
+    Lambda --> PrivateSubnet2
+    ECSCluster --> PublicSubnet1
+    ECSCluster --> PublicSubnet2
+    Redis --> PrivateSubnet1
+    Redis --> PrivateSubnet2
+
+    APIGW --> Lambda
+    WSGW --> Lambda
+    WAF --> APIGW
+    WAF --> WSGW
+
+    Lambda --> Redis
+    ECSCluster --> Redis
+    Lambda --> ECSCluster
+    Lambda --> EventBridge
+    ECSCluster --> EventBridge
+
+    Lambda --> CloudWatch
+    ECSCluster --> CloudWatch
+
+
+```
+
+### ECS Task Architecture
+
+```mermaid
+graph TB
+    subgraph "ECS Fargate Task"
+        subgraph "Container: wallcrawler-controller"
+            Chrome[Google Chrome<br/>--remote-debugging-port=9222<br/>--remote-debugging-address=0.0.0.0]
+            Controller[Go Controller<br/>Session Management<br/>WebSocket Communication<br/>CDP Proxy]
+            Stagehand[Stagehand Library<br/>LLM Integration<br/>Action Processing]
+        end
+
+        subgraph "Task Configuration"
+            CPU[CPU: 1024<br/>Memory: 2048 MB]
+            Network[Network Mode: awsvpc<br/>Public IP: Enabled]
+            Platform[Platform: Linux/x86_64]
+        end
+
+        subgraph "Environment Variables"
+            SessionID[SESSION_ID]
+            RedisAddr[REDIS_ADDR]
+            ECSCluster[ECS_CLUSTER]
+            WSEndpoint[WEBSOCKET_API_ENDPOINT]
+            Region[AWS_REGION]
+        end
+
+        subgraph "Port Mappings"
+            Port9222[Container Port: 9222<br/>Protocol: TCP<br/>CDP Access]
+        end
+    end
+
+    subgraph "External Access"
+        DirectCDP[Direct CDP Access<br/>ws://[public-ip]:9222]
+        StagehandClient[Stagehand Client<br/>API Mode]
+        WebSocketClient[WebSocket Client<br/>Screencast]
+    end
+
+    Chrome --> Port9222
+    Controller --> Chrome
+    Controller --> Stagehand
+    Controller --> SessionID
+    Controller --> RedisAddr
+    Controller --> WSEndpoint
+
+    DirectCDP --> Port9222
+    StagehandClient --> Controller
+    WebSocketClient --> Controller
+
+
+```
+
+### Resource Specifications
+
+| Component        | Specification                                    | Scaling      |
+| ---------------- | ------------------------------------------------ | ------------ |
+| Lambda Functions | Runtime: Go 1.21, Memory: 1024MB, Timeout: 15min | Auto-scaling |
+| ECS Tasks        | CPU: 1 vCPU, Memory: 2GB, Platform: Fargate      | On-demand    |
+| Redis            | Node Type: cache.t3.micro, Engine: Redis 7.0     | Single node  |
+| VPC              | CIDR: 10.0.0.0/16, AZs: 2, NAT: 1                | Static       |
+
+## Security
+
+### Authentication & Authorization
+
+```mermaid
+graph TB
+    subgraph "Client Request"
+        Client[Client Application]
+        APIKey[API Key<br/>x-wc-api-key]
+        ProjectID[Project ID<br/>x-wc-project-id]
+    end
+
+    subgraph "API Gateway"
+        WAF[Web Application Firewall]
+        RateLimit[Rate Limiting<br/>1000 req/min]
+        APIAuth[API Key Validation]
+        UsagePlan[Usage Plan]
+    end
+
+    subgraph "Lambda Authorization"
+        HeaderValidation[Header Validation]
+        ProjectValidation[Project Access Check]
+        SessionOwnership[Session Ownership Check]
+    end
+
+    subgraph "ECS Security"
+        TaskRole[ECS Task Role<br/>Minimal Permissions]
+        SecurityGroup[Security Group<br/>Port 9222 Only]
+        VPCEndpoints[VPC Endpoints<br/>AWS Services]
+    end
+
+    Client --> APIKey
+    Client --> ProjectID
+    APIKey --> WAF
+    ProjectID --> WAF
+
+    WAF --> RateLimit
+    RateLimit --> APIAuth
+    APIAuth --> UsagePlan
+    UsagePlan --> HeaderValidation
+
+    HeaderValidation --> ProjectValidation
+    ProjectValidation --> SessionOwnership
+
+    SessionOwnership --> TaskRole
+    TaskRole --> SecurityGroup
+    SecurityGroup --> VPCEndpoints
+
+
+```
+
+### Security Features
+
+1. **API Key Authentication**: All requests require valid API keys
+2. **Project Isolation**: Sessions are isolated by project ID
+3. **Network Security**: VPC with security groups and NACLs
+4. **WAF Protection**: DDoS protection and common attack mitigation
+5. **Encryption**: Data in transit and at rest encryption
+6. **IAM Roles**: Least privilege access for all components
+
+## Performance & Scaling
+
+### Auto-Scaling Configuration
+
+```mermaid
+graph TB
+    subgraph "API Layer Scaling"
+        APIGateway[API Gateway<br/>Auto-scaling<br/>No Limits]
+        Lambda[Lambda Functions<br/>Concurrent Execution: 1000<br/>Reserved Concurrency: 100]
+    end
+
+    subgraph "Browser Layer Scaling"
+        ECSService[ECS Service<br/>Desired Count: 0<br/>Max Count: 100]
+        AutoScaling[Auto Scaling<br/>CPU/Memory Based<br/>Scale Out: 2min<br/>Scale In: 5min]
+    end
+
+    subgraph "Storage Layer Scaling"
+        Redis[Redis ElastiCache<br/>Single Node<br/>Backup: Enabled<br/>Memory: 1GB]
+        Persistence[Data Persistence<br/>RDB Snapshots<br/>TTL: 24 hours]
+    end
+
+    subgraph "Performance Monitoring"
+        CloudWatch[CloudWatch Metrics<br/>API Latency<br/>Error Rates<br/>Resource Utilization]
+        Alarms[CloudWatch Alarms<br/>High Latency: >5s<br/>Error Rate: >5%<br/>Memory: >80%]
+    end
+
+    APIGateway --> Lambda
+    Lambda --> ECSService
+    ECSService --> AutoScaling
+    AutoScaling --> Redis
+
+    Lambda --> CloudWatch
+    ECSService --> CloudWatch
+    Redis --> CloudWatch
+    CloudWatch --> Alarms
+
+
+```
+
+### Performance Targets
+
+| Metric                        | Target          | EventBridge Benefit                              | Monitoring         |
+| ----------------------------- | --------------- | ------------------------------------------------ | ------------------ |
+| Session Start API Response    | < 500ms         | ✅ Immediate response, no 60s wait               | CloudWatch         |
+| Session Ready Time            | < 30 seconds    | ✅ Async provisioning with progress tracking     | EventBridge Events |
+| WebSocket Latency             | < 100ms         | ✅ EventBridge coordination for connection state | Custom Metrics     |
+| Browser Task Startup          | < 20 seconds    | ✅ Parallel provisioning and health checks       | ECS + EventBridge  |
+| Concurrent Sessions           | 500+ per region | ✅ EventBridge queuing and burst handling        | Auto-scaling       |
+| Session Creation Success Rate | > 99%           | ✅ Automatic retry and dead letter queues        | EventBridge DLQ    |
+| Error Recovery Time           | < 60 seconds    | ✅ Circuit breaker and automated cleanup         | EventBridge Rules  |
+
+## Deployment
+
+### CI/CD Pipeline
+
+```mermaid
+graph TB
+    subgraph "Source Control"
+        GitHub[GitHub Repository<br/>wallcrawler]
+        PRs[Pull Requests<br/>Feature Branches]
+        Main[Main Branch<br/>Production Ready]
+    end
+
+    subgraph "Build Process"
+        GoBuilds[Go Lambda Builds<br/>backend-go/build.sh]
+        TypeScriptBuilds[TypeScript Builds<br/>pnpm build]
+        DockerBuild[Docker Image Build<br/>ECS Container]
+        Tests[Unit Tests<br/>Integration Tests]
+    end
+
+    subgraph "AWS Deployment"
+        CDKSynth[CDK Synthesize<br/>CloudFormation Template]
+        CDKDeploy[CDK Deploy<br/>Infrastructure Update]
+        LambdaDeploy[Lambda Deployment<br/>Function Updates]
+        ECSUpdate[ECS Service Update<br/>Rolling Deployment]
+    end
+
+    subgraph "Environments"
+        Dev[Development<br/>development context]
+        Staging[Staging<br/>staging context]
+        Prod[Production<br/>production context]
+    end
+
+    GitHub --> PRs
+    PRs --> GoBuilds
+    PRs --> TypeScriptBuilds
+    PRs --> Tests
+
+    Main --> DockerBuild
+    DockerBuild --> CDKSynth
+    CDKSynth --> CDKDeploy
+
+    CDKDeploy --> LambdaDeploy
+    CDKDeploy --> ECSUpdate
+
+    LambdaDeploy --> Dev
+    ECSUpdate --> Dev
+
+    Dev --> Staging
+    Staging --> Prod
+
+
+```
+
+### Deployment Commands
 
 ```bash
-cd my-wallcrawler-app
+# Development deployment
 pnpm install
+pnpm build
+cd packages/aws-cdk
+cdk deploy --context environment=development
+
+# Production deployment
+pnpm install
+pnpm build
+cd packages/backend-go && ./build.sh
+cd ../aws-cdk
+cdk deploy --context environment=production --context domainName=api.wallcrawler.com
 ```
 
-3. **Set up environment variables** in .env:
+### Environment Configuration
 
+Each environment uses CDK context for configuration:
+
+```json
+{
+  "development": {
+    "environment": "development",
+    "ecsDesiredCount": 0,
+    "redisNodeType": "cache.t3.micro",
+    "lambdaMemory": 1024
+  },
+  "production": {
+    "environment": "production",
+    "domainName": "api.wallcrawler.com",
+    "ecsDesiredCount": 0,
+    "redisNodeType": "cache.r6g.large",
+    "lambdaMemory": 2048
+  }
+}
 ```
-WALLCRAWLER_API_KEY=your_wallcrawler_api_key
-WALLCRAWLER_PROJECT_ID=your_wallcrawler_project_id
-ANTHROPIC_API_KEY=your_anthropic_api_key  # Or appropriate model key
-```
+
+---
+
+This design document provides a comprehensive overview of the Wallcrawler architecture. For implementation details, refer to the individual package documentation in `/packages/*/README.md`.

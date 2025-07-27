@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,12 +14,22 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/wallcrawler/backend-go/internal/utils"
+
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 )
 
 type Controller struct {
-	sessionID string
-	rdb       *redis.Client
-	chromeCmd *exec.Cmd
+	sessionID       string
+	chromeCmd       *exec.Cmd
+	redisClient     *redis.Client
+	frameCapture    bool
+	captureCancel   context.CancelFunc
+	allocator       context.Context
+	allocatorCancel context.CancelFunc
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 func main() {
@@ -47,7 +58,7 @@ func main() {
 	// Create controller
 	controller := &Controller{
 		sessionID: sessionID,
-		rdb:       rdb,
+		redisClient: rdb,
 	}
 
 	// Start Chrome with remote debugging
@@ -60,12 +71,19 @@ func main() {
 		log.Fatalf("Chrome failed to start properly: %v", err)
 	}
 
+	if err := controller.initCDP(); err != nil {
+		log.Fatalf("Failed to initialize CDP connection: %v", err)
+	}
+
 	// Update session status to ready
 	if err := utils.UpdateSessionStatus(context.Background(), rdb, sessionID, "READY"); err != nil {
 		log.Printf("Failed to update session status: %v", err)
 	}
 
 	log.Printf("Chrome ready for session %s on port 9222", sessionID)
+
+	// Listen for frame capture events
+	go controller.listenForCaptureEvents(context.Background())
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -74,7 +92,7 @@ func main() {
 	// Keep alive and handle shutdown
 	<-sigChan
 	log.Println("Shutting down controller...")
-	controller.shutdown()
+	controller.cleanup()
 }
 
 func (c *Controller) startChrome() error {
@@ -154,11 +172,177 @@ func (c *Controller) waitForChrome() error {
 	return fmt.Errorf("Chrome failed to start within 30 seconds")
 }
 
-func (c *Controller) shutdown() {
-	log.Printf("Shutting down controller for session %s", c.sessionID)
+func (c *Controller) initCDP() error {
+	wsURL := "ws://127.0.0.1:9222/devtools/browser"
+	c.allocator, c.allocatorCancel = chromedp.NewRemoteAllocator(context.Background(), wsURL)
+	tempCtx, tempCancel := chromedp.NewContext(c.allocator)
+	defer tempCancel()
+
+	targets, err := target.GetTargets().Do(tempCtx)
+	if err != nil {
+		return fmt.Errorf("failed to get targets: %v", err)
+	}
+
+	var pageTargetID target.ID
+	for _, t := range targets {
+		if t.Type == "page" {
+			pageTargetID = t.TargetID
+			break
+		}
+	}
+	if pageTargetID == "" {
+		return fmt.Errorf("no page target found")
+	}
+
+	c.ctx, c.cancel = chromedp.NewContext(c.allocator, chromedp.WithTargetID(pageTargetID))
+	return nil
+}
+
+func (c *Controller) listenForCaptureEvents(ctx context.Context) {
+	// Subscribe to EventBridge events via Redis (simplified for this implementation)
+	// In production, you might use AWS EventBridge directly or Redis Streams
+	eventChannel := fmt.Sprintf("session:%s:events", c.sessionID)
+	pubsub := c.redisClient.Subscribe(ctx, eventChannel)
+	defer pubsub.Close()
+
+	log.Printf("Listening for capture events on channel: %s", eventChannel)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			msg, err := pubsub.ReceiveMessage(ctx)
+			if err != nil {
+				log.Printf("Error receiving message: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			var event map[string]interface{}
+			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
+				log.Printf("Error parsing event: %v", err)
+				continue
+			}
+
+			action, ok := event["action"].(string)
+			if !ok {
+				continue
+			}
+
+			switch action {
+			case "start_capture":
+				if !c.frameCapture {
+					frameRate := 30 // Default frame rate
+					if fr, ok := event["frameRate"].(float64); ok {
+						frameRate = int(fr)
+					}
+					c.startFrameCapture(context.Background(), frameRate)
+				}
+			case "stop_capture":
+				if c.frameCapture {
+					c.stopFrameCapture()
+				}
+			}
+		}
+	}
+}
+
+func (c *Controller) startFrameCapture(parentCtx context.Context, frameRate int) {
+	if c.frameCapture {
+		return // Already capturing
+	}
+
+	log.Printf("Starting frame capture at %d FPS for session %s", frameRate, c.sessionID)
+	c.frameCapture = true
+
+	captureCtx, cancel := context.WithCancel(parentCtx)
+	c.captureCancel = cancel
+
+	assumedFPS := 60
+	everyNth := assumedFPS / frameRate
+	if everyNth < 1 {
+		everyNth = 1
+	}
+
+	action := page.StartScreencast().
+		WithFormat(page.ScreencastFormatJpeg).
+		WithQuality(80).
+		WithMaxWidth(1920).
+		WithMaxHeight(1080).
+		WithEveryNthFrame(int64(everyNth))
+	err := chromedp.Run(c.ctx, action)
+	if err != nil {
+		log.Printf("Failed to start screencast: %v", err)
+		c.stopFrameCapture()
+		return
+	}
+
+	chromedp.ListenTarget(c.ctx, func(ev interface{}) {
+		if f, ok := ev.(*page.EventScreencastFrame); ok {
+			go func(frame *page.EventScreencastFrame) {
+				base64Data := frame.Data
+				frameData := map[string]interface{}{
+					"type":      "frame",
+					"data":      base64Data,
+					"timestamp": time.Time(*frame.Metadata.Timestamp).UnixMilli(),
+				}
+
+				websocketEndpoint := os.Getenv("WEBSOCKET_API_ENDPOINT")
+				if websocketEndpoint == "" {
+					log.Printf("WEBSOCKET_API_ENDPOINT not configured")
+					return
+				}
+
+				if err := utils.BroadcastToSessionViewers(context.Background(), c.redisClient, c.sessionID, frameData, websocketEndpoint); err != nil {
+					log.Printf("Error broadcasting frame: %v", err)
+				}
+
+				if err := chromedp.Run(c.ctx, page.ScreencastFrameAck(frame.SessionID)); err != nil {
+					log.Printf("Error acking frame: %v", err)
+				}
+			}(f)
+		}
+	})
+
+	go func() {
+		<-captureCtx.Done()
+		if err := chromedp.Run(c.ctx, page.StopScreencast()); err != nil {
+			log.Printf("Error stopping screencast: %v", err)
+		}
+		c.frameCapture = false
+		log.Printf("Frame capture stopped for session %s", c.sessionID)
+	}()
+}
+
+func (c *Controller) stopFrameCapture() {
+	if !c.frameCapture {
+		return
+	}
+
+	log.Printf("Stopping frame capture for session %s", c.sessionID)
+
+	if c.captureCancel != nil {
+		c.captureCancel()
+		c.captureCancel = nil
+	}
+}
+
+func (c *Controller) cleanup() {
+	log.Printf("Cleaning up controller for session %s", c.sessionID)
+
+	// Stop frame capture
+	c.stopFrameCapture()
+
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.allocatorCancel != nil {
+		c.allocatorCancel()
+	}
 
 	// Update session status
-	if err := utils.UpdateSessionStatus(context.Background(), c.rdb, c.sessionID, "STOPPED"); err != nil {
+	if err := utils.UpdateSessionStatus(context.Background(), c.redisClient, c.sessionID, "STOPPED"); err != nil {
 		log.Printf("Failed to update session status: %v", err)
 	}
 
@@ -192,8 +376,8 @@ func (c *Controller) shutdown() {
 	}
 
 	// Close Redis connection
-	if c.rdb != nil {
-		c.rdb.Close()
+	if c.redisClient != nil {
+		c.redisClient.Close()
 	}
 
 	log.Printf("Controller shutdown complete for session %s", c.sessionID)

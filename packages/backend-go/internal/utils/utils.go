@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
@@ -365,4 +366,87 @@ func CreateCDPURL(taskIP string) string {
 // CreateDebugURL creates the Chrome DevTools debug URL  
 func CreateDebugURL(taskIP string) string {
 	return fmt.Sprintf("http://%s:9222", taskIP)
+} 
+
+// PublishFrameData publishes frame data to Redis for WebSocket streaming
+func PublishFrameData(ctx context.Context, rdb *redis.Client, sessionID string, frameData string) error {
+	channel := fmt.Sprintf("session:%s:frames", sessionID)
+	
+	frame := map[string]interface{}{
+		"type":      "frame",
+		"data":      frameData,
+		"timestamp": time.Now().UnixMilli(),
+	}
+	
+	frameJSON, err := json.Marshal(frame)
+	if err != nil {
+		return fmt.Errorf("error marshaling frame data: %v", err)
+	}
+	
+	return rdb.Publish(ctx, channel, string(frameJSON)).Err()
+}
+
+// SubscribeToFrames subscribes to frame updates for a session
+func SubscribeToFrames(ctx context.Context, rdb *redis.Client, sessionID string) *redis.PubSub {
+	channel := fmt.Sprintf("session:%s:frames", sessionID)
+	return rdb.Subscribe(ctx, channel)
+}
+
+// BroadcastToSessionViewers sends a message to all WebSocket connections for a session
+func BroadcastToSessionViewers(ctx context.Context, rdb *redis.Client, sessionID string, message interface{}, apiGatewayEndpoint string) error {
+	// Get all viewer connection IDs for this session
+	viewersKey := fmt.Sprintf("session:%s:viewers", sessionID)
+	connectionIDs, err := rdb.SMembers(ctx, viewersKey).Result()
+	if err != nil {
+		return fmt.Errorf("error getting viewers for session %s: %v", sessionID, err)
+	}
+
+	if len(connectionIDs) == 0 {
+		return nil // No viewers to broadcast to
+	}
+
+	// Get AWS config for API Gateway Management API
+	cfg, err := GetAWSConfig()
+	if err != nil {
+		return fmt.Errorf("error getting AWS config: %v", err)
+	}
+
+	// Create API Gateway Management API client
+	apiClient := apigatewaymanagementapi.NewFromConfig(cfg, func(o *apigatewaymanagementapi.Options) {
+		o.BaseEndpoint = aws.String(apiGatewayEndpoint)
+	})
+
+	// Marshal message to JSON
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("error marshaling message: %v", err)
+	}
+
+	// Send to all connections
+	var lastErr error
+	successCount := 0
+	for _, connectionID := range connectionIDs {
+		_, err = apiClient.PostToConnection(ctx, &apigatewaymanagementapi.PostToConnectionInput{
+			ConnectionId: aws.String(connectionID),
+			Data:         messageBytes,
+		})
+		
+		if err != nil {
+			log.Printf("Error sending message to connection %s: %v", connectionID, err)
+			// Remove stale connection
+			rdb.SRem(ctx, viewersKey, connectionID)
+			lastErr = err
+		} else {
+			successCount++
+		}
+	}
+
+	log.Printf("Broadcasted message to %d/%d viewers for session %s", successCount, len(connectionIDs), sessionID)
+	return lastErr
+}
+
+// GetActiveViewerCount returns the number of active WebSocket viewers for a session
+func GetActiveViewerCount(ctx context.Context, rdb *redis.Client, sessionID string) (int64, error) {
+	viewersKey := fmt.Sprintf("session:%s:viewers", sessionID)
+	return rdb.SCard(ctx, viewersKey).Result()
 } 

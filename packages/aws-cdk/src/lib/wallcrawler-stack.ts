@@ -119,6 +119,15 @@ export class WallcrawlerStack extends cdk.Stack {
             },
         });
 
+        // Add permissions for ECS task to manage WebSocket connections
+        browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'execute-api:ManageConnections',
+            ],
+            resources: ['*'], // Will be scoped after WebSocket API is created
+        }));
+
         // Our Go controller container (includes Chrome with remote debugging)
         const controllerContainer = browserTaskDefinition.addContainer('controller', {
             image: ecs.ContainerImage.fromAsset('../../backend-go', {
@@ -139,6 +148,7 @@ export class WallcrawlerStack extends cdk.Stack {
                 ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
                 AWS_REGION: this.region,
                 CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
+                // WebSocket endpoint will be added after WebSocket API is created
             },
             logging: ecs.LogDrivers.awsLogs({
                 streamPrefix: 'wallcrawler-controller',
@@ -226,23 +236,17 @@ export class WallcrawlerStack extends cdk.Stack {
             CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
         };
 
-        // Lambda function factory
+        // Factory function for consistent Lambda configuration
         const createLambdaFunction = (name: string, handler: string, description: string) => {
             return new lambda.Function(this, name, {
                 runtime: lambda.Runtime.PROVIDED_AL2,
                 handler: 'bootstrap',
-                code: lambda.Code.fromAsset(`../../backend-go/cmd/${handler.toLowerCase()}`),
+                code: lambda.Code.fromAsset(`../../backend-go/build/${handler.toLowerCase()}`),
                 timeout: cdk.Duration.minutes(15),
                 memorySize: 1024,
-                role: lambdaExecutionRole,
                 vpc,
-                securityGroups: [lambdaSecurityGroup],
-                vpcSubnets: {
-                    subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-                },
                 environment: commonLambdaEnvironment,
                 description,
-                logRetention: logs.RetentionDays.ONE_WEEK,
             });
         };
 
@@ -305,6 +309,13 @@ export class WallcrawlerStack extends cdk.Stack {
             'EndSessionLambda',
             'end',
             'Terminate browser session and cleanup'
+        );
+
+        // Create Screencast Lambda for WebSocket handling
+        const screencastLambda = createLambdaFunction(
+            'ScreencastLambda',
+            'screencast',
+            'Handles WebSocket connections for browser screencast streaming'
         );
 
         // EventBridge for session events
@@ -478,7 +489,7 @@ export class WallcrawlerStack extends cdk.Stack {
         const webSocketIntegration = new apigatewayv2.CfnIntegration(this, 'ScreencastIntegration', {
             apiId: webSocketApi.ref,
             integrationType: 'AWS_PROXY',
-            integrationUri: `arn:aws:apigateway:${this.region}:lambda:path/2015-03-31/functions/${endSessionLambda.functionArn}/invocations`,
+            integrationUri: `arn:aws:apigateway:${this.region}:lambda:path/2015-03-31/functions/${screencastLambda.functionArn}/invocations`,
         });
 
         // WebSocket routes
@@ -506,11 +517,39 @@ export class WallcrawlerStack extends cdk.Stack {
             autoDeploy: true,
         });
 
-        // Grant WebSocket API invoke permissions to Lambda
-        endSessionLambda.addPermission('WebSocketInvokePermission', {
+        // Grant WebSocket API invoke permissions to Screencast Lambda
+        screencastLambda.addPermission('WebSocketInvokePermission', {
             principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
             sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.ref}/*/*`,
         });
+
+        // Grant Screencast Lambda permissions to manage API Gateway connections
+        screencastLambda.addToRolePolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'execute-api:ManageConnections',
+            ],
+            resources: [
+                `arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.ref}/*/*`,
+            ],
+        }));
+
+        // Add WebSocket endpoint to common Lambda environment
+        const webSocketEndpoint = `https://${webSocketApi.ref}.execute-api.${this.region}.amazonaws.com/prod`;
+        const updatedLambdaEnvironment = {
+            ...commonLambdaEnvironment,
+            WEBSOCKET_API_ENDPOINT: webSocketEndpoint,
+        };
+
+        // Update all Lambda functions to include WebSocket endpoint
+        [startSessionLambda, stagehandStartLambda, actLambda, extractLambda, observeLambda,
+            navigateLambda, agentExecuteLambda, retrieveSessionLambda, debugSessionLambda,
+            endSessionLambda, screencastLambda].forEach(lambdaFn => {
+                lambdaFn.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketEndpoint);
+            });
+
+        // Also add WebSocket endpoint to ECS task definition environment
+        controllerContainer.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketEndpoint);
 
         // EventBridge for async communication
         const eventBus = new events.EventBus(this, 'WallcrawlerEventBus', {
