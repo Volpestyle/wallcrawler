@@ -62,8 +62,8 @@ func initSecretsManager() {
 	secretsClient = secretsmanager.NewFromConfig(cfg)
 }
 
-// GetJWTSigningKey retrieves the JWT signing key with caching
-func GetJWTSigningKey() ([]byte, error) {
+// GetJWTSecretKey retrieves the JWT signing secret key with caching
+func GetJWTSecretKey() ([]byte, error) {
 	initOnce.Do(initSecretsManager)
 
 	keyCache.RLock()
@@ -135,7 +135,7 @@ func GenerateRandomNonce() string {
 
 // CreateCDPToken generates a signed JWT token for CDP access
 func CreateCDPToken(payload CDPSigningPayload) (string, error) {
-	signingKey, err := GetJWTSigningKey()
+	signingKey, err := GetJWTSecretKey()
 	if err != nil {
 		return "", fmt.Errorf("error getting JWT signing key: %v", err)
 	}
@@ -187,7 +187,7 @@ func CreateCDPToken(payload CDPSigningPayload) (string, error) {
 
 // ValidateCDPToken validates and parses a CDP access token
 func ValidateCDPToken(tokenString string) (*CDPSigningPayload, error) {
-	signingKey, err := GetJWTSigningKey()
+	signingKey, err := GetJWTSecretKey()
 	if err != nil {
 		return nil, fmt.Errorf("error getting JWT signing key: %v", err)
 	}

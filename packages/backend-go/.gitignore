@@ -18,6 +18,7 @@ cmd/**/main
 /main
 /sessions-*
 /ecs-controller
+/ecs-task-processor
 /session-*
 /act
 /debug

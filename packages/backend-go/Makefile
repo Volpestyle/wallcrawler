@@ -5,43 +5,35 @@ help: ## Show this help message
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build all Lambda functions for AWS deployment
-	@echo "Building all Lambda functions..."
+build: ## Build all functions for AWS deployment
+	@echo "Building all functions..."
 	@./build.sh
 
-lambda-only: ## Build only Lambda functions (without ECS controller)
-	@echo "Building Lambda functions only (excluding ECS controller)..."
+lambda-only: ## Build only Lambda functions (excludes ECS controller)
+	@echo "Building Lambda functions only..."
 	@rm -rf build
 	@mkdir -p build
-	# Use a modified build approach that excludes ECS controller
 	@for func_def in \
 		"cmd/sdk/sessions-create:sdk/sessions-create" \
 		"cmd/sdk/sessions-list:sdk/sessions-list" \
 		"cmd/sdk/sessions-retrieve:sdk/sessions-retrieve" \
+		"cmd/sdk/sessions-debug:sdk/sessions-debug" \
 		"cmd/sdk/sessions-update:sdk/sessions-update" \
 		"cmd/api/sessions-start:api/sessions-start" \
-		"cmd/session-cdp-url:cdp-url" \
-		"cmd/session-provisioner:session-provisioner"; do \
+		"cmd/ecs-task-processor:ecs-task-processor" \
+		"cmd/session-cleanup:session-cleanup"; do \
 		source_path=$$(echo $$func_def | cut -d: -f1); \
 		build_path=$$(echo $$func_def | cut -d: -f2); \
 		func_name=$$(basename $$build_path); \
-		if [ -f "$$source_path/main.go" ]; then \
-			echo "Building $$func_name from $$source_path..."; \
-			mkdir -p "build/$$build_path"; \
-			GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "build/$$build_path/bootstrap" "./$$source_path"; \
-			cd "build/$$build_path" && zip -q "../$$(basename $$build_path).zip" bootstrap && cd - > /dev/null; \
-		fi; \
+		echo "Building $$func_name from $$source_path..."; \
+		mkdir -p "build/$$build_path"; \
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "build/$$build_path/bootstrap" "./$$source_path"; \
+		cd "build/$$build_path" && zip -q "../$$(basename $$build_path).zip" bootstrap && cd - > /dev/null; \
 	done
 
 docker-build: ## Build ECS controller Docker image
 	@echo "Building ECS controller Docker image..."
 	@docker build -t wallcrawler-ecs-controller .
-
-build-ecs-controller: ## Build only the ECS controller binary
-	@echo "Building ECS controller..."
-	@mkdir -p build/ecs-controller
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/ecs-controller/bootstrap ./cmd/ecs-controller
-	@cd build/ecs-controller && zip -q ../ecs-controller.zip bootstrap
 
 test: ## Run tests
 	@echo "Running tests..."
@@ -49,33 +41,28 @@ test: ## Run tests
 
 clean: ## Clean build artifacts
 	@echo "Cleaning build directory..."
-	@rm -rf build
+	@rm -rf build build-dev
 	@echo "Clean complete."
-
-# Individual function builds
-build-act: ## Build act Lambda function
-	@mkdir -p build/act
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/act/bootstrap ./cmd/act
-	@cd build/act && zip -q ../act.zip bootstrap
-
-build-screencast: ## Build screencast Lambda function
-	@mkdir -p build/screencast
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/screencast/bootstrap ./cmd/screencast
-	@cd build/screencast && zip -q ../screencast.zip bootstrap
-
-build-sessions-start: ## Build sessions-start Lambda function
-	@mkdir -p build/sessions-start
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/sessions-start/bootstrap ./cmd/sessions-start
-	@cd build/sessions-start && zip -q ../sessions-start.zip bootstrap
 
 # Development helpers
 dev-build: ## Build for local development (current OS)
 	@echo "Building for local development..."
 	@rm -rf build-dev
 	@mkdir -p build-dev
-	@for func in $$(find cmd -mindepth 1 -maxdepth 1 -type d -exec basename {} \;); do \
-		echo "Building $$func for development..."; \
-		go build -o "build-dev/$$func" "./cmd/$$func"; \
+	@for func_def in \
+		"cmd/sdk/sessions-create:sessions-create" \
+		"cmd/sdk/sessions-list:sessions-list" \
+		"cmd/sdk/sessions-retrieve:sessions-retrieve" \
+		"cmd/sdk/sessions-debug:sessions-debug" \
+		"cmd/sdk/sessions-update:sessions-update" \
+		"cmd/api/sessions-start:sessions-start" \
+		"cmd/ecs-controller:ecs-controller" \
+		"cmd/ecs-task-processor:ecs-task-processor" \
+		"cmd/session-cleanup:session-cleanup"; do \
+		source_path=$$(echo $$func_def | cut -d: -f1); \
+		build_name=$$(echo $$func_def | cut -d: -f2); \
+		echo "Building $$build_name for development..."; \
+		go build -o "build-dev/$$build_name" "./$$source_path"; \
 	done
 
 fmt: ## Format Go code

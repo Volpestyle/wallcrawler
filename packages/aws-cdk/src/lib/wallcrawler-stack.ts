@@ -170,6 +170,7 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // Task Definition for browser containers with our Go controller
         const browserTaskDefinition = new ecs.FargateTaskDefinition(this, 'BrowserTaskDefinition', {
+            family: 'wallcrawler-browser', // Explicit family name for EventBridge filtering
             cpu: 1024,
             memoryLimitMiB: 2048,
             runtimePlatform: {
@@ -314,12 +315,12 @@ export class WallcrawlerStack extends cdk.Stack {
         };
 
         // Factory function for consistent Lambda configuration
-        const createLambdaFunction = (name: string, handler: string, description: string) => {
+        const createLambdaFunction = (name: string, handler: string, description: string, timeoutMinutes: number = 15) => {
             return new lambda.Function(this, name, {
                 runtime: lambda.Runtime.PROVIDED_AL2,
                 handler: 'bootstrap',
                 code: lambda.Code.fromAsset(`../backend-go/build/${handler.toLowerCase()}`),
-                timeout: cdk.Duration.minutes(15),
+                timeout: cdk.Duration.minutes(timeoutMinutes),
                 memorySize: 1024,
                 vpc,
                 environment: commonLambdaEnvironment,
@@ -335,7 +336,8 @@ export class WallcrawlerStack extends cdk.Stack {
         const sdkSessionsCreateLambda = createLambdaFunction(
             'SDKSessionsCreateLambda',
             'sdk/sessions-create',
-            'SDK: Create basic browser sessions'
+            'SDK: Create basic browser sessions (synchronous provisioning)',
+            5 // 5 minute timeout for synchronous ECS provisioning
         );
 
         const sdkSessionsListLambda = createLambdaFunction(
@@ -348,6 +350,12 @@ export class WallcrawlerStack extends cdk.Stack {
             'SDKSessionsRetrieveLambda',
             'sdk/sessions-retrieve',
             'SDK: Retrieve session details'
+        );
+
+        const sdkSessionsDebugLambda = createLambdaFunction(
+            'SDKSessionsDebugLambda',
+            'sdk/sessions-debug',
+            'SDK: Get session debug/live URLs'
         );
 
         const sdkSessionsUpdateLambda = createLambdaFunction(
@@ -364,10 +372,10 @@ export class WallcrawlerStack extends cdk.Stack {
         );
 
         // --- Wallcrawler-Specific Handlers ---
-        const sessionCdpUrlLambda = createLambdaFunction(
-            'SessionCdpUrlLambda',
-            'cdp-url',
-            'Generate signed CDP URLs'
+        const sessionCleanupLambda = createLambdaFunction(
+            'SessionCleanupLambda',
+            'session-cleanup',
+            'Cleanup expired and orphaned sessions'
         );
 
         // EventBridge for session events
@@ -375,18 +383,48 @@ export class WallcrawlerStack extends cdk.Stack {
             description: 'Route session events to appropriate handlers',
             eventPattern: {
                 source: ['wallcrawler.backend'],
-                detailType: ['SessionTerminated'],
+                detailType: [
+                    'SessionTerminated',
+                    'SessionTimedOut'
+                ],
             },
         });
 
-        // Session provisioner handles all session lifecycle events
-        const sessionProvisionerLambda = createLambdaFunction(
-            'SessionProvisionerLambda',
-            'session-provisioner',
-            'Handle session lifecycle events via EventBridge'
+        // EventBridge rule for ECS task state changes (AWS native events)
+        const ecsTaskStateRule = new events.Rule(this, 'ECSTaskStateRule', {
+            description: 'Monitor ECS task state changes for Wallcrawler browser containers',
+            eventPattern: {
+                source: ['aws.ecs'],
+                detailType: ['ECS Task State Change'],
+                detail: {
+                    clusterArn: [ecsCluster.clusterArn],
+                    // Only monitor tasks from our browser task definition family
+                    taskDefinitionArn: [
+                        {
+                            prefix: `arn:aws:ecs:${this.region}:${this.account}:task-definition/wallcrawler-browser`
+                        }
+                    ]
+                }
+            },
+        });
+
+        // Session provisioner handles all session lifecycle events AND ECS task state changes
+        const ecsTaskProcessorLambda = createLambdaFunction(
+            'ECSTaskProcessorLambda',
+            'ecs-task-processor',
+            'Handle ECS task state changes'
         );
 
-        sessionEventRule.addTarget(new targets.LambdaFunction(sessionProvisionerLambda));
+        sessionEventRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
+        ecsTaskStateRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
+
+        // Scheduled session cleanup (every 5 minutes)
+        const sessionCleanupRule = new events.Rule(this, 'SessionCleanupRule', {
+            description: 'Cleanup expired and orphaned sessions every 5 minutes',
+            schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+        });
+
+        sessionCleanupRule.addTarget(new targets.LambdaFunction(sessionCleanupLambda));
 
         // API Gateway for REST endpoints
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
@@ -499,7 +537,7 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/sessions/{id}/debug - Debug/live URLs
         v1SessionResource.addResource('debug').addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            new apigateway.LambdaIntegration(sdkSessionsDebugLambda, { proxy: true }),
             { apiKeyRequired: true }
         );
 
@@ -635,18 +673,13 @@ export class WallcrawlerStack extends cdk.Stack {
         // They can be added later when we implement API mode
 
         // =================================================================
-        // GROUP 3: WALLCRAWLER-SPECIFIC ENDPOINTS
+        // GROUP 3: WALLCRAWLER-SPECIFIC ENDPOINTS  
         // Custom endpoints for Wallcrawler-specific functionality
+        // Note: CDP URLs are now provided via SDK-compatible endpoints:
+        // - POST /v1/sessions (returns connectUrl)
+        // - GET /v1/sessions/{id} (returns connectUrl for reconnection)
+        // - GET /v1/sessions/{id}/debug (returns debugger URLs)
         // =================================================================
-
-        // POST /sessions/{sessionId}/cdp-url - Generate signed CDP URLs for Direct Mode
-        sessionResource.addResource('cdp-url').addMethod('POST',
-            new apigateway.LambdaIntegration(sessionCdpUrlLambda, { proxy: true }),
-            {
-                apiKeyRequired: true,
-                requestValidator,
-            }
-        );
 
         // EventBridge for async communication
         const eventBus = new events.EventBus(this, 'WallcrawlerEventBus', {

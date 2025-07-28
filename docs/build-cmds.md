@@ -28,13 +28,13 @@ pnpm build
 ```bash
 cd packages/backend-go
 
-# Build all Lambda functions for AWS deployment
+# Build all functions for AWS deployment
 make build
 
 # Build for local development (current OS)
 make dev-build
 
-# Build only Lambda functions (excluding ECS controller)
+# Build only Lambda functions (excludes ECS controller)
 make lambda-only
 
 # Build ECS controller Docker image
@@ -42,6 +42,21 @@ make docker-build
 
 # Clean build artifacts
 make clean
+
+# Download dependencies
+make deps
+
+# Format Go code
+make fmt
+
+# Run linter
+make lint
+
+# Run tests
+make test
+
+# Show all available targets
+make help
 ```
 
 ### Node.js SDK

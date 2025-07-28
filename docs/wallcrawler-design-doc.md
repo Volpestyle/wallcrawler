@@ -17,12 +17,8 @@
 For detailed implementation specifics:
 
 - **[API Endpoints Reference](api/api-endpoints-reference.md)** - Complete API specification and endpoint details
-- **[Signed CDP URLs](api/signed-cdp-urls.md)** - End-to-end CDP security implementation and client integration
-- **[Direct Mode Implementation](api/direct-mode-implementation.md)** - Direct CDP integration with enterprise security
-- **[API Mode Implementation](api/api-mode-implementation.md)** - Server-side LLM processing architecture (stubbed)
 - **[Deployment Guide](deployment-steps.md)** - Step-by-step deployment instructions and CI/CD setup
 - **[Progress Tracking](progress.md)** - Development milestones and implementation status
-- **[System Flow Overview](wallcrawler-flow.md)** - Detailed operational flows and session lifecycle
 
 ## Overview
 

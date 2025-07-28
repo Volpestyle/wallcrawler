@@ -91,44 +91,77 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to create session"))
 	}
 
-	// Publish SessionCreateRequested event to EventBridge for async processing
-	createEvent := map[string]interface{}{
-		"sessionId":       sessionID,
-		"projectId":       req.ProjectID,
-		"sessionType":     "basic", // Not AI-powered
-		"userMetadata":    sessionState.UserMetadata,
-		"browserSettings": req.BrowserSettings,
-		"timeout":         req.Timeout,
-		"timestamp":       time.Now().Unix(),
+	// Generate JWT token for this session with proper expiration
+	now := time.Now()
+	expiresAt := now.Add(time.Duration(req.Timeout) * time.Second)
+
+	payload := utils.CDPSigningPayload{
+		SessionID: sessionID,
+		ProjectID: req.ProjectID,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: expiresAt.Unix(),
+		Nonce:     utils.GenerateRandomNonce(),
 	}
 
-	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionCreateRequested", "wallcrawler.sdk.sessions-create", createEvent); err != nil {
-		log.Printf("Error publishing session create event: %v", err)
+	jwtToken, err := utils.CreateCDPToken(payload)
+	if err != nil {
+		log.Printf("Error creating JWT token for session %s: %v", sessionID, err)
 		// Clean up session from Redis
 		utils.DeleteSession(ctx, rdb, sessionID)
-		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initiate session creation"))
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to generate session authentication token"))
 	}
 
-	// Create URLs
-	baseURL := "wss://api.wallcrawler.dev"
-	if customBase := request.Headers["host"]; customBase != "" {
-		baseURL = "wss://" + customBase
+	// Store the JWT token in session state
+	sessionState.SigningKey = jwtToken
+	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+		log.Printf("Error storing session with JWT token: %v", err)
+		utils.DeleteSession(ctx, rdb, sessionID)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to store session"))
 	}
-	connectURL := baseURL + "/sessions/" + sessionID + "/connect"
-	seleniumRemoteURL := "https://api.wallcrawler.dev/v1/sessions/" + sessionID + "/selenium"
 
-	// Get the actual JWT signing key for session authentication
-	signingKeyBytes, err := utils.GetJWTSigningKey()
+	// Synchronously provision ECS task and wait for it to be ready
+	log.Printf("Starting synchronous ECS task provisioning for session %s", sessionID)
+
+	// Update status to PROVISIONING
+	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, "PROVISIONING"); err != nil {
+		log.Printf("Error updating session status to provisioning: %v", err)
+		utils.DeleteSession(ctx, rdb, sessionID)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to update session status"))
+	}
+
+	// Create ECS task
+	taskARN, err := utils.CreateECSTask(ctx, sessionID, sessionState)
 	if err != nil {
-		log.Printf("Error getting JWT signing key: %v", err)
-		// For now, continue without signing key - this could be made non-fatal
+		log.Printf("Error creating ECS task for session %s: %v", sessionID, err)
+		utils.UpdateSessionStatus(ctx, rdb, sessionID, "FAILED")
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to provision browser container"))
 	}
-	signingKey := string(signingKeyBytes)
 
-	// Return SDK-compatible response format using utility function
-	response := utils.ConvertToSDKCreateResponse(sessionState, connectURL, seleniumRemoteURL, signingKey, req.UserMetadata)
+	// Update session with task ARN
+	sessionState.ECSTaskARN = taskARN
+	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+		log.Printf("Error storing session with task ARN: %v", err)
+	}
 
-	log.Printf("Created basic SDK session %s (async provisioning initiated)", sessionID)
+	// Wait for session to become READY via EventBridge (much more efficient than ECS API polling)
+	log.Printf("Waiting for session %s to become READY via EventBridge events...", sessionID)
+	finalSessionState, err := utils.WaitForSessionReady(ctx, rdb, sessionID, 150) // 2.5 minute timeout
+	if err != nil {
+		log.Printf("Error waiting for session to become ready: %v", err)
+		utils.StopECSTask(ctx, taskARN)
+		utils.UpdateSessionStatus(ctx, rdb, sessionID, "FAILED")
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Browser container failed to start within timeout"))
+	}
+
+	// Extract final URLs from ready session state
+	connectURL := finalSessionState.ConnectURL
+	taskIP := finalSessionState.PublicIP
+	seleniumURL := fmt.Sprintf("http://%s:4444/wd/hub", taskIP)
+
+	// Return SDK-compatible response with real URLs
+	response := utils.ConvertToSDKCreateResponse(finalSessionState, connectURL, seleniumURL, jwtToken, req.UserMetadata)
+
+	log.Printf("Successfully created and provisioned SDK session %s with IP %s via EventBridge", sessionID, taskIP)
 	return utils.CreateAPIResponse(200, utils.SuccessResponse(response))
 }
 

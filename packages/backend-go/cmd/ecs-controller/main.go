@@ -14,8 +14,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/wallcrawler/backend-go/internal/cdpproxy"
-	"github.com/wallcrawler/backend-go/internal/types"
-	"github.com/wallcrawler/backend-go/internal/utils"
 
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -75,23 +73,8 @@ func main() {
 		log.Fatalf("Failed to initialize CDP connection: %v", err)
 	}
 
-	// Update session status to ready and record timing
-	ctx := context.Background()
-	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusReady); err != nil {
-		log.Printf("Failed to update session status: %v", err)
-	}
-
-	// Add session ready event with connection details
-	readyEvent := map[string]interface{}{
-		"sessionId":   sessionID,
-		"connectUrl":  fmt.Sprintf("ws://127.0.0.1:9222"),
-		"chromeReady": true,
-	}
-	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionChromeReady", "wallcrawler.ecs-controller", readyEvent); err != nil {
-		log.Printf("Failed to add chrome ready event: %v", err)
-	}
-
-	log.Printf("Chrome ready for session %s on port 9222", sessionID)
+	// Log Chrome ready status 
+	log.Printf("Chrome ready for session %s on port 9222 (PID: %d)", sessionID, controller.chromeCmd.Process.Pid)
 
 	// Start integrated CDP proxy
 	if err := controller.startCDPProxy(); err != nil {
@@ -453,21 +436,11 @@ func (c *Controller) cleanup() {
 		c.allocatorCancel()
 	}
 
-	// Update session status to stopped
-	if err := utils.UpdateSessionStatus(context.Background(), c.redisClient, c.sessionID, types.SessionStatusStopped); err != nil {
-		log.Printf("Failed to update session status: %v", err)
-	}
+	// ✅ REMOVED: Session status updates are now handled by ecs-task-processor via EventBridge
+	// When ECS task stops, ecs-task-processor will update session status to STOPPED
 
-	// Add cleanup completed event
-	cleanupEvent := map[string]interface{}{
-		"sessionId":        c.sessionID,
-		"resourcesCleaned": true,
-		"chromeShutdown":   true,
-		"proxyShutdown":    true,
-	}
-	if err := utils.AddSessionEvent(context.Background(), c.redisClient, c.sessionID, "SessionCleanupCompleted", "wallcrawler.ecs-controller", cleanupEvent); err != nil {
-		log.Printf("Failed to add cleanup event: %v", err)
-	}
+	// Log cleanup completion (no EventBridge needed - was only used for logging)
+	log.Printf("Container cleanup completed for session %s (resources cleaned, Chrome shutdown, proxy shutdown)", c.sessionID)
 
 	// Stop Chrome process
 	if c.chromeCmd != nil && c.chromeCmd.Process != nil {

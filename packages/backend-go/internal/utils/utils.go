@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
@@ -316,6 +315,74 @@ func CreateAPIResponse(statusCode int, body interface{}) (events.APIGatewayProxy
 	}, nil
 }
 
+// WaitForSessionReady waits for a session to become READY using Redis Pub/Sub (no polling!)
+func WaitForSessionReady(ctx context.Context, rdb *redis.Client, sessionID string, timeoutSeconds int) (*types.SessionState, error) {
+	timeout := time.Duration(timeoutSeconds) * time.Second
+
+	log.Printf("Waiting for session %s to become READY via Redis Pub/Sub (no polling)...", sessionID)
+
+	// Subscribe to session ready channel
+	channel := fmt.Sprintf("session:%s:ready", sessionID)
+	pubsub := rdb.Subscribe(ctx, channel)
+	defer pubsub.Close()
+
+	// Create a channel to receive messages
+	ch := pubsub.Channel()
+
+	// Set up timeout
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+
+	// Check current status first (in case we missed the event)
+	sessionState, err := GetSession(ctx, rdb, sessionID)
+	if err == nil {
+		if sessionState.Status == types.SessionStatusReady &&
+			sessionState.PublicIP != "" &&
+			sessionState.ConnectURL != "" {
+			log.Printf("Session %s is already READY with IP %s", sessionID, sessionState.PublicIP)
+			return sessionState, nil
+		}
+
+		if sessionState.Status == types.SessionStatusFailed {
+			return nil, fmt.Errorf("session %s failed to provision", sessionID)
+		}
+	}
+
+	// Wait for pub/sub notification or timeout
+	select {
+	case msg := <-ch:
+		log.Printf("Received Redis pub/sub message for session %s: %s", sessionID, msg.Payload)
+
+		// Get updated session state
+		sessionState, err := GetSession(ctx, rdb, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("error getting session after pub/sub notification: %v", err)
+		}
+
+		// Check if session is ready
+		if sessionState.Status == types.SessionStatusReady &&
+			sessionState.PublicIP != "" &&
+			sessionState.ConnectURL != "" {
+			log.Printf("Session %s is READY with IP %s via pub/sub", sessionID, sessionState.PublicIP)
+			return sessionState, nil
+		}
+
+		// Check if session failed
+		if sessionState.Status == types.SessionStatusFailed {
+			return nil, fmt.Errorf("session %s failed to provision", sessionID)
+		}
+
+		return nil, fmt.Errorf("session %s received notification but not ready: status=%s, ip=%s",
+			sessionID, sessionState.Status, sessionState.PublicIP)
+
+	case <-timeoutTimer.C:
+		return nil, fmt.Errorf("timeout waiting for session %s to become ready after %d seconds", sessionID, timeoutSeconds)
+
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context cancelled while waiting for session %s", sessionID)
+	}
+}
+
 // GetECSTaskPublicIP gets the public IP of an ECS task for CDP connection
 func GetECSTaskPublicIP(ctx context.Context, taskARN string) (string, error) {
 	cfg, err := GetAWSConfig()
@@ -347,7 +414,7 @@ func GetECSTaskPublicIP(ctx context.Context, taskARN string) (string, error) {
 			for _, detail := range attachment.Details {
 				if *detail.Name == "networkInterfaceId" {
 					// We have the ENI ID, now get its public IP
-					return getENIPublicIP(ctx, *detail.Value)
+					return GetENIPublicIP(ctx, *detail.Value)
 				}
 			}
 		}
@@ -356,8 +423,8 @@ func GetECSTaskPublicIP(ctx context.Context, taskARN string) (string, error) {
 	return "", fmt.Errorf("no network interface found for task")
 }
 
-// getENIPublicIP gets the public IP of an Elastic Network Interface
-func getENIPublicIP(ctx context.Context, eniID string) (string, error) {
+// GetENIPublicIP gets the public IP of an Elastic Network Interface (exported for direct use)
+func GetENIPublicIP(ctx context.Context, eniID string) (string, error) {
 	cfg, err := GetAWSConfig()
 	if err != nil {
 		return "", err
@@ -393,12 +460,6 @@ func getENIPublicIP(ctx context.Context, eniID string) (string, error) {
 	return "", fmt.Errorf("no IP address found for network interface")
 }
 
-// CreateCDPURL creates the CDP WebSocket URL for Direct Mode
-func CreateCDPURL(taskIP string) string {
-	// For Direct Mode, return the WebSocket URL for CDP
-	return fmt.Sprintf("ws://%s:9222", taskIP)
-}
-
 // CreateAuthenticatedCDPURL creates the authenticated CDP WebSocket URL for Direct Mode
 func CreateAuthenticatedCDPURL(taskIP, jwtToken string) string {
 	// Get CDP proxy port from environment (set by CDK)
@@ -406,114 +467,37 @@ func CreateAuthenticatedCDPURL(taskIP, jwtToken string) string {
 	if cdpProxyPort == "" {
 		cdpProxyPort = "9223" // Fallback to default
 	}
-	return fmt.Sprintf("ws://%s:%s/cdp?signingKey=%s", taskIP, cdpProxyPort, jwtToken)
+	// Match Browserbase format: ws://host:port?signingKey=token (no /cdp path)
+	return fmt.Sprintf("ws://%s:%s?signingKey=%s", taskIP, cdpProxyPort, jwtToken)
 }
 
-// CreateDebuggerURL creates the authenticated debugger URL using our domain
+// CreateDebuggerURL creates the Chrome DevTools debugger URL for web-based debugging
 func CreateDebuggerURL(taskIP, jwtToken string) string {
-	// Get connect URL base from environment (set by CDK)
-	connectURLBase := os.Getenv("CONNECT_URL_BASE")
-	if connectURLBase == "" {
-		connectURLBase = "https://api.wallcrawler.dev" // Fallback to default
-	}
-	
 	// Get CDP proxy port from environment (set by CDK)
 	cdpProxyPort := os.Getenv("CDP_PROXY_PORT")
 	if cdpProxyPort == "" {
 		cdpProxyPort = "9223" // Fallback to default
 	}
-	
-	// Generate debugger URL using our own domain for proper proxy routing
-	return fmt.Sprintf("%s/devtools/inspector.html?ws=%s:%s/cdp&signingKey=%s", 
-		connectURLBase, taskIP, cdpProxyPort, jwtToken)
+
+	// Use Chrome DevTools frontend hosted on chrome-devtools-frontend.appspot.com
+	// This is the standard way to create debugger URLs for remote Chrome instances
+	wsURL := fmt.Sprintf("%s:%s", taskIP, cdpProxyPort)
+	return fmt.Sprintf("https://chrome-devtools-frontend.appspot.com/serve_file/@66a71dd84e44ed89c31a91e3a53006a7a6e1b72e/inspector.html?ws=%s&signingKey=%s",
+		wsURL, jwtToken)
 }
 
-// CreateDebugURL creates the Chrome DevTools debug URL
-func CreateDebugURL(taskIP string) string {
-	return fmt.Sprintf("http://%s:9222", taskIP)
-}
-
-// PublishFrameData publishes frame data to Redis for WebSocket streaming
-func PublishFrameData(ctx context.Context, rdb *redis.Client, sessionID string, frameData string) error {
-	channel := fmt.Sprintf("session:%s:frames", sessionID)
-
-	frame := map[string]interface{}{
-		"type":      "frame",
-		"data":      frameData,
-		"timestamp": time.Now().UnixMilli(),
+// CreateDebuggerFullscreenURL creates the fullscreen Chrome DevTools debugger URL
+func CreateDebuggerFullscreenURL(taskIP, jwtToken string) string {
+	// Get CDP proxy port from environment (set by CDK)
+	cdpProxyPort := os.Getenv("CDP_PROXY_PORT")
+	if cdpProxyPort == "" {
+		cdpProxyPort = "9223" // Fallback to default
 	}
 
-	frameJSON, err := json.Marshal(frame)
-	if err != nil {
-		return fmt.Errorf("error marshaling frame data: %v", err)
-	}
-
-	return rdb.Publish(ctx, channel, string(frameJSON)).Err()
-}
-
-// SubscribeToFrames subscribes to frame updates for a session
-func SubscribeToFrames(ctx context.Context, rdb *redis.Client, sessionID string) *redis.PubSub {
-	channel := fmt.Sprintf("session:%s:frames", sessionID)
-	return rdb.Subscribe(ctx, channel)
-}
-
-// BroadcastToSessionViewers sends a message to all WebSocket connections for a session
-func BroadcastToSessionViewers(ctx context.Context, rdb *redis.Client, sessionID string, message interface{}, apiGatewayEndpoint string) error {
-	// Get all viewer connection IDs for this session
-	viewersKey := fmt.Sprintf("session:%s:viewers", sessionID)
-	connectionIDs, err := rdb.SMembers(ctx, viewersKey).Result()
-	if err != nil {
-		return fmt.Errorf("error getting viewers for session %s: %v", sessionID, err)
-	}
-
-	if len(connectionIDs) == 0 {
-		return nil // No viewers to broadcast to
-	}
-
-	// Get AWS config for API Gateway Management API
-	cfg, err := GetAWSConfig()
-	if err != nil {
-		return fmt.Errorf("error getting AWS config: %v", err)
-	}
-
-	// Create API Gateway Management API client
-	apiClient := apigatewaymanagementapi.NewFromConfig(cfg, func(o *apigatewaymanagementapi.Options) {
-		o.BaseEndpoint = aws.String(apiGatewayEndpoint)
-	})
-
-	// Marshal message to JSON
-	messageBytes, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("error marshaling message: %v", err)
-	}
-
-	// Send to all connections
-	var lastErr error
-	successCount := 0
-	for _, connectionID := range connectionIDs {
-		_, err = apiClient.PostToConnection(ctx, &apigatewaymanagementapi.PostToConnectionInput{
-			ConnectionId: aws.String(connectionID),
-			Data:         messageBytes,
-		})
-
-		if err != nil {
-			log.Printf("Error sending message to connection %s: %v", connectionID, err)
-			// Remove stale connection
-			rdb.SRem(ctx, viewersKey, connectionID)
-			lastErr = err
-		} else {
-			successCount++
-		}
-	}
-
-	log.Printf("Broadcasted message to %d/%d viewers for session %s", successCount, len(connectionIDs), sessionID)
-	return lastErr
-}
-
-// GetActiveViewerCount returns the number of active WebSocket viewers for a session
-func GetActiveViewerCount(ctx context.Context, rdb *redis.Client, sessionID string) (int64, error) {
-	viewersKey := fmt.Sprintf("session:%s:viewers", sessionID)
-	return rdb.SCard(ctx, viewersKey).Result()
+	// Create fullscreen debugger URL with dockSide=undocked for fullscreen mode
+	wsURL := fmt.Sprintf("%s:%s", taskIP, cdpProxyPort)
+	return fmt.Sprintf("https://chrome-devtools-frontend.appspot.com/serve_file/@66a71dd84e44ed89c31a91e3a53006a7a6e1b72e/inspector.html?ws=%s&signingKey=%s&dockSide=undocked",
+		wsURL, jwtToken)
 }
 
 // AddSessionEvent adds an event to session history and publishes to EventBridge
@@ -607,26 +591,6 @@ func IncrementSessionRetryCount(ctx context.Context, rdb *redis.Client, sessionI
 	return StoreSession(ctx, rdb, sessionState)
 }
 
-// UpdateSessionBilling updates billing information for a session
-func UpdateSessionBilling(ctx context.Context, rdb *redis.Client, sessionID string, cpuSeconds, memoryMBHours float64, actionCount int) error {
-	sessionState, err := GetSession(ctx, rdb, sessionID)
-	if err != nil {
-		return err
-	}
-
-	if sessionState.BillingInfo == nil {
-		sessionState.BillingInfo = &types.BillingInfo{}
-	}
-
-	sessionState.BillingInfo.CPUSeconds += cpuSeconds
-	sessionState.BillingInfo.MemoryMBHours += memoryMBHours
-	sessionState.BillingInfo.ActionsCount += actionCount
-	sessionState.BillingInfo.LastBillingAt = time.Now()
-	sessionState.UpdatedAt = time.Now()
-
-	return StoreSession(ctx, rdb, sessionState)
-}
-
 // MapStatusToSDK converts internal session status to SDK-compatible status
 func MapStatusToSDK(internalStatus string) string {
 	switch internalStatus {
@@ -643,4 +607,47 @@ func MapStatusToSDK(internalStatus string) string {
 	default:
 		return "ERROR" // Unknown status, default to error
 	}
+}
+
+// GetAllSessions retrieves all sessions from Redis using SCAN for production safety
+func GetAllSessions(ctx context.Context, rdb *redis.Client) ([]*types.SessionState, error) {
+	var sessions []*types.SessionState
+	var cursor uint64
+
+	for {
+		// Use SCAN instead of KEYS for production safety
+		keys, newCursor, err := rdb.Scan(ctx, cursor, "session:*", 100).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		// Get all session data in batch
+		if len(keys) > 0 {
+			values, err := rdb.MGet(ctx, keys...).Result()
+			if err != nil {
+				return nil, err
+			}
+
+			for _, value := range values {
+				if value == nil {
+					continue // Skip deleted keys
+				}
+
+				var sessionState types.SessionState
+				if err := json.Unmarshal([]byte(value.(string)), &sessionState); err != nil {
+					log.Printf("Error unmarshaling session data: %v", err)
+					continue // Skip corrupted sessions
+				}
+
+				sessions = append(sessions, &sessionState)
+			}
+		}
+
+		cursor = newCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return sessions, nil
 }

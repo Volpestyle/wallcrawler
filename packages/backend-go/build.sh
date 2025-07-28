@@ -8,27 +8,28 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}Building Wallcrawler Lambda functions...${NC}"
+echo -e "${YELLOW}Building Wallcrawler functions...${NC}"
 
 # Clean build directory
 rm -rf build
 mkdir -p build
 
-# Define Lambda functions that need to be built
-# Format: "directory_path:build_name"
-LAMBDA_FUNCTIONS=(
+# Define functions that need to be built
+# Format: "source_directory:build_path"
+FUNCTIONS=(
     "cmd/sdk/sessions-create:sdk/sessions-create"
     "cmd/sdk/sessions-list:sdk/sessions-list"
     "cmd/sdk/sessions-retrieve:sdk/sessions-retrieve"
+    "cmd/sdk/sessions-debug:sdk/sessions-debug"
     "cmd/sdk/sessions-update:sdk/sessions-update"
     "cmd/api/sessions-start:api/sessions-start"
-    "cmd/session-cdp-url:cdp-url"
-    "cmd/session-provisioner:session-provisioner"
     "cmd/ecs-controller:ecs-controller"
+    "cmd/ecs-task-processor:ecs-task-processor"
+    "cmd/session-cleanup:session-cleanup"
 )
 
-# Build each Lambda function
-for FUNCTION_DEF in "${LAMBDA_FUNCTIONS[@]}"; do
+# Build each function
+for FUNCTION_DEF in "${FUNCTIONS[@]}"; do
     # Split the definition
     IFS=':' read -r SOURCE_PATH BUILD_PATH <<< "$FUNCTION_DEF"
     FUNCTION_NAME=$(basename "$BUILD_PATH")
@@ -45,7 +46,7 @@ for FUNCTION_DEF in "${LAMBDA_FUNCTIONS[@]}"; do
     BUILD_DIR="build/$BUILD_PATH"
     mkdir -p "$BUILD_DIR"
     
-    # Build the function for Linux (AWS Lambda runtime)
+    # Build the function for Linux (AWS Lambda/ECS runtime)
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
         -ldflags="-s -w" \
         -o "$BUILD_DIR/bootstrap" \
@@ -54,12 +55,12 @@ for FUNCTION_DEF in "${LAMBDA_FUNCTIONS[@]}"; do
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Successfully built $FUNCTION_NAME${NC}"
         
-        # Create a deployment package (zip file) in the build path directory
+        # Create a deployment package (zip file)
         cd "$BUILD_DIR"
         zip -q "../$(basename "$BUILD_PATH").zip" bootstrap
         cd - > /dev/null
         
-        echo -e "${GREEN}✓ Created deployment package: build/$BUILD_PATH.zip${NC}"
+        echo -e "${GREEN}✓ Created deployment package: build/$(basename "$BUILD_PATH").zip${NC}"
     else
         echo -e "${RED}✗ Failed to build $FUNCTION_NAME${NC}"
         exit 1
@@ -68,7 +69,7 @@ for FUNCTION_DEF in "${LAMBDA_FUNCTIONS[@]}"; do
     echo ""
 done
 
-echo -e "${GREEN}All Lambda functions built successfully!${NC}"
+echo -e "${GREEN}All functions built successfully!${NC}"
 echo ""
 echo -e "${YELLOW}Build outputs:${NC}"
 find build/ -name "*.zip" | sort 

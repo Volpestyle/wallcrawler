@@ -184,6 +184,7 @@ type SessionState struct {
 	Status     string `json:"status"`
 	ProjectID  string `json:"projectId"`
 	ConnectURL string `json:"connectUrl,omitempty"`
+	SigningKey string `json:"signingKey,omitempty"`
 	ECSTaskARN string `json:"ecsTaskArn,omitempty"`
 	PublicIP   string `json:"publicIP,omitempty"`
 

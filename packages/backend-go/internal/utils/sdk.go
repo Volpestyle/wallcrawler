@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/wallcrawler/backend-go/internal/types"
@@ -176,9 +177,14 @@ func ConvertToSDKRetrieveResponse(sessionState *types.SessionState) SDKSessionRe
 		UpdatedAt:  sessionState.UpdatedAt.Format(time.RFC3339),
 	}
 
-	// Add optional fields
+	// Add optional fields - generate connectURL if session is ready but URL not set
 	if sessionState.ConnectURL != "" {
 		response.ConnectURL = &sessionState.ConnectURL
+	} else if (sessionState.Status == types.SessionStatusReady || sessionState.Status == types.SessionStatusActive) &&
+		sessionState.PublicIP != "" && sessionState.SigningKey != "" {
+		// Generate connectURL for ready sessions that might be missing it
+		connectURL := CreateAuthenticatedCDPURL(sessionState.PublicIP, sessionState.SigningKey)
+		response.ConnectURL = &connectURL
 	}
 
 	if sessionState.TerminatedAt != nil {
@@ -186,16 +192,15 @@ func ConvertToSDKRetrieveResponse(sessionState *types.SessionState) SDKSessionRe
 		response.EndedAt = &endedAt
 	}
 
-	// Generate URLs if session is ready
-	if sessionState.Status == types.SessionStatusReady || sessionState.Status == types.SessionStatusActive {
-		seleniumURL := "https://api.wallcrawler.dev/v1/sessions/" + sessionState.ID + "/selenium"
+	// Generate URLs if session is ready and has public IP
+	if (sessionState.Status == types.SessionStatusReady || sessionState.Status == types.SessionStatusActive) && sessionState.PublicIP != "" {
+		// Standard Selenium Grid endpoint - /wd/hub is the WebDriver wire protocol endpoint
+		seleniumURL := fmt.Sprintf("http://%s:4444/wd/hub", sessionState.PublicIP)
 		response.SeleniumRemoteURL = &seleniumURL
 
-		// Get the actual JWT signing key for session authentication
-		signingKeyBytes, err := GetJWTSigningKey()
-		if err == nil {
-			signingKey := string(signingKeyBytes)
-			response.SigningKey = &signingKey
+		// Get the JWT token from session state
+		if sessionState.SigningKey != "" {
+			response.SigningKey = &sessionState.SigningKey
 		}
 	}
 
