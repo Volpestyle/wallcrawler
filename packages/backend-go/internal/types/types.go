@@ -27,17 +27,17 @@ type SessionCreateResponse struct {
 
 // Stagehand session start types
 type StartSessionRequest struct {
-	ModelName                       string                 `json:"modelName"`
-	ModelAPIKey                     string                 `json:"modelApiKey"`
-	DOMSettleTimeoutMs              int                    `json:"domSettleTimeoutMs"`
-	Verbose                         int                    `json:"verbose"`
-	DebugDOM                        bool                   `json:"debugDom"`
-	SystemPrompt                    string                 `json:"systemPrompt,omitempty"`
-	SelfHeal                        bool                   `json:"selfHeal,omitempty"`
-	WaitForCaptchaSolves            bool                   `json:"waitForCaptchaSolves,omitempty"`
-	ActionTimeoutMs                 int                    `json:"actionTimeoutMs,omitempty"`
-	BrowserbaseSessionCreateParams  map[string]interface{} `json:"browserbaseSessionCreateParams,omitempty"`
-	BrowserbaseSessionID            string                 `json:"browserbaseSessionID,omitempty"`
+	ModelName                      string                 `json:"modelName"`
+	ModelAPIKey                    string                 `json:"modelApiKey"`
+	DOMSettleTimeoutMs             int                    `json:"domSettleTimeoutMs"`
+	Verbose                        int                    `json:"verbose"`
+	DebugDOM                       bool                   `json:"debugDom"`
+	SystemPrompt                   string                 `json:"systemPrompt,omitempty"`
+	SelfHeal                       bool                   `json:"selfHeal,omitempty"`
+	WaitForCaptchaSolves           bool                   `json:"waitForCaptchaSolves,omitempty"`
+	ActionTimeoutMs                int                    `json:"actionTimeoutMs,omitempty"`
+	BrowserbaseSessionCreateParams map[string]interface{} `json:"browserbaseSessionCreateParams,omitempty"`
+	BrowserbaseSessionID           string                 `json:"browserbaseSessionID,omitempty"`
 }
 
 type StartSessionResponse struct {
@@ -101,11 +101,11 @@ type ObserveRequest struct {
 }
 
 type ObserveResult struct {
-	Selector     string   `json:"selector"`
-	Description  string   `json:"description"`
-	BackendNodeID int     `json:"backendNodeId,omitempty"`
-	Method       string   `json:"method,omitempty"`
-	Arguments    []string `json:"arguments,omitempty"`
+	Selector      string   `json:"selector"`
+	Description   string   `json:"description"`
+	BackendNodeID int      `json:"backendNodeId,omitempty"`
+	Method        string   `json:"method,omitempty"`
+	Arguments     []string `json:"arguments,omitempty"`
 }
 
 // Navigate types
@@ -116,7 +116,7 @@ type NavigateRequest struct {
 
 // Agent types
 type AgentExecuteRequest struct {
-	AgentConfig    AgentConfig        `json:"agentConfig"`
+	AgentConfig    AgentConfig         `json:"agentConfig"`
 	ExecuteOptions AgentExecuteOptions `json:"executeOptions"`
 }
 
@@ -186,15 +186,15 @@ type SessionState struct {
 	ConnectURL string `json:"connectUrl,omitempty"`
 	ECSTaskARN string `json:"ecsTaskArn,omitempty"`
 	PublicIP   string `json:"publicIP,omitempty"`
-	
+
 	// User-defined data
 	UserMetadata map[string]string `json:"userMetadata,omitempty"`
 	ModelConfig  *ModelConfig      `json:"modelConfig,omitempty"`
 
 	// EventBridge Integration
-	EventHistory         []SessionEvent `json:"eventHistory,omitempty"`
-	LastEventTimestamp   *time.Time     `json:"lastEventTimestamp,omitempty"`
-	RetryCount           int            `json:"retryCount,omitempty"`
+	EventHistory       []SessionEvent `json:"eventHistory,omitempty"`
+	LastEventTimestamp *time.Time     `json:"lastEventTimestamp,omitempty"`
+	RetryCount         int            `json:"retryCount,omitempty"`
 
 	// Performance Tracking
 	CreatedAt             time.Time  `json:"createdAt"`
@@ -220,29 +220,29 @@ type SessionEvent struct {
 
 // ResourceLimits defines session resource constraints
 type ResourceLimits struct {
-	MaxCPU      int `json:"maxCPU"`           // Maximum CPU allocation
-	MaxMemory   int `json:"maxMemory"`        // Maximum memory (MB)
-	MaxDuration int `json:"maxDuration"`      // Maximum session duration (seconds)
-	MaxActions  int `json:"maxActions"`       // Maximum actions per session
+	MaxCPU      int `json:"maxCPU"`      // Maximum CPU allocation
+	MaxMemory   int `json:"maxMemory"`   // Maximum memory (MB)
+	MaxDuration int `json:"maxDuration"` // Maximum session duration (seconds)
+	MaxActions  int `json:"maxActions"`  // Maximum actions per session
 }
 
 // BillingInfo tracks usage for cost allocation
 type BillingInfo struct {
-	CostCenter     string    `json:"costCenter,omitempty"`
-	CPUSeconds     float64   `json:"cpuSeconds"`
-	MemoryMBHours  float64   `json:"memoryMBHours"`
-	ActionsCount   int       `json:"actionsCount"`
-	LastBillingAt  time.Time `json:"lastBillingAt"`
+	CostCenter    string    `json:"costCenter,omitempty"`
+	CPUSeconds    float64   `json:"cpuSeconds"`
+	MemoryMBHours float64   `json:"memoryMBHours"`
+	ActionsCount  int       `json:"actionsCount"`
+	LastBillingAt time.Time `json:"lastBillingAt"`
 }
 
 type ModelConfig struct {
-	ModelName              string `json:"modelName"`
-	ModelAPIKey            string `json:"modelApiKey"`
-	DOMSettleTimeoutMs     int    `json:"domSettleTimeoutMs"`
-	Verbose                int    `json:"verbose"`
-	DebugDOM               bool   `json:"debugDom"`
-	SystemPrompt           string `json:"systemPrompt,omitempty"`
-	SelfHeal               bool   `json:"selfHeal"`
-	WaitForCaptchaSolves   bool   `json:"waitForCaptchaSolves"`
-	ActionTimeoutMs        int    `json:"actionTimeoutMs"`
-} 
+	ModelName            string `json:"modelName"`
+	ModelAPIKey          string `json:"modelApiKey"`
+	DOMSettleTimeoutMs   int    `json:"domSettleTimeoutMs"`
+	Verbose              int    `json:"verbose"`
+	DebugDOM             bool   `json:"debugDom"`
+	SystemPrompt         string `json:"systemPrompt,omitempty"`
+	SelfHeal             bool   `json:"selfHeal"`
+	WaitForCaptchaSolves bool   `json:"waitForCaptchaSolves"`
+	ActionTimeoutMs      int    `json:"actionTimeoutMs"`
+}

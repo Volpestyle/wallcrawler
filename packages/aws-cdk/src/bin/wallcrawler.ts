@@ -22,7 +22,7 @@ new WallcrawlerStack(app, 'WallcrawlerStack', {
 
     env: {
         account: process.env.CDK_DEFAULT_ACCOUNT,
-        region: process.env.CDK_DEFAULT_REGION || 'us-west-2'
+        region: process.env.CDK_DEFAULT_REGION || 'us-east-1'
     },
 
     description: 'Wallcrawler infrastructure for remote browser automation',

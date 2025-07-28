@@ -6,12 +6,23 @@
 2. [Architecture Overview](#architecture-overview)
 3. [Core Components](#core-components)
 4. [Data Flow](#data-flow)
-5. [API Design](#api-design)
-6. [Session Management](#session-management)
-7. [Infrastructure](#infrastructure)
-8. [Security](#security)
-9. [Performance & Scaling](#performance--scaling)
-10. [Deployment](#deployment)
+5. [Session Management](#session-management)
+6. [Infrastructure](#infrastructure)
+7. [Security](#security)
+8. [Performance & Scaling](#performance--scaling)
+9. [Deployment](#deployment)
+
+### Related Documentation
+
+For detailed implementation specifics:
+
+- **[API Endpoints Reference](api/api-endpoints-reference.md)** - Complete API specification and endpoint details
+- **[Signed CDP URLs](api/signed-cdp-urls.md)** - End-to-end CDP security implementation and client integration
+- **[Direct Mode Implementation](api/direct-mode-implementation.md)** - Direct CDP integration with enterprise security
+- **[API Mode Implementation](api/api-mode-implementation.md)** - Server-side LLM processing architecture (stubbed)
+- **[Deployment Guide](deployment-steps.md)** - Step-by-step deployment instructions and CI/CD setup
+- **[Progress Tracking](progress.md)** - Development milestones and implementation status
+- **[System Flow Overview](wallcrawler-flow.md)** - Detailed operational flows and session lifecycle
 
 ## Overview
 
@@ -94,7 +105,6 @@ graph TB
 
     subgraph "API Layer"
         RestAPI[REST API Gateway]
-        WebSocketAPI[WebSocket API Gateway]
         WAF[Web Application Firewall]
     end
 
@@ -107,7 +117,6 @@ graph TB
         AgentLambda[Agent Execute Lambda]
         DebugLambda[Debug Lambda]
         EndLambda[End Session Lambda]
-        ScreencastLambda[Screencast Lambda]
     end
 
     subgraph "Browser Layer"
@@ -132,11 +141,9 @@ graph TB
 
     StagehandApp --> RestAPI
     WebApp --> RestAPI
-    WebApp --> WebSocketAPI
     SDK --> RestAPI
 
     RestAPI --> WAF
-    WebSocketAPI --> WAF
     WAF --> StartLambda
     WAF --> ActLambda
     WAF --> ExtractLambda
@@ -145,7 +152,6 @@ graph TB
     WAF --> AgentLambda
     WAF --> DebugLambda
     WAF --> EndLambda
-    WebSocketAPI --> ScreencastLambda
 
     StartLambda --> ECSCluster
     ActLambda --> BrowserTask1
@@ -165,15 +171,14 @@ graph TB
     ECSCluster --> BrowserTask2
     ECSCluster --> BrowserTaskN
 
-    ScreencastLambda --> CloudWatch
     BrowserTask1 --> CloudWatch
     StartLambda --> CloudWatch
+    ActLambda --> CloudWatch
 
     style StagehandApp fill:#e3f2fd
     style WebApp fill:#e3f2fd
     style SDK fill:#e3f2fd
     style RestAPI fill:#f3e5f5
-    style WebSocketAPI fill:#f3e5f5
     style WAF fill:#f3e5f5
     style StartLambda fill:#e8f5e8
     style ActLambda fill:#e8f5e8
@@ -198,15 +203,11 @@ Each browser session runs in a dedicated ECS Fargate task containing:
 
 - Chrome browser with remote debugging enabled
 - Go controller for session management
-- WebSocket communication for real-time updates
+- Direct CDP access for client communication
 
 ### 3. Redis State Store
 
 Centralized session state management with automatic expiration and cleanup.
-
-### 4. WebSocket API
-
-Real-time streaming for browser screencast and bidirectional communication.
 
 ## Data Flow
 
@@ -227,9 +228,9 @@ sequenceDiagram
 
     Client->>API: POST /sessions/start
     API->>API: Generate session ID
-    API->>Redis: Store session (status: CREATING)
-    API->>EventBridge: Publish SessionCreateRequested
-    API-->>Client: {"sessionId": "sess_123", "status": "creating"}
+    API->>Redis: Store session (status: provisioning)
+    API->>EventBridge: Publish SessionCreated event
+    API-->>Client: {"sessionId": "sess_123", "status": "provisioning"}
 
     EventBridge->>Provisioner: Route creation event
     Provisioner->>Redis: Update status: PROVISIONING
@@ -343,71 +344,6 @@ sequenceDiagram
     CleanupLambda->>EventBridge: Publish SessionCleanupCompleted
 
     Note over EventBridge: Session lifecycle complete
-```
-
-### Direct Mode Connection Flow
-
-```mermaid
-sequenceDiagram
-    participant Client as Stagehand Client
-    participant API as API Gateway
-    participant DebugLambda as Debug Lambda
-    participant Redis as Redis Cluster
-    participant Browser as Browser Task
-
-    Client->>API: GET /sessions/{id}/debug
-    API->>DebugLambda: Get debug URL
-    DebugLambda->>Redis: Get session state
-    Redis-->>DebugLambda: Session with public IP
-    DebugLambda-->>API: Return CDP URL
-    API-->>Client: ws://[public-ip]:9222
-
-    Client->>Browser: Direct CDP connection
-    Browser-->>Client: Chrome DevTools Protocol
-
-    Note over Client, Browser: Direct communication bypasses Wallcrawler APIs
-```
-
-### Enhanced WebSocket Flow with EventBridge Coordination
-
-WebSocket operations are coordinated through EventBridge for better reliability and monitoring:
-
-```mermaid
-sequenceDiagram
-    participant Client as Web Client
-    participant WSGateway as WebSocket Gateway
-    participant ScreencastLambda as Screencast Lambda
-    participant EventBridge as EventBridge
-    participant Redis as Redis State Store
-    participant Browser as Browser Controller
-
-    Client->>WSGateway: WebSocket connect
-    WSGateway->>ScreencastLambda: $connect event
-    ScreencastLambda->>Redis: Store connection ID
-    ScreencastLambda->>EventBridge: Publish WebSocketConnected
-
-    Client->>WSGateway: {"action": "start_screencast", "sessionId": "sess_123"}
-    WSGateway->>ScreencastLambda: Route message
-    ScreencastLambda->>Redis: Validate session
-    ScreencastLambda->>EventBridge: Publish ScreencastStartRequested
-
-    EventBridge->>Browser: Route capture event (via Redis Pub/Sub)
-    Browser->>Browser: Start Chrome screencast
-    Browser->>EventBridge: Publish ScreencastStarted
-
-    loop Frame Streaming
-        Browser->>Browser: Capture frame
-        Browser->>ScreencastLambda: Send frame via WebSocket
-        ScreencastLambda->>WSGateway: Broadcast frame
-        WSGateway->>Client: Frame data
-    end
-
-    Client->>WSGateway: {"action": "stop_screencast"}
-    WSGateway->>ScreencastLambda: Route message
-    ScreencastLambda->>EventBridge: Publish ScreencastStopRequested
-    EventBridge->>Browser: Route stop event (via Redis Pub/Sub)
-    Browser->>Browser: Stop screencast
-    Browser->>EventBridge: Publish ScreencastStopped
 ```
 
 ## Architecture Decision: EventBridge vs Redis
@@ -524,7 +460,6 @@ graph TB
 |                         | `SessionCleanupCompleted`     | `cleanup-handler`     | `monitoring`            | Session fully terminated       |
 | **Browser Operations**  | `ActionStarted`               | `act-lambda`          | `monitoring`            | Track action execution         |
 |                         | `ActionCompleted`             | `browser-controller`  | `act-lambda`            | Signal action completion       |
-|                         | `ScreencastStarted`           | `browser-controller`  | `monitoring`            | WebSocket streaming active     |
 | **Resource Management** | `ECSTaskStarted`              | `session-provisioner` | `monitoring`            | Track resource usage           |
 |                         | `ECSTaskFailed`               | `ecs-monitor`         | `error-handler`         | Handle task failures           |
 |                         | `ResourceQuotaExceeded`       | `resource-monitor`    | `scaling-handler`       | Trigger scaling decisions      |
@@ -541,94 +476,6 @@ graph TB
 | **Scaling**    | Auto-scaling, unlimited   | Single-node or cluster     |
 | **Use Case**   | Workflow coordination     | Real-time operations       |
 | **Cost**       | Pay per event             | Fixed infrastructure cost  |
-
-## API Design
-
-### REST API Endpoints
-
-Wallcrawler provides a Stagehand-compatible API with additional native endpoints.
-
-```mermaid
-graph TB
-    subgraph "Session Management"
-        StartSession[POST /sessions/start<br/>Stagehand Compatible]
-        StartNative[POST /start-session<br/>Wallcrawler Native]
-        RetrieveSession[GET /sessions/{id}/retrieve]
-        DebugSession[GET /sessions/{id}/debug]
-        CDPURLSession[POST /sessions/{id}/cdp-url<br/>Signed CDP URLs]
-        EndSession[POST /sessions/{id}/end]
-    end
-
-    subgraph "Browser Operations (Streaming)"
-        Act[POST /sessions/{id}/act]
-        Extract[POST /sessions/{id}/extract]
-        Observe[POST /sessions/{id}/observe]
-        Navigate[POST /sessions/{id}/navigate]
-        AgentExecute[POST /sessions/{id}/agentExecute]
-    end
-
-    subgraph "Real-time Communication"
-        WSConnect[WebSocket /screencast]
-        WSEvents[Event Broadcasting]
-    end
-
-    StartSession --> Lambda1[sessions-start Lambda]
-    StartNative --> Lambda2[start-session Lambda]
-    RetrieveSession --> Lambda3[retrieve Lambda]
-    DebugSession --> Lambda4[debug Lambda]
-    CDPURLSession --> Lambda7[cdp-url Lambda]
-    EndSession --> Lambda5[end Lambda]
-
-    Act --> Lambda6[act Lambda]
-    Extract --> Lambda7[extract Lambda]
-    Observe --> Lambda8[observe Lambda]
-    Navigate --> Lambda9[navigate Lambda]
-    AgentExecute --> Lambda10[agent-execute Lambda]
-
-    WSConnect --> Lambda11[screencast Lambda]
-    WSEvents --> Lambda11
-
-
-```
-
-### Authentication & Headers
-
-All API requests require authentication and specific headers:
-
-```yaml
-Headers:
-  x-wc-api-key: 'your-api-key' # API authentication
-  x-wc-project-id: 'project-id' # Project identification
-  x-wc-session-id: 'session-id' # Session context (optional)
-  x-model-api-key: 'llm-api-key' # LLM provider API key
-  x-stream-response: 'true' # Enable streaming responses
-  Content-Type: 'application/json'
-```
-
-### Response Format
-
-All responses follow a consistent format:
-
-```typescript
-// Success Response
-{
-  "success": true,
-  "data": {
-    // Response data
-  }
-}
-
-// Error Response
-{
-  "success": false,
-  "message": "Error description"
-}
-
-// Streaming Response (Server-Sent Events)
-data: {"type": "log", "data": {"level": "info", "message": "Starting action..."}}
-data: {"type": "result", "data": {"success": true, "action": "click"}}
-data: {"type": "system", "data": {"status": "complete"}}
-```
 
 ## Session Management
 
@@ -685,63 +532,6 @@ stateDiagram-v2
         - ECS task stopping
         - Resource cleanup in progress
     end note
-```
-
-### Session State Schema with EventBridge Integration
-
-```typescript
-interface EnhancedSessionState {
-  id: string; // Unique session identifier
-  status: SessionStatus; // Current lifecycle status
-  projectId: string; // Project identification
-  connectUrl?: string; // Chrome CDP WebSocket URL
-  ecsTaskArn?: string; // AWS ECS task ARN
-  publicIP?: string; // ECS task public IP
-  userMetadata?: object; // User-defined metadata
-  modelConfig?: ModelConfig; // LLM configuration
-
-  // EventBridge Integration
-  eventHistory: SessionEvent[]; // Complete event audit trail
-  lastEventTimestamp: Date; // Last EventBridge event
-  retryCount?: number; // Failed creation retry attempts
-
-  // Performance Tracking
-  createdAt: Date; // Session creation time
-  provisioningStartedAt?: Date; // ECS task creation started
-  readyAt?: Date; // Chrome CDP available
-  lastActiveAt?: Date; // Last action execution
-  terminatedAt?: Date; // Session termination time
-
-  // Resource Management
-  resourceLimits?: ResourceLimits; // CPU, memory, timeout limits
-  billingInfo?: BillingInfo; // Usage tracking
-}
-
-interface SessionEvent {
-  eventType: string; // EventBridge event type
-  timestamp: Date; // Event occurrence time
-  source: string; // Event source service
-  detail: object; // Event-specific data
-  correlationId?: string; // Request correlation
-}
-
-interface ResourceLimits {
-  maxCPU: number; // Maximum CPU allocation
-  maxMemory: number; // Maximum memory (MB)
-  maxDuration: number; // Maximum session duration (seconds)
-  maxActions: number; // Maximum actions per session
-}
-
-enum SessionStatus {
-  CREATING = 'CREATING', // Initial state, EventBridge triggered
-  PROVISIONING = 'PROVISIONING', // ECS task being created
-  STARTING = 'STARTING', // Chrome initializing
-  READY = 'READY', // Available for actions
-  ACTIVE = 'ACTIVE', // Processing actions
-  TERMINATING = 'TERMINATING', // Shutdown in progress
-  STOPPED = 'STOPPED', // Fully terminated
-  FAILED = 'FAILED', // Error state
-}
 ```
 
 ### EventBridge-Driven Architecture Benefits
@@ -891,9 +681,8 @@ graph TB
 graph TB
     subgraph "ECS Fargate Task"
         subgraph "Container: wallcrawler-controller"
-            Chrome[Google Chrome<br/>--remote-debugging-port=9222<br/>--remote-debugging-address=0.0.0.0]
+            Chrome[Google Chrome<br/>--remote-debugging-port=9222<br/>--remote-debugging-address=127.0.0.1]
             Controller[Go Controller<br/>Session Management<br/>WebSocket Communication<br/>CDP Proxy]
-            Stagehand[Stagehand Library<br/>LLM Integration<br/>Action Processing]
         end
 
         subgraph "Task Configuration"
@@ -925,7 +714,6 @@ graph TB
     Chrome --> Port9222
     Controller --> Chrome
     Controller --> Port9223
-    Controller --> Stagehand
     Controller --> SessionID
     Controller --> RedisAddr
     Controller --> WSEndpoint
@@ -974,7 +762,7 @@ graph TB
 
     subgraph "ECS Security"
         TaskRole[ECS Task Role<br/>Minimal Permissions]
-        SecurityGroup[Security Group<br/>Port 9222 Only]
+        SecurityGroup[Security Group<br/>Port 9223 Public, 9222 Localhost]
         VPCEndpoints[VPC Endpoints<br/>AWS Services]
     end
 
@@ -994,14 +782,12 @@ graph TB
     SessionOwnership --> TaskRole
     TaskRole --> SecurityGroup
     SecurityGroup --> VPCEndpoints
-
-
 ```
 
 ### Security Features
 
 1. **API Key Authentication**: All REST API requests require valid API keys (`x-wc-api-key`)
-2. **JWT Signed CDP URLs**: Time-limited, scope-based authentication for CDP access
+2. **JWT Signed CDP URLs**: Time-limited authentication for CDP access ([See CDP Security Documentation](api/signed-cdp-urls.md))
 3. **CDP Proxy Security**: Enterprise-grade proxy with rate limiting and circuit breaker
 4. **Network Isolation**: Chrome listens only on localhost (127.0.0.1:9222), proxy on 9223
 5. **Project Isolation**: Sessions are isolated by project ID
@@ -1010,6 +796,8 @@ graph TB
 8. **WAF Protection**: DDoS protection and common attack mitigation
 9. **Encryption**: Data in transit and at rest encryption
 10. **IAM Roles**: Least privilege access for all components
+
+> **Note**: For detailed CDP security implementation, see [Signed CDP URLs Documentation](api/signed-cdp-urls.md)
 
 ## Performance & Scaling
 
@@ -1046,8 +834,6 @@ graph TB
     ECSService --> CloudWatch
     Redis --> CloudWatch
     CloudWatch --> Alarms
-
-
 ```
 
 ### Performance Targets
@@ -1064,96 +850,43 @@ graph TB
 
 ## Deployment
 
-### CI/CD Pipeline
+### Deployment Strategy
 
-```mermaid
-graph TB
-    subgraph "Source Control"
-        GitHub[GitHub Repository<br/>wallcrawler]
-        PRs[Pull Requests<br/>Feature Branches]
-        Main[Main Branch<br/>Production Ready]
-    end
+Wallcrawler uses a multi-environment deployment strategy with AWS CDK for infrastructure as code:
 
-    subgraph "Build Process"
-        GoBuilds[Go Lambda Builds<br/>backend-go/build.sh]
-        TypeScriptBuilds[TypeScript Builds<br/>pnpm build]
-        DockerBuild[Docker Image Build<br/>ECS Container]
-        Tests[Unit Tests<br/>Integration Tests]
-    end
+- **Development**: Quick iteration with minimal resources
+- **Staging**: Production-like environment for integration testing
+- **Production**: Full-scale deployment with enterprise features
 
-    subgraph "AWS Deployment"
-        CDKSynth[CDK Synthesize<br/>CloudFormation Template]
-        CDKDeploy[CDK Deploy<br/>Infrastructure Update]
-        LambdaDeploy[Lambda Deployment<br/>Function Updates]
-        ECSUpdate[ECS Service Update<br/>Rolling Deployment]
-    end
+### Build and Deployment Process
 
-    subgraph "Environments"
-        Dev[Development<br/>development context]
-        Staging[Staging<br/>staging context]
-        Prod[Production<br/>production context]
-    end
+1. **Source Control**: GitHub with feature branch workflow
+2. **Build Pipeline**: Multi-language builds (Go Lambda functions, TypeScript packages, Docker containers)
+3. **Infrastructure**: AWS CDK for declarative infrastructure management
+4. **Testing**: Automated testing before deployment
+5. **Progressive Deployment**: Development → Staging → Production
 
-    GitHub --> PRs
-    PRs --> GoBuilds
-    PRs --> TypeScriptBuilds
-    PRs --> Tests
+### Environment Management
 
-    Main --> DockerBuild
-    DockerBuild --> CDKSynth
-    CDKSynth --> CDKDeploy
+Each environment is configured via CDK context parameters, allowing for:
 
-    CDKDeploy --> LambdaDeploy
-    CDKDeploy --> ECSUpdate
+- Different resource sizing (Redis node types, Lambda memory)
+- Feature flags (JWT rotation, WAF logging)
+- Domain configuration (development vs production URLs)
+- Security settings (development keys vs auto-generated secrets)
 
-    LambdaDeploy --> Dev
-    ECSUpdate --> Dev
-
-    Dev --> Staging
-    Staging --> Prod
-
-
-```
-
-### Deployment Commands
-
-```bash
-# Development deployment
-pnpm install
-pnpm build
-cd packages/aws-cdk
-cdk deploy --context environment=development
-
-# Production deployment
-pnpm install
-pnpm build
-cd packages/backend-go && ./build.sh
-cd ../aws-cdk
-cdk deploy --context environment=production --context domainName=api.wallcrawler.com
-```
-
-### Environment Configuration
-
-Each environment uses CDK context for configuration:
-
-```json
-{
-  "development": {
-    "environment": "development",
-    "ecsDesiredCount": 0,
-    "redisNodeType": "cache.t3.micro",
-    "lambdaMemory": 1024
-  },
-  "production": {
-    "environment": "production",
-    "domainName": "api.wallcrawler.com",
-    "ecsDesiredCount": 0,
-    "redisNodeType": "cache.r6g.large",
-    "lambdaMemory": 2048
-  }
-}
-```
+> **Note**: For complete deployment instructions, prerequisites, troubleshooting, and CI/CD setup, see the [Deployment Guide](deployment-steps.md).
 
 ---
+
+## Related Documentation
+
+For detailed implementation specifics, refer to:
+
+- **[API Endpoints Reference](api/api-endpoints-reference.md)** - Complete API specification
+- **[Signed CDP URLs](api/signed-cdp-urls.md)** - Security implementation and CDP access
+- **[Direct Mode Implementation](api/direct-mode-implementation.md)** - Direct CDP integration details
+- **[API Mode Implementation](api/api-mode-implementation.md)** - Server-side LLM processing (stubbed)
+- **[Deployment Guide](deployment-steps.md)** - Step-by-step deployment instructions and CI/CD setup
 
 This design document provides a comprehensive overview of the Wallcrawler architecture. For implementation details, refer to the individual package documentation in `/packages/*/README.md`.

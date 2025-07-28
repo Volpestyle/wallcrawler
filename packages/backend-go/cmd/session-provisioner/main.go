@@ -71,7 +71,7 @@ func handleSessionCreateRequested(ctx context.Context, event EventBridgeEvent) e
 	taskARN, err := utils.CreateECSTask(ctx, sessionID, sessionState)
 	if err != nil {
 		log.Printf("Error creating ECS task for session %s: %v", sessionID, err)
-		
+
 		// Mark session as failed and add retry logic
 		if err := handleProvisioningFailure(ctx, rdb, sessionID, err); err != nil {
 			log.Printf("Error handling provisioning failure: %v", err)
@@ -122,26 +122,47 @@ func handleSessionTerminationRequested(ctx context.Context, event EventBridgeEve
 		return err
 	}
 
+	// Check if session is already terminated
+	if utils.IsSessionTerminal(sessionState.Status) {
+		log.Printf("Session %s is already in terminal state: %s", sessionID, sessionState.Status)
+		return nil
+	}
+
 	// Stop ECS task if it exists
 	if sessionState.ECSTaskARN != "" {
 		if err := utils.StopECSTask(ctx, sessionState.ECSTaskARN); err != nil {
 			log.Printf("Error stopping ECS task %s: %v", sessionState.ECSTaskARN, err)
+			// Continue with termination even if ECS task stop fails
 		} else {
 			log.Printf("Stopped ECS task %s for session %s", sessionState.ECSTaskARN, sessionID)
 		}
 	}
 
-	// Add termination started event
-	terminationEvent := map[string]interface{}{
-		"sessionId": sessionID,
-		"taskArn":   sessionState.ECSTaskARN,
-		"reason":    event.Detail["reason"],
-	}
-	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionTerminationStarted", "wallcrawler.session-provisioner", terminationEvent); err != nil {
-		log.Printf("Error adding termination event: %v", err)
+	// Mark session as stopped and set ended timestamp
+	now := time.Now()
+	sessionState.Status = types.SessionStatusStopped
+	sessionState.TerminatedAt = &now
+	sessionState.UpdatedAt = now
+
+	// Store updated session state
+	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+		log.Printf("Error storing terminated session state: %v", err)
+		return err
 	}
 
-	log.Printf("Session %s termination initiated", sessionID)
+	// Add termination completed event
+	terminationEvent := map[string]interface{}{
+		"sessionId":   sessionID,
+		"taskArn":     sessionState.ECSTaskARN,
+		"reason":      event.Detail["reason"],
+		"completedAt": now.Unix(),
+		"finalStatus": types.SessionStatusStopped,
+	}
+	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionTerminationCompleted", "wallcrawler.session-provisioner", terminationEvent); err != nil {
+		log.Printf("Error adding termination completed event: %v", err)
+	}
+
+	log.Printf("Session %s termination completed successfully", sessionID)
 	return nil
 }
 
@@ -174,11 +195,11 @@ func handleSessionCreateFailed(ctx context.Context, event EventBridgeEvent) erro
 	maxRetries := 3
 	if sessionState.RetryCount <= maxRetries {
 		log.Printf("Retrying session creation for %s (attempt %d/%d)", sessionID, sessionState.RetryCount, maxRetries)
-		
+
 		// Wait before retry (exponential backoff)
 		retryDelay := time.Duration(sessionState.RetryCount*sessionState.RetryCount) * time.Second
 		time.Sleep(retryDelay)
-		
+
 		// Retry session creation
 		return handleSessionCreateRequested(ctx, event)
 	}
@@ -200,7 +221,7 @@ func handleProvisioningFailure(ctx context.Context, rdb *redis.Client, sessionID
 		"error":     provisioningErr.Error(),
 		"step":      "ecs_task_creation",
 	}
-	
+
 	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionCreateFailed", "wallcrawler.session-provisioner", failureEvent); err != nil {
 		return err
 	}
@@ -259,7 +280,7 @@ func monitorTaskStartup(sessionID, taskARN string) {
 
 	// Timeout waiting for IP
 	log.Printf("Timeout waiting for IP for session %s task %s", sessionID, taskARN)
-	
+
 	// Mark as failed
 	failureEvent := map[string]interface{}{
 		"sessionId": sessionID,
@@ -267,7 +288,7 @@ func monitorTaskStartup(sessionID, taskARN string) {
 		"error":     "Timeout waiting for task IP assignment",
 		"step":      "ip_assignment",
 	}
-	
+
 	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionCreateFailed", "wallcrawler.session-provisioner", failureEvent); err != nil {
 		log.Printf("Error adding IP timeout failure event: %v", err)
 	}
@@ -275,4 +296,4 @@ func monitorTaskStartup(sessionID, taskARN string) {
 
 func main() {
 	lambda.Start(Handler)
-} 
+}

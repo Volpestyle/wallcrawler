@@ -23,11 +23,10 @@ import (
 )
 
 var (
-	RedisAddr     = os.Getenv("REDIS_ADDR")
-	ECSCluster    = os.Getenv("ECS_CLUSTER")
-	ECSTaskDef    = os.Getenv("ECS_TASK_DEFINITION")
-	AWSRegion     = os.Getenv("AWS_REGION")
-	ConnectURL    = os.Getenv("CONNECT_URL_BASE")
+	RedisAddr  = os.Getenv("REDIS_ADDR")
+	ECSCluster = os.Getenv("ECS_CLUSTER")
+	ECSTaskDef = os.Getenv("ECS_TASK_DEFINITION")
+	ConnectURL = os.Getenv("CONNECT_URL_BASE")
 )
 
 // GetRedisClient returns a configured Redis client
@@ -39,7 +38,8 @@ func GetRedisClient() *redis.Client {
 
 // GetAWSConfig returns AWS configuration
 func GetAWSConfig() (aws.Config, error) {
-	return config.LoadDefaultConfig(context.TODO(), config.WithRegion(AWSRegion))
+	// AWS Lambda automatically provides the AWS_REGION environment variable
+	return config.LoadDefaultConfig(context.TODO())
 }
 
 // GenerateSessionID creates a new session ID
@@ -117,16 +117,16 @@ func UpdateSessionStatus(ctx context.Context, rdb *redis.Client, sessionID, stat
 
 	// Add event to history
 	sessionEvent := types.SessionEvent{
-		EventType:     "StatusChanged",
-		Timestamp:     now,
-		Source:        "wallcrawler.utils",
+		EventType: "StatusChanged",
+		Timestamp: now,
+		Source:    "wallcrawler.utils",
 		Detail: map[string]interface{}{
 			"previousStatus": previousStatus,
 			"newStatus":      status,
 			"sessionId":      sessionID,
 		},
 	}
-	
+
 	if sessionState.EventHistory == nil {
 		sessionState.EventHistory = []types.SessionEvent{}
 	}
@@ -244,6 +244,9 @@ func PublishEvent(ctx context.Context, sessionID string, eventType string, detai
 func ValidateHeaders(headers map[string]string) error {
 	if headers["x-wc-api-key"] == "" {
 		return fmt.Errorf("missing required header: x-wc-api-key")
+	}
+	if headers["x-wc-project-id"] == "" {
+		return fmt.Errorf("missing required header: x-wc-project-id")
 	}
 	return nil
 }
@@ -396,26 +399,55 @@ func CreateCDPURL(taskIP string) string {
 	return fmt.Sprintf("ws://%s:9222", taskIP)
 }
 
-// CreateDebugURL creates the Chrome DevTools debug URL  
+// CreateAuthenticatedCDPURL creates the authenticated CDP WebSocket URL for Direct Mode
+func CreateAuthenticatedCDPURL(taskIP, jwtToken string) string {
+	// Get CDP proxy port from environment (set by CDK)
+	cdpProxyPort := os.Getenv("CDP_PROXY_PORT")
+	if cdpProxyPort == "" {
+		cdpProxyPort = "9223" // Fallback to default
+	}
+	return fmt.Sprintf("ws://%s:%s/cdp?signingKey=%s", taskIP, cdpProxyPort, jwtToken)
+}
+
+// CreateDebuggerURL creates the authenticated debugger URL using our domain
+func CreateDebuggerURL(taskIP, jwtToken string) string {
+	// Get connect URL base from environment (set by CDK)
+	connectURLBase := os.Getenv("CONNECT_URL_BASE")
+	if connectURLBase == "" {
+		connectURLBase = "https://api.wallcrawler.dev" // Fallback to default
+	}
+	
+	// Get CDP proxy port from environment (set by CDK)
+	cdpProxyPort := os.Getenv("CDP_PROXY_PORT")
+	if cdpProxyPort == "" {
+		cdpProxyPort = "9223" // Fallback to default
+	}
+	
+	// Generate debugger URL using our own domain for proper proxy routing
+	return fmt.Sprintf("%s/devtools/inspector.html?ws=%s:%s/cdp&signingKey=%s", 
+		connectURLBase, taskIP, cdpProxyPort, jwtToken)
+}
+
+// CreateDebugURL creates the Chrome DevTools debug URL
 func CreateDebugURL(taskIP string) string {
 	return fmt.Sprintf("http://%s:9222", taskIP)
-} 
+}
 
 // PublishFrameData publishes frame data to Redis for WebSocket streaming
 func PublishFrameData(ctx context.Context, rdb *redis.Client, sessionID string, frameData string) error {
 	channel := fmt.Sprintf("session:%s:frames", sessionID)
-	
+
 	frame := map[string]interface{}{
 		"type":      "frame",
 		"data":      frameData,
 		"timestamp": time.Now().UnixMilli(),
 	}
-	
+
 	frameJSON, err := json.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("error marshaling frame data: %v", err)
 	}
-	
+
 	return rdb.Publish(ctx, channel, string(frameJSON)).Err()
 }
 
@@ -463,7 +495,7 @@ func BroadcastToSessionViewers(ctx context.Context, rdb *redis.Client, sessionID
 			ConnectionId: aws.String(connectionID),
 			Data:         messageBytes,
 		})
-		
+
 		if err != nil {
 			log.Printf("Error sending message to connection %s: %v", connectionID, err)
 			// Remove stale connection
@@ -518,13 +550,13 @@ func AddSessionEvent(ctx context.Context, rdb *redis.Client, sessionID, eventTyp
 // CreateSessionWithDefaults creates a new session with default resource limits and billing info
 func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.ModelConfig) *types.SessionState {
 	now := time.Now()
-	
+
 	// Default resource limits
 	defaultLimits := &types.ResourceLimits{
-		MaxCPU:      1024,      // 1 vCPU
-		MaxMemory:   2048,      // 2GB
-		MaxDuration: 3600,      // 1 hour
-		MaxActions:  1000,      // 1000 actions
+		MaxCPU:      1024, // 1 vCPU
+		MaxMemory:   2048, // 2GB
+		MaxDuration: 3600, // 1 hour
+		MaxActions:  1000, // 1000 actions
 	}
 
 	// Initialize billing info
@@ -551,15 +583,15 @@ func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.M
 
 // IsSessionActive checks if session is in an active state
 func IsSessionActive(status string) bool {
-	return status == types.SessionStatusReady || 
-		   status == types.SessionStatusActive ||
-		   status == types.SessionStatusStarting
+	return status == types.SessionStatusReady ||
+		status == types.SessionStatusActive ||
+		status == types.SessionStatusStarting
 }
 
 // IsSessionTerminal checks if session is in a terminal state
 func IsSessionTerminal(status string) bool {
 	return status == types.SessionStatusStopped ||
-		   status == types.SessionStatusFailed
+		status == types.SessionStatusFailed
 }
 
 // IncrementSessionRetryCount increments the retry count for a session
@@ -593,4 +625,22 @@ func UpdateSessionBilling(ctx context.Context, rdb *redis.Client, sessionID stri
 	sessionState.UpdatedAt = time.Now()
 
 	return StoreSession(ctx, rdb, sessionState)
-} 
+}
+
+// MapStatusToSDK converts internal session status to SDK-compatible status
+func MapStatusToSDK(internalStatus string) string {
+	switch internalStatus {
+	case types.SessionStatusCreating, types.SessionStatusProvisioning, types.SessionStatusStarting:
+		return "RUNNING" // Session is being prepared
+	case types.SessionStatusReady, types.SessionStatusActive:
+		return "RUNNING" // Session is active and usable
+	case types.SessionStatusTerminating:
+		return "RUNNING" // Still running until fully stopped
+	case types.SessionStatusStopped:
+		return "COMPLETED" // Session completed successfully
+	case types.SessionStatusFailed:
+		return "ERROR" // Session failed to start or encountered error
+	default:
+		return "ERROR" // Unknown status, default to error
+	}
+}

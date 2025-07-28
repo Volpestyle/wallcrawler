@@ -137,7 +137,7 @@ const { sessionId } = await sessionResponse.json();
 const cdpResponse = await fetch(`/sessions/${sessionId}/cdp-url`, {
   method: 'POST',
   headers: { 'x-wc-api-key': process.env.WALLCRAWLER_API_KEY },
-  body: JSON.stringify({ scope: 'cdp-direct' }),
+  body: JSON.stringify({ expiresIn: 600 }),
 });
 const { cdpUrl } = await cdpResponse.json();
 
@@ -414,7 +414,7 @@ curl -X POST https://your-api-gateway-url/sessions/start \
 
 curl -X POST https://your-api-gateway-url/sessions/<session-id>/cdp-url \
   -H "x-wc-api-key: your-api-key" \
-  -d '{"scope":"cdp-direct"}'
+  -d '{"expiresIn":600}'
 
 # 5. View JWT secret in AWS console
 aws secretsmanager get-secret-value --secret-id <JWTSigningSecretArn-from-stack-output>

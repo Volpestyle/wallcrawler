@@ -17,25 +17,23 @@ import (
 
 // CDPSigningPayload represents the data structure for CDP access tokens
 type CDPSigningPayload struct {
-	SessionID  string   `json:"sessionId"`
-	ProjectID  string   `json:"projectId"`
-	UserID     string   `json:"userId,omitempty"`
-	Scope      string   `json:"scope"`           // "cdp-direct", "screencast", "debug"
-	IssuedAt   int64    `json:"iat"`
-	ExpiresAt  int64    `json:"exp"`
-	Nonce      string   `json:"nonce"`
-	IPAddress  string   `json:"ipAddress,omitempty"`
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	UserID    string `json:"userId,omitempty"`
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
+	Nonce     string `json:"nonce"`
+	IPAddress string `json:"ipAddress,omitempty"`
 }
 
 // CDPTokenClaims extends jwt.RegisteredClaims with our custom fields
 type CDPTokenClaims struct {
 	jwt.RegisteredClaims
-	SessionID string   `json:"sessionId"`
-	ProjectID string   `json:"projectId"`
-	UserID    string   `json:"userId,omitempty"`
-	Scope     string   `json:"scope"`
-	Nonce     string   `json:"nonce"`
-	IPAddress string   `json:"ipAddress,omitempty"`
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	UserID    string `json:"userId,omitempty"`
+	Nonce     string `json:"nonce"`
+	IPAddress string `json:"ipAddress,omitempty"`
 }
 
 // SecretValue represents the structure of our JWT secret in Secrets Manager
@@ -46,12 +44,12 @@ type SecretValue struct {
 
 var (
 	// Cache for the JWT signing key to avoid repeated Secrets Manager calls
-	jwtSigningKey    []byte
-	keyCache         sync.RWMutex
-	keyLastFetched   time.Time
-	keyTTL           = 5 * time.Minute // Cache key for 5 minutes
-	secretsClient    *secretsmanager.Client
-	initOnce         sync.Once
+	jwtSigningKey  []byte
+	keyCache       sync.RWMutex
+	keyLastFetched time.Time
+	keyTTL         = 5 * time.Minute // Cache key for 5 minutes
+	secretsClient  *secretsmanager.Client
+	initOnce       sync.Once
 )
 
 // initSecretsManager initializes the AWS Secrets Manager client
@@ -64,8 +62,8 @@ func initSecretsManager() {
 	secretsClient = secretsmanager.NewFromConfig(cfg)
 }
 
-// getJWTSigningKey retrieves the JWT signing key with caching
-func getJWTSigningKey() ([]byte, error) {
+// GetJWTSigningKey retrieves the JWT signing key with caching
+func GetJWTSigningKey() ([]byte, error) {
 	initOnce.Do(initSecretsManager)
 
 	keyCache.RLock()
@@ -137,7 +135,7 @@ func GenerateRandomNonce() string {
 
 // CreateCDPToken generates a signed JWT token for CDP access
 func CreateCDPToken(payload CDPSigningPayload) (string, error) {
-	signingKey, err := getJWTSigningKey()
+	signingKey, err := GetJWTSigningKey()
 	if err != nil {
 		return "", fmt.Errorf("error getting JWT signing key: %v", err)
 	}
@@ -146,12 +144,12 @@ func CreateCDPToken(payload CDPSigningPayload) (string, error) {
 	if payload.ExpiresAt == 0 {
 		payload.ExpiresAt = time.Now().Add(10 * time.Minute).Unix()
 	}
-	
+
 	// Set issued at time if not provided
 	if payload.IssuedAt == 0 {
 		payload.IssuedAt = time.Now().Unix()
 	}
-	
+
 	// Generate nonce if not provided
 	if payload.Nonce == "" {
 		payload.Nonce = GenerateRandomNonce()
@@ -171,7 +169,6 @@ func CreateCDPToken(payload CDPSigningPayload) (string, error) {
 		SessionID: payload.SessionID,
 		ProjectID: payload.ProjectID,
 		UserID:    payload.UserID,
-		Scope:     payload.Scope,
 		Nonce:     payload.Nonce,
 		IPAddress: payload.IPAddress,
 	}
@@ -190,7 +187,7 @@ func CreateCDPToken(payload CDPSigningPayload) (string, error) {
 
 // ValidateCDPToken validates and parses a CDP access token
 func ValidateCDPToken(tokenString string) (*CDPSigningPayload, error) {
-	signingKey, err := getJWTSigningKey()
+	signingKey, err := GetJWTSigningKey()
 	if err != nil {
 		return nil, fmt.Errorf("error getting JWT signing key: %v", err)
 	}
@@ -212,28 +209,24 @@ func ValidateCDPToken(tokenString string) (*CDPSigningPayload, error) {
 	if claims, ok := token.Claims.(*CDPTokenClaims); ok && token.Valid {
 		// Additional validations
 		now := time.Now()
-		
+
 		// Check expiration
 		if claims.ExpiresAt != nil && claims.ExpiresAt.Before(now) {
 			return nil, fmt.Errorf("token has expired")
 		}
-		
+
 		// Check not before
 		if claims.NotBefore != nil && claims.NotBefore.After(now) {
 			return nil, fmt.Errorf("token not yet valid")
 		}
-		
+
 		// Check required fields
 		if claims.SessionID == "" {
 			return nil, fmt.Errorf("missing session ID in token")
 		}
-		
+
 		if claims.ProjectID == "" {
 			return nil, fmt.Errorf("missing project ID in token")
-		}
-		
-		if claims.Scope == "" {
-			return nil, fmt.Errorf("missing scope in token")
 		}
 
 		// Convert back to CDPSigningPayload
@@ -241,7 +234,6 @@ func ValidateCDPToken(tokenString string) (*CDPSigningPayload, error) {
 			SessionID: claims.SessionID,
 			ProjectID: claims.ProjectID,
 			UserID:    claims.UserID,
-			Scope:     claims.Scope,
 			IssuedAt:  claims.IssuedAt.Unix(),
 			ExpiresAt: claims.ExpiresAt.Unix(),
 			Nonce:     claims.Nonce,
@@ -255,12 +247,11 @@ func ValidateCDPToken(tokenString string) (*CDPSigningPayload, error) {
 }
 
 // GenerateSignedCDPURL creates a signed CDP WebSocket URL
-func GenerateSignedCDPURL(sessionID, projectID, userID, scope, clientIP string) (string, error) {
+func GenerateSignedCDPURL(sessionID, projectID, userID, clientIP string) (string, error) {
 	payload := CDPSigningPayload{
 		SessionID: sessionID,
 		ProjectID: projectID,
 		UserID:    userID,
-		Scope:     scope,
 		IssuedAt:  time.Now().Unix(),
 		ExpiresAt: time.Now().Add(10 * time.Minute).Unix(),
 		Nonce:     GenerateRandomNonce(),
@@ -281,7 +272,7 @@ func GenerateSignedCDPURL(sessionID, projectID, userID, scope, clientIP string) 
 func ParseSigningKeyFromURL(url string) (*CDPSigningPayload, error) {
 	// Simple extraction - in a real implementation you'd parse the URL properly
 	// For now, assume format: ws://host:port/path?signingKey=TOKEN
-	
+
 	// This is a placeholder - implement proper URL parsing
 	return nil, fmt.Errorf("URL parsing not yet implemented")
-} 
+}

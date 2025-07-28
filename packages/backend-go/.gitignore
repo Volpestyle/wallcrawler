@@ -10,6 +10,21 @@ build-dev/
 *.so
 *.dylib
 
+# Go binaries - prevent accidentally built binaries
+# Any executable file in cmd directories
+cmd/**/bootstrap
+cmd/**/main
+# Common binary names that might be built at root level
+/main
+/sessions-*
+/ecs-controller
+/session-*
+/act
+/debug
+/end
+/screencast
+/retrieve
+
 # Test binary, built with `go test -c`
 *.test
 

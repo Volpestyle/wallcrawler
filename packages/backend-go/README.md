@@ -1,268 +1,214 @@
 # Wallcrawler Backend (Go)
 
-This package contains the Go-based backend services for Wallcrawler, including AWS Lambda handlers and the ECS controller for browser automation.
+This package contains the AWS Lambda functions and infrastructure code for the Wallcrawler browser automation platform.
 
-## Architecture
+## Architecture Overview
+
+Our backend follows a clean, organized structure with clear separation of concerns:
 
 ```
-backend-go/
-├── cmd/                     # Lambda function entry points
-│   ├── act/                # Execute actions with LLM
-│   ├── debug/              # Get CDP debug URLs
-│   ├── ecs-controller/     # ECS container controller
-│   ├── end/                # Terminate sessions
-│   ├── retrieve/           # Get session status
-│   ├── screencast/         # WebSocket screencast handler
-│   └── sessions-start/     # Create sessions (Stagehand compatible)
-├── internal/
-│   ├── types/              # Shared Go types
-│   └── utils/              # Utility functions
-├── build/                  # Build outputs (gitignored)
-├── Dockerfile              # ECS container image
-├── go.mod                  # Go module dependencies
-├── build.sh                # Build script
-└── Makefile                # Build automation
+cmd/
+├── sdk/                    # SDK-compatible endpoints (/v1/*)
+│   ├── sessions-create/    # POST /v1/sessions - Create browser session
+│   ├── sessions-list/      # GET /v1/sessions - List sessions
+│   ├── sessions-retrieve/  # GET /v1/sessions/{id} - Get session details
+│   └── sessions-update/    # POST /v1/sessions/{id} - Update/terminate session
+│
+├── api/                    # Stagehand API endpoints (/sessions/*)
+│   └── sessions-start/     # POST /sessions/start - AI sessions (stubbed)
+│
+├── session-provisioner/   # EventBridge session lifecycle management
+├── ecs-controller/        # ECS task management for browser containers
+└── cdp-url/              # Direct Mode CDP URL generation
 ```
 
-## Prerequisites
+## Implementation Status
 
-- Go 1.24+
-- Docker (for ECS controller)
-- AWS CLI configured (for deployment)
+### ✅ Production Ready - SDK & Direct Mode
 
-## Building
+**SDK Endpoints (`/v1/*`)**:
 
-### Quick Start
+- Full Browserbase-compatible API implemented
+- Session CRUD operations working
+- Proper authentication and validation
+- EventBridge-driven async provisioning
+
+**Direct Mode**:
+
+- Secure CDP access via JWT-authenticated proxy
+- Enterprise monitoring with rate limiting
+- Public IP assignment for ECS tasks
+- Native Chrome screencast support
+
+### 🔄 Stubbed - API Mode
+
+**API Endpoints (`/sessions/*`)**:
+
+- Infrastructure and routing complete
+- Returns clear "not implemented" messages
+- Ready for future AI operation implementation
+
+## Development
+
+### Prerequisites
+
+- Go 1.21+
+- AWS CLI configured
+- Docker (for local testing)
+
+### Building
 
 ```bash
 # Build all Lambda functions
 make build
 
-# Or use the build script directly
-./build.sh
-```
+# Build specific function
+make build-sessions-create
 
-### Build Options
-
-```bash
-# Show all available targets
-make help
-
-# Build all functions
-make build
-
-# Build only Lambda functions (exclude ECS controller)
-make lambda-only
-
-# Build individual functions
-make build-screencast
-make build-sessions-start
-make build-act
-
-# Build for local development (current OS)
-make dev-build
-
-# Clean build artifacts
-make clean
-```
-
-### Build Outputs
-
-Each Lambda function is built into its own directory structure:
-
-```
-build/
-├── act/
-│   └── bootstrap           # Linux binary for AWS Lambda
-├── act.zip                 # Deployment package
-├── screencast/
-│   └── bootstrap
-├── screencast.zip
-└── ...
-```
-
-## Lambda Functions
-
-### Core Session Management
-
-- **sessions-start**: Creates new browser sessions (Stagehand compatible)
-- **retrieve**: Gets session status and metadata
-- **debug**: Returns CDP debug URLs for Direct Mode
-- **end**: Terminates sessions and cleans up resources
-
-### Browser Operations
-
-- **act**: Executes actions with LLM guidance (streaming)
-- **screencast**: Handles WebSocket connections for real-time video streaming
-
-### ECS Controller
-
-- **ecs-controller**: Runs in ECS containers to manage Chrome browsers
-- Handles frame capture for screencast streaming
-- Manages Chrome lifecycle and CDP endpoints
-
-## Environment Variables
-
-All Lambda functions use these environment variables (set by CDK):
-
-```bash
-REDIS_ADDR                  # Redis cluster endpoint
-ECS_CLUSTER                 # ECS cluster name
-ECS_TASK_DEFINITION        # ECS task definition ARN
-AWS_REGION                 # AWS region
-CONNECT_URL_BASE           # Base URL for CDP connections
-WEBSOCKET_API_ENDPOINT     # WebSocket API endpoint for screencast
-```
-
-## Dependencies
-
-Key Go modules used:
-
-```go
-github.com/aws/aws-lambda-go                     # Lambda runtime
-github.com/aws/aws-sdk-go-v2                     # AWS SDK v2
-github.com/aws/aws-sdk-go-v2/service/ecs         # ECS service
-github.com/aws/aws-sdk-go-v2/service/eventbridge # EventBridge
-github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi # WebSocket
-github.com/redis/go-redis/v9                     # Redis client
-github.com/google/uuid                           # UUID generation
-```
-
-## Development
-
-### Local Development
-
-```bash
 # Build for local testing
-make dev-build
+go build ./cmd/sdk/sessions-create
+```
 
+### Project Structure
+
+#### Handler Categories
+
+1. **SDK Handlers** (`cmd/sdk/`):
+   - Handle Browserbase-compatible API endpoints
+   - Focus on basic browser session management
+   - Production-ready and fully tested
+
+2. **API Handlers** (`cmd/api/`):
+   - Handle Stagehand AI-powered endpoints
+   - Currently stubbed for future implementation
+   - Will include server-side LLM processing
+
+3. **Infrastructure Handlers**:
+   - `session-provisioner/`: EventBridge lifecycle management
+   - `ecs-controller/`: Browser container management
+   - `cdp-url/`: Direct Mode security features
+
+#### Shared Components
+
+- `internal/types/`: Common data structures and types
+- `internal/utils/`: Shared utilities (Redis, AWS, validation)
+
+### Adding New Endpoints
+
+#### SDK Endpoint
+
+1. Create handler in `cmd/sdk/new-endpoint/`
+2. Follow existing patterns for validation and response format
+3. Add to CDK stack under SDK section
+4. Update API documentation
+
+#### API Endpoint (Future)
+
+1. Create handler in `cmd/api/new-endpoint/`
+2. Include LLM processing and streaming support
+3. Add to CDK stack under API section
+4. Follow EventBridge patterns for async operations
+
+### Configuration
+
+Lambda functions are configured via environment variables:
+
+```yaml
+REDIS_ADDR: Redis cluster endpoint
+ECS_CLUSTER: ECS cluster name for browser containers
+ECS_TASK_DEFINITION: Browser task definition ARN
+AWS_REGION: AWS deployment region
+CONNECT_URL_BASE: Base URL for session connections
+WALLCRAWLER_JWT_SIGNING_SECRET_ARN: JWT signing key from Secrets Manager
+```
+
+### Testing
+
+```bash
 # Run tests
 make test
 
-# Format code
-make fmt
+# Run specific test
+go test ./cmd/sdk/sessions-create/...
 
-# Run linter (requires golangci-lint)
-make lint
-
-# Update dependencies
-make deps
+# Integration tests (requires AWS resources)
+make integration-test
 ```
 
-### Adding New Lambda Functions
+### Deployment
 
-1. Create new directory in `cmd/`:
+The backend is deployed via AWS CDK (see `../aws-cdk/`):
 
 ```bash
-mkdir cmd/my-new-function
-```
-
-2. Add `main.go` with Lambda handler:
-
-```go
-package main
-
-import (
-    "context"
-    "github.com/aws/aws-lambda-go/lambda"
-    "github.com/wallcrawler/backend-go/internal/utils"
-)
-
-func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-    // Your logic here
-    return utils.CreateAPIResponse(200, utils.SuccessResponse("OK"))
-}
-
-func main() {
-    lambda.Start(Handler)
-}
-```
-
-3. Build automatically includes new functions:
-
-```bash
-make build
-```
-
-## Deployment
-
-### Using CDK
-
-The CDK stack automatically uses build outputs:
-
-```bash
-# Build functions
-make build
-
-# Deploy infrastructure (from aws-cdk package)
 cd ../aws-cdk
-npm run deploy
+cdk deploy
 ```
 
-### Manual Deployment
+This creates:
 
-```bash
-# Build function
-make build-screencast
+- Lambda functions for all handlers
+- API Gateway with proper routing
+- ECS cluster for browser containers
+- Redis cluster for session state
+- EventBridge for async processing
 
-# Upload to AWS Lambda
-aws lambda update-function-code \
-  --function-name wallcrawler-screencast \
-  --zip-file fileb://build/screencast.zip
-```
+## API Reference
 
-## Docker (ECS Controller)
+See [API Endpoints Reference](../../docs/api-endpoints-reference.md) for complete endpoint documentation.
 
-The ECS controller runs in Docker containers:
+## Development Guidelines
 
-```bash
-# Build Docker image
-make docker-build
+### Code Organization
 
-# Or manually
-docker build -t wallcrawler-ecs-controller .
-```
+1. **One Handler Per Endpoint**: Each Lambda function has a single, focused responsibility
+2. **Consistent Structure**: All handlers follow the same patterns for validation, processing, and response
+3. **Shared Logic**: Common functionality lives in `internal/` packages
+4. **Clear Naming**: Handler names clearly indicate their purpose and API endpoint
 
-## API Compatibility
+### Response Format
 
-All Lambda functions implement Stagehand-compatible APIs:
-
-- **Headers**: `x-wc-api-key`, `x-wc-project-id`, `x-wc-session-id`
-- **Streaming**: Server-Sent Events for real-time responses
-- **WebSocket**: API Gateway WebSocket for screencast
-- **Response Format**: `{success: boolean, data: ...}`
-
-## Troubleshooting
-
-### Build Issues
-
-```bash
-# Clear and rebuild
-make clean
-make build
-
-# Check Go version
-go version
-
-# Update dependencies
-make deps
-```
-
-### Import Errors
-
-Ensure all imports use the full module path:
+All handlers return consistent response format:
 
 ```go
-"github.com/wallcrawler/backend-go/internal/utils"
-"github.com/wallcrawler/backend-go/internal/types"
+// Success
+utils.CreateAPIResponse(200, utils.SuccessResponse(data))
+
+// Error
+utils.CreateAPIResponse(400, utils.ErrorResponse("Error message"))
 ```
 
-### Missing Dependencies
+### Error Handling
 
-```bash
-# Add new AWS SDK service
-go get github.com/aws/aws-sdk-go-v2/service/[service-name]
-go mod tidy
-```
+- Validate all inputs before processing
+- Use appropriate HTTP status codes
+- Return clear, actionable error messages
+- Log errors with context for debugging
 
-For more information, see the [Wallcrawler Design Doc](../../docs/wallcrawler-design-doc.md).
+### Security
+
+- All endpoints validate required headers (`x-wc-api-key`, `x-wc-project-id`)
+- Session access is scoped to the authenticated project
+- CDP URLs use JWT signing for secure access
+- Rate limiting and monitoring built into infrastructure
+
+## Monitoring & Observability
+
+Each Lambda function includes:
+
+- Structured logging with request context
+- Error tracking and alerting
+- Performance metrics via CloudWatch
+- EventBridge event history for session lifecycle
+
+## Contributing
+
+1. Follow the established patterns for new handlers
+2. Update documentation when adding endpoints
+3. Include tests for new functionality
+4. Use the shared utilities for common operations
+
+## Support
+
+- **Documentation**: See `docs/` for complete technical specifications
+- **Architecture**: [Wallcrawler Design Document](../../docs/wallcrawler-design-doc.md)
+- **Implementation**: [Implementation Overview](../../docs/implementation-overview.md)

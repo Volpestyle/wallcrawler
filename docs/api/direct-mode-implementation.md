@@ -123,7 +123,7 @@ type CDPProxy struct {
 // JWT-based authentication for all CDP access
 func (p *CDPProxy) authMiddleware(next http.Handler) http.Handler {
     // Validate signed CDP URLs with time-limited JWT tokens
-    // Scope-based permissions: "cdp-direct", "debug", "screencast"
+    // Full access for authenticated users
 }
 ```
 
@@ -159,7 +159,7 @@ const stagehand = new Stagehand({
 const response = await fetch('/sessions/sess_123/cdp-url', {
   method: 'POST',
   headers: { 'x-wc-api-key': 'your-api-key' },
-  body: JSON.stringify({ scope: 'cdp-direct' }),
+  body: JSON.stringify({ expiresIn: 600 }),
 });
 const { cdpUrl } = await response.json();
 // cdpUrl: "ws://54.123.45.67:9223/cdp?signingKey=eyJhbGciOi..."

@@ -199,7 +199,7 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // Our Go controller container (includes Chrome with remote debugging)
         const controllerContainer = browserTaskDefinition.addContainer('controller', {
-            image: ecs.ContainerImage.fromAsset('../../backend-go', {
+            image: ecs.ContainerImage.fromAsset('../backend-go', {
                 file: 'Dockerfile',
             }),
             essential: true,
@@ -220,7 +220,6 @@ export class WallcrawlerStack extends cdk.Stack {
                 REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:6379`,
                 ECS_CLUSTER: ecsCluster.clusterName,
                 ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
-                AWS_REGION: this.region,
                 CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
                 WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
                 CDP_PROXY_PORT: '9223',
@@ -294,13 +293,6 @@ export class WallcrawlerStack extends cdk.Stack {
                         new iam.PolicyStatement({
                             effect: iam.Effect.ALLOW,
                             actions: [
-                                'execute-api:ManageConnections',
-                            ],
-                            resources: ['*'],
-                        }),
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: [
                                 'secretsmanager:GetSecretValue',
                                 'secretsmanager:DescribeSecret',
                             ],
@@ -316,7 +308,6 @@ export class WallcrawlerStack extends cdk.Stack {
             REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:6379`,
             ECS_CLUSTER: ecsCluster.clusterName,
             ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
-            AWS_REGION: this.region,
             CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
             WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
             CDP_PROXY_PORT: '9223',
@@ -327,7 +318,7 @@ export class WallcrawlerStack extends cdk.Stack {
             return new lambda.Function(this, name, {
                 runtime: lambda.Runtime.PROVIDED_AL2,
                 handler: 'bootstrap',
-                code: lambda.Code.fromAsset(`../../backend-go/build/${handler.toLowerCase()}`),
+                code: lambda.Code.fromAsset(`../backend-go/build/${handler.toLowerCase()}`),
                 timeout: cdk.Duration.minutes(15),
                 memorySize: 1024,
                 vpc,
@@ -336,78 +327,47 @@ export class WallcrawlerStack extends cdk.Stack {
             });
         };
 
-        // Lambda functions for each endpoint
-        const startSessionLambda = createLambdaFunction(
-            'StartSessionLambda',
-            'start-session',
-            'Create new browser session and launch ECS task'
+        // ================================================================= 
+        // LAMBDA FUNCTIONS - Organized by category
+        // =================================================================
+
+        // --- SDK Handlers (Browserbase-compatible) ---
+        const sdkSessionsCreateLambda = createLambdaFunction(
+            'SDKSessionsCreateLambda',
+            'sdk/sessions-create',
+            'SDK: Create basic browser sessions'
         );
 
-        const stagehandStartLambda = createLambdaFunction(
-            'StagehandStartLambda',
-            'sessions-start',
-            'Stagehand-compatible session start endpoint'
+        const sdkSessionsListLambda = createLambdaFunction(
+            'SDKSessionsListLambda',
+            'sdk/sessions-list',
+            'SDK: List sessions'
         );
 
-        const actLambda = createLambdaFunction(
-            'ActLambda',
-            'act',
-            'Execute actions using LLM guidance'
+        const sdkSessionsRetrieveLambda = createLambdaFunction(
+            'SDKSessionsRetrieveLambda',
+            'sdk/sessions-retrieve',
+            'SDK: Retrieve session details'
         );
 
-        const extractLambda = createLambdaFunction(
-            'ExtractLambda',
-            'extract',
-            'Extract structured data from pages'
+        const sdkSessionsUpdateLambda = createLambdaFunction(
+            'SDKSessionsUpdateLambda',
+            'sdk/sessions-update',
+            'SDK: Update session (REQUEST_RELEASE)'
         );
 
-        const observeLambda = createLambdaFunction(
-            'ObserveLambda',
-            'observe',
-            'Observe and describe page elements'
+        // --- API Mode Handlers (Stagehand AI) ---
+        const apiSessionsStartLambda = createLambdaFunction(
+            'APISessionsStartLambda',
+            'api/sessions-start',
+            'API: Create AI-powered sessions (stubbed)'
         );
 
-        const navigateLambda = createLambdaFunction(
-            'NavigateLambda',
-            'navigate',
-            'Navigate to URLs with options'
-        );
-
-        const agentExecuteLambda = createLambdaFunction(
-            'AgentExecuteLambda',
-            'agent-execute',
-            'Execute multi-step agent workflows'
-        );
-
-        const retrieveSessionLambda = createLambdaFunction(
-            'RetrieveSessionLambda',
-            'retrieve',
-            'Retrieve session status and metadata'
-        );
-
-        const debugSessionLambda = createLambdaFunction(
-            'DebugSessionLambda',
-            'debug',
-            'Get session debug/CDP URL'
-        );
-
-        const cdpUrlLambda = createLambdaFunction(
-            'CDPUrlLambda',
+        // --- Wallcrawler-Specific Handlers ---
+        const sessionCdpUrlLambda = createLambdaFunction(
+            'SessionCdpUrlLambda',
             'cdp-url',
-            'Generate signed CDP URLs for authenticated access'
-        );
-
-        const endSessionLambda = createLambdaFunction(
-            'EndSessionLambda',
-            'end',
-            'Terminate browser session and cleanup'
-        );
-
-        // Create Screencast Lambda for WebSocket handling
-        const screencastLambda = createLambdaFunction(
-            'ScreencastLambda',
-            'screencast',
-            'Handles WebSocket connections for browser screencast streaming'
+            'Generate signed CDP URLs'
         );
 
         // EventBridge for session events
@@ -419,7 +379,14 @@ export class WallcrawlerStack extends cdk.Stack {
             },
         });
 
-        sessionEventRule.addTarget(new targets.LambdaFunction(endSessionLambda));
+        // Session provisioner handles all session lifecycle events
+        const sessionProvisionerLambda = createLambdaFunction(
+            'SessionProvisionerLambda',
+            'session-provisioner',
+            'Handle session lifecycle events via EventBridge'
+        );
+
+        sessionEventRule.addTarget(new targets.LambdaFunction(sessionProvisionerLambda));
 
         // API Gateway for REST endpoints
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
@@ -490,166 +457,196 @@ export class WallcrawlerStack extends cdk.Stack {
             });
         };
 
-        // Root endpoints
-        const startSessionResource = api.root.addResource('start-session');
-        startSessionResource.addMethod('POST',
-            new apigateway.LambdaIntegration(startSessionLambda, { proxy: true }),
+        // =================================================================
+        // GROUP 1: SDK-COMPATIBLE ENDPOINTS (Browserbase-style API)
+        // All endpoints under /v1/ that match the SDK expectations
+        // =================================================================
+
+        const v1Resource = api.root.addResource('v1');
+
+        // --- Sessions Resource (/v1/sessions) ---
+        const v1SessionsResource = v1Resource.addResource('sessions');
+
+        // POST /v1/sessions - Create session
+        v1SessionsResource.addMethod('POST',
+            new apigateway.LambdaIntegration(sdkSessionsCreateLambda, { proxy: true }),
             {
                 apiKeyRequired: true,
                 requestValidator,
             }
         );
 
-        // Sessions resource
+        // GET /v1/sessions - List sessions
+        v1SessionsResource.addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsListLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // Session-specific SDK endpoints (/v1/sessions/{id})
+        const v1SessionResource = v1SessionsResource.addResource('{id}');
+
+        // GET /v1/sessions/{id} - Retrieve session
+        v1SessionResource.addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // POST /v1/sessions/{id} - Update session  
+        v1SessionResource.addMethod('POST',
+            new apigateway.LambdaIntegration(sdkSessionsUpdateLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // GET /v1/sessions/{id}/debug - Debug/live URLs
+        v1SessionResource.addResource('debug').addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // GET /v1/sessions/{id}/downloads - Downloads
+        v1SessionResource.addResource('downloads').addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // GET /v1/sessions/{id}/logs - Logs
+        v1SessionResource.addResource('logs').addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // GET /v1/sessions/{id}/recording - Recording
+        v1SessionResource.addResource('recording').addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // POST /v1/sessions/{id}/uploads - Uploads
+        v1SessionResource.addResource('uploads').addMethod('POST',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            {
+                apiKeyRequired: true,
+                requestValidator,
+            }
+        );
+
+        // --- Contexts Resource (/v1/contexts) ---
+        const v1ContextsResource = v1Resource.addResource('contexts');
+
+        // POST /v1/contexts - Create context
+        v1ContextsResource.addMethod('POST',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            {
+                apiKeyRequired: true,
+                requestValidator,
+            }
+        );
+
+        // Context-specific endpoints (/v1/contexts/{id})
+        const v1ContextResource = v1ContextsResource.addResource('{id}');
+
+        // GET /v1/contexts/{id} - Retrieve context
+        v1ContextResource.addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // PUT /v1/contexts/{id} - Update context
+        v1ContextResource.addMethod('PUT',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            {
+                apiKeyRequired: true,
+                requestValidator,
+            }
+        );
+
+        // --- Extensions Resource (/v1/extensions) ---
+        const v1ExtensionsResource = v1Resource.addResource('extensions');
+
+        // POST /v1/extensions - Create extension
+        v1ExtensionsResource.addMethod('POST',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            {
+                apiKeyRequired: true,
+                requestValidator,
+            }
+        );
+
+        // Extension-specific endpoints (/v1/extensions/{id})
+        const v1ExtensionResource = v1ExtensionsResource.addResource('{id}');
+
+        // GET /v1/extensions/{id} - Retrieve extension
+        v1ExtensionResource.addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // DELETE /v1/extensions/{id} - Delete extension
+        v1ExtensionResource.addMethod('DELETE',
+            new apigateway.LambdaIntegration(sdkSessionsUpdateLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // --- Projects Resource (/v1/projects) ---
+        const v1ProjectsResource = v1Resource.addResource('projects');
+
+        // GET /v1/projects - List projects
+        v1ProjectsResource.addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // Project-specific endpoints (/v1/projects/{id})
+        const v1ProjectResource = v1ProjectsResource.addResource('{id}');
+
+        // GET /v1/projects/{id} - Retrieve project
+        v1ProjectResource.addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // GET /v1/projects/{id}/usage - Project usage
+        v1ProjectResource.addResource('usage').addMethod('GET',
+            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            { apiKeyRequired: true }
+        );
+
+        // =================================================================
+        // GROUP 2: STAGEHAND API ENDPOINTS (AI-powered automation)
+        // All endpoints under /sessions/ for Stagehand's API mode
+        // =================================================================
+
         const sessionsResource = api.root.addResource('sessions');
 
-        // Stagehand-compatible start endpoint
+        // POST /sessions/start - Stagehand-compatible AI session creation
         const startResource = sessionsResource.addResource('start');
         startResource.addMethod('POST',
-            new apigateway.LambdaIntegration(stagehandStartLambda, { proxy: true }),
+            new apigateway.LambdaIntegration(apiSessionsStartLambda, { proxy: true }),
             {
                 apiKeyRequired: true,
                 requestValidator,
             }
         );
 
-        // Session-specific resources
+        // AI-powered session operations (/sessions/{sessionId})
         const sessionResource = sessionsResource.addResource('{sessionId}');
 
-        sessionResource.addResource('retrieve').addMethod('GET',
-            new apigateway.LambdaIntegration(retrieveSessionLambda, { proxy: true }),
-            { apiKeyRequired: true }
-        );
+        // Note: AI operation endpoints (act, extract, observe, etc.) are stubbed for now
+        // They can be added later when we implement API mode
 
-        sessionResource.addResource('debug').addMethod('GET',
-            new apigateway.LambdaIntegration(debugSessionLambda, { proxy: true }),
-            { apiKeyRequired: true }
-        );
+        // =================================================================
+        // GROUP 3: WALLCRAWLER-SPECIFIC ENDPOINTS
+        // Custom endpoints for Wallcrawler-specific functionality
+        // =================================================================
 
+        // POST /sessions/{sessionId}/cdp-url - Generate signed CDP URLs for Direct Mode
         sessionResource.addResource('cdp-url').addMethod('POST',
-            new apigateway.LambdaIntegration(cdpUrlLambda, { proxy: true }),
+            new apigateway.LambdaIntegration(sessionCdpUrlLambda, { proxy: true }),
             {
                 apiKeyRequired: true,
                 requestValidator,
             }
         );
-
-        sessionResource.addResource('end').addMethod('POST',
-            new apigateway.LambdaIntegration(endSessionLambda, { proxy: true }),
-            { apiKeyRequired: true }
-        );
-
-        // Streaming endpoints
-        sessionResource.addResource('act').addMethod('POST',
-            createStreamingIntegration(actLambda),
-            {
-                apiKeyRequired: true,
-                requestValidator,
-                methodResponses: [
-                    {
-                        statusCode: '200',
-                        responseParameters: {
-                            'method.response.header.Content-Type': true,
-                            'method.response.header.Cache-Control': true,
-                            'method.response.header.Connection': true,
-                        },
-                    },
-                ],
-            }
-        );
-
-        sessionResource.addResource('extract').addMethod('POST',
-            createStreamingIntegration(extractLambda),
-            { apiKeyRequired: true, requestValidator }
-        );
-
-        sessionResource.addResource('observe').addMethod('POST',
-            createStreamingIntegration(observeLambda),
-            { apiKeyRequired: true, requestValidator }
-        );
-
-        sessionResource.addResource('navigate').addMethod('POST',
-            createStreamingIntegration(navigateLambda),
-            { apiKeyRequired: true, requestValidator }
-        );
-
-        sessionResource.addResource('agentExecute').addMethod('POST',
-            createStreamingIntegration(agentExecuteLambda),
-            { apiKeyRequired: true, requestValidator }
-        );
-
-        // WebSocket API for screencast using lower-level constructs for CDK 2.100.0 compatibility
-        const webSocketApi = new apigatewayv2.CfnApi(this, 'ScreencastWebSocketAPI', {
-            name: 'Wallcrawler WebSocket API',
-            description: 'WebSocket API for browser screencast streaming',
-            protocolType: 'WEBSOCKET',
-            routeSelectionExpression: '$request.body.action',
-        });
-
-        const webSocketIntegration = new apigatewayv2.CfnIntegration(this, 'ScreencastIntegration', {
-            apiId: webSocketApi.ref,
-            integrationType: 'AWS_PROXY',
-            integrationUri: `arn:aws:apigateway:${this.region}:lambda:path/2015-03-31/functions/${screencastLambda.functionArn}/invocations`,
-        });
-
-        // WebSocket routes
-        new apigatewayv2.CfnRoute(this, 'ConnectRoute', {
-            apiId: webSocketApi.ref,
-            routeKey: '$connect',
-            target: `integrations/${webSocketIntegration.ref}`,
-        });
-
-        new apigatewayv2.CfnRoute(this, 'DisconnectRoute', {
-            apiId: webSocketApi.ref,
-            routeKey: '$disconnect',
-            target: `integrations/${webSocketIntegration.ref}`,
-        });
-
-        new apigatewayv2.CfnRoute(this, 'ScreencastRoute', {
-            apiId: webSocketApi.ref,
-            routeKey: 'screencast',
-            target: `integrations/${webSocketIntegration.ref}`,
-        });
-
-        const webSocketStage = new apigatewayv2.CfnStage(this, 'ScreencastStage', {
-            apiId: webSocketApi.ref,
-            stageName: 'prod',
-            autoDeploy: true,
-        });
-
-        // Grant WebSocket API invoke permissions to Screencast Lambda
-        screencastLambda.addPermission('WebSocketInvokePermission', {
-            principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
-            sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.ref}/*/*`,
-        });
-
-        // Grant Screencast Lambda permissions to manage API Gateway connections
-        screencastLambda.addToRolePolicy(new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: [
-                'execute-api:ManageConnections',
-            ],
-            resources: [
-                `arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.ref}/*/*`,
-            ],
-        }));
-
-        // Add WebSocket endpoint to common Lambda environment
-        const webSocketEndpoint = `https://${webSocketApi.ref}.execute-api.${this.region}.amazonaws.com/prod`;
-        const updatedLambdaEnvironment = {
-            ...commonLambdaEnvironment,
-            WEBSOCKET_API_ENDPOINT: webSocketEndpoint,
-        };
-
-        // Update all Lambda functions to include WebSocket endpoint
-        [startSessionLambda, stagehandStartLambda, actLambda, extractLambda, observeLambda,
-            navigateLambda, agentExecuteLambda, retrieveSessionLambda, debugSessionLambda,
-            cdpUrlLambda, endSessionLambda, screencastLambda].forEach(lambdaFn => {
-                lambdaFn.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketEndpoint);
-            });
-
-        // Also add WebSocket endpoint to ECS task definition environment
-        controllerContainer.addEnvironment('WEBSOCKET_API_ENDPOINT', webSocketEndpoint);
 
         // EventBridge for async communication
         const eventBus = new events.EventBus(this, 'WallcrawlerEventBus', {
@@ -711,11 +708,6 @@ export class WallcrawlerStack extends cdk.Stack {
         new cdk.CfnOutput(this, 'APIGatewayURL', {
             description: 'API Gateway endpoint URL',
             value: api.url,
-        });
-
-        new cdk.CfnOutput(this, 'WebSocketAPIURL', {
-            description: 'WebSocket API endpoint URL',
-            value: `wss://${webSocketApi.ref}.execute-api.${this.region}.amazonaws.com/${webSocketStage.stageName}`,
         });
 
         new cdk.CfnOutput(this, 'ApiKeyId', {

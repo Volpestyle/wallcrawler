@@ -4,6 +4,226 @@
 
 Wallcrawler implements a **signed URL pattern** for Chrome DevTools Protocol (CDP) access, similar to Browserbase's security model. This provides enterprise-grade authentication while maintaining browser compatibility and Stagehand integration.
 
+## End-to-End Flow: CDK to Stagehand
+
+This section traces the complete journey of how CDP URLs are created, from infrastructure setup to client usage.
+
+### Phase 1: Infrastructure Provisioning (CDK)
+
+```mermaid
+graph TB
+    subgraph "CDK Stack Deployment"
+        CDK[CDK Stack] --> VPC[VPC + Subnets]
+        CDK --> ECS[ECS Cluster]
+        CDK --> Redis[ElastiCache Redis]
+        CDK --> API[API Gateway]
+        CDK --> Lambda[Lambda Functions]
+        CDK --> Secrets[JWT Signing Secret]
+    end
+
+    subgraph "Environment Setup"
+        VPC --> SecurityGroups[Security Groups<br/>9223: Public Access<br/>9222: Localhost Only<br/>6379: Internal Only]
+        ECS --> TaskDef[Task Definition<br/>Go Controller + Chrome]
+        Lambda --> EnvVars[Environment Variables<br/>REDIS_ADDR<br/>JWT_SECRET_ARN<br/>CDP_PROXY_PORT=9223]
+    end
+
+    style CDK fill:#e1f5fe
+    style SecurityGroups fill:#e8f5e8
+    style TaskDef fill:#fff3e0
+    style EnvVars fill:#fce4ec
+```
+
+**Key CDK Components:**
+
+1. **ECS Task Definition**: Configures Go controller container with Chrome + CDP proxy
+2. **Security Groups**:
+   - Port 9223 open to public (authenticated CDP proxy)
+   - Port 9222 localhost-only (direct Chrome CDP)
+   - Port 6379 VPC-internal (Redis)
+3. **JWT Secret**: Auto-generated signing key in AWS Secrets Manager
+4. **Public IPs**: ECS tasks assigned public IPs for direct access
+
+### Phase 2: Session Provisioning
+
+```mermaid
+sequenceDiagram
+    participant S as Stagehand Client
+    participant API as API Gateway
+    participant Lambda as Sessions Lambda
+    participant EB as EventBridge
+    participant ECS as ECS Controller
+    participant Redis as Redis
+
+    S->>API: POST /v1/sessions (create session)
+    API->>Lambda: Process session creation
+    Lambda->>EB: Publish SessionCreated event
+    Lambda->>Redis: Store session metadata (status: provisioning)
+    Lambda-->>S: { sessionId, status: "provisioning" }
+
+    EB->>ECS: Trigger ECS task launch
+    ECS->>ECS: Start Chrome on localhost:9222
+    ECS->>ECS: Start CDP proxy on 0.0.0.0:9223
+    ECS->>Redis: Update session (status: ready, publicIP)
+
+    Note over S,Redis: Session now ready for CDP URL generation
+```
+
+**Key Steps:**
+
+1. **Session Request**: Stagehand requests session creation
+2. **Async Provisioning**: EventBridge triggers ECS task launch
+3. **Chrome Startup**: Controller starts Chrome with remote debugging
+4. **CDP Proxy**: Controller starts authenticated proxy on port 9223
+5. **IP Registration**: Public IP stored in Redis for URL generation
+
+### Phase 3: CDP URL Generation
+
+```mermaid
+sequenceDiagram
+    participant S as Stagehand Client
+    participant API as API Gateway
+    participant Lambda as CDP URL Lambda
+    participant Redis as Redis
+    participant Secrets as AWS Secrets
+
+    S->>API: POST /sessions/{id}/cdp-url<br/>Headers: x-wc-api-key, x-wc-project-id
+    API->>Lambda: Route request with headers
+    Lambda->>Lambda: Validate headers & extract session ID
+    Lambda->>Redis: Get session state & public IP
+    Redis-->>Lambda: { status: "ready", publicIP: "54.123.45.67" }
+    Lambda->>Secrets: Get JWT signing key
+    Secrets-->>Lambda: Signing key
+    Lambda->>Lambda: Create JWT token with:<br/>• sessionId, projectId<br/>• 10min expiration<br/>• cryptographic nonce
+    Lambda->>Lambda: Build CDP URL:<br/>ws://54.123.45.67:9223/cdp?signingKey=JWT
+    Lambda-->>S: { cdpUrl, debuggerUrl, expiresIn: 600 }
+
+    Note over S,Secrets: JWT contains session ownership & expiration
+```
+
+**JWT Token Structure:**
+
+```typescript
+{
+  sessionId: "sess_abc123",
+  projectId: "proj_xyz789",
+  userId: "user_456",
+  iat: 1674123456,          // Issued at timestamp
+  exp: 1674124056,          // Expires in 10 minutes
+  nonce: "crypto_nonce_789",
+  ipAddress: "203.0.113.42" // Optional client IP binding
+}
+```
+
+### Phase 4: CDP Connection & Validation
+
+```mermaid
+sequenceDiagram
+    participant S as Stagehand Client
+    participant Proxy as CDP Proxy :9223
+    participant Chrome as Chrome :9222
+
+    S->>Proxy: WebSocket: ws://54.123.45.67:9223/cdp?signingKey=JWT
+    Proxy->>Proxy: Extract signingKey from query params
+    Proxy->>Proxy: Validate JWT token:<br/>• Verify cryptographic signature<br/>• Check expiration time<br/>• Validate session ownership<br/>• Confirm project access
+
+    alt JWT Valid
+        Proxy->>Chrome: Connect to ws://localhost:9222/devtools/page/123
+        Chrome-->>Proxy: WebSocket established
+        Proxy-->>S: WebSocket upgrade successful
+
+        loop CDP Commands
+            S->>Proxy: CDP command (e.g., Page.navigate)
+            Proxy->>Chrome: Forward command to Chrome
+            Chrome-->>Proxy: CDP response/events
+            Proxy-->>S: Forward response to client
+        end
+    else JWT Invalid
+        Proxy-->>S: 401 Unauthorized: Invalid token
+    end
+
+    Note over S,Chrome: All CDP traffic flows through authenticated proxy
+```
+
+**Validation Checks:**
+
+1. **Signature Verification**: JWT cryptographically signed with secret key
+2. **Expiration Check**: Token must not be expired (default 10 minutes)
+3. **Session Ownership**: `sessionId` in token must match requested session
+4. **Project Access**: `projectId` must match authenticated project
+5. **Optional IP Binding**: Client IP can be bound to token for extra security
+
+### Phase 5: Full Integration Example
+
+```typescript
+// Complete Stagehand integration flow
+import { chromium } from 'playwright';
+
+async function automateWithWallcrawler() {
+  // 1. Create session via Wallcrawler API
+  const sessionResponse = await fetch('https://api.wallcrawler.dev/v1/sessions', {
+    method: 'POST',
+    headers: {
+      'x-wc-api-key': process.env.WALLCRAWLER_API_KEY,
+      'x-wc-project-id': 'my-project',
+    },
+    body: JSON.stringify({
+      browserSettings: {
+        viewport: { width: 1920, height: 1080 },
+      },
+    }),
+  });
+
+  const { id: sessionId } = await sessionResponse.json();
+  console.log(`Session created: ${sessionId}`);
+
+  // 2. Wait for session to be ready (ECS task provisioned)
+  await waitForSessionReady(sessionId);
+
+  // 3. Get signed CDP URL
+  const cdpResponse = await fetch(`https://api.wallcrawler.dev/sessions/${sessionId}/cdp-url`, {
+    method: 'POST',
+    headers: {
+      'x-wc-api-key': process.env.WALLCRAWLER_API_KEY,
+      'x-wc-project-id': 'my-project',
+    },
+    body: JSON.stringify({ expiresIn: 600 }), // 10 minutes
+  });
+
+  const { cdpUrl } = await cdpResponse.json();
+  console.log(`CDP URL: ${cdpUrl}`);
+  // Example: ws://54.123.45.67:9223/cdp?signingKey=eyJhbGciOi...
+
+  // 4. Connect Stagehand to authenticated CDP
+  const browser = await chromium.connectOverCDP(cdpUrl);
+  const context = browser.contexts()[0];
+  const page = context.pages()[0];
+
+  // 5. Perform automation through secure tunnel
+  await page.goto('https://example.com');
+  await page.fill('#search', 'automated testing');
+  await page.click('#submit');
+
+  // 6. Clean up
+  await browser.close();
+}
+
+async function waitForSessionReady(sessionId: string) {
+  for (let i = 0; i < 30; i++) {
+    const response = await fetch(`https://api.wallcrawler.dev/v1/sessions/${sessionId}`, {
+      headers: { 'x-wc-api-key': process.env.WALLCRAWLER_API_KEY },
+    });
+    const session = await response.json();
+
+    if (session.status === 'RUNNING') {
+      return; // Session ready
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2s
+  }
+  throw new Error('Session failed to start within 60 seconds');
+}
+```
+
 ## Security Problem Solved
 
 ### Before (Vulnerable)
@@ -50,10 +270,10 @@ graph TB
     Client -->|POST /sessions/123/cdp-url<br/>Headers: x-wc-api-key, x-wc-project-id| APIGateway
     APIGateway --> CDPURLLambda
     CDPURLLambda --> Redis
-    CDPURLLambda -->|Generate JWT Token<br/>Scope: cdp-direct/debug/screencast<br/>Expires: 10min| Client
+    CDPURLLambda -->|Generate JWT Token<br/>Expires: 10min| Client
 
     Client -->|ws://[ip]:9223/cdp?signingKey=JWT| CDPProxy
-    CDPProxy -->|Validate JWT Token<br/>Check expiration & scope<br/>Verify session ownership| CDPProxy
+    CDPProxy -->|Validate JWT Token<br/>Check expiration<br/>Verify session ownership| CDPProxy
     CDPProxy -->|Proxy authenticated requests| Chrome
 
     Client --> StagehandOps
@@ -77,7 +297,6 @@ interface CDPSigningPayload {
   sessionId: string; // Session identifier
   projectId: string; // Project ownership
   userId?: string; // Optional user context
-  scope: string; // "cdp-direct" | "debug" | "screencast"
   iat: number; // Issued at timestamp
   exp: number; // Expiration timestamp (10min)
   nonce: string; // Cryptographic nonce
@@ -98,7 +317,6 @@ if err != nil {
 // ✅ Cryptographic signature verification
 // ✅ Expiration time validation
 // ✅ Session ownership verification
-// ✅ Scope permission checking
 // ✅ Project access validation
 ```
 
@@ -117,7 +335,7 @@ Headers:
 
 Body:
 {
-  "scope": "debug"  // "cdp-direct" | "debug" | "screencast"
+  "expiresIn": 600  // Optional: custom expiration in seconds (default: 600)
 }
 ```
 
@@ -178,14 +396,14 @@ Headers:
 - Automatic cleanup prevents stale access
 - Fresh tokens required for new connections
 
-### 2. **Scope-Based Permissions**
+### 2. **Full Access Security Model**
 
-```typescript
-// Different permission levels:
-"cdp-direct"  → Full CDP access for Stagehand
-"debug"       → DevTools debugging interface
-"screencast"  → Screen viewing only
-```
+Authenticated users receive complete access to all CDP capabilities:
+
+- Full browser automation control
+- DevTools debugging interface
+- Screen viewing and monitoring
+- All CDP commands and events
 
 ### 3. **Project Isolation**
 
@@ -203,8 +421,8 @@ Headers:
 
 ```go
 // All CDP access is logged:
-log.Printf("Authenticated CDP access for session %s, project %s, scope %s",
-    payload.SessionID, payload.ProjectID, payload.Scope)
+log.Printf("Authenticated CDP access for session %s, project %s",
+    payload.SessionID, payload.ProjectID)
 
 // Invalid access attempts are logged:
 log.Printf("Invalid signing key: %v", err)
@@ -222,7 +440,7 @@ const response = await fetch('/sessions/sess_123/cdp-url', {
     'x-wc-api-key': 'your-api-key',
     'x-wc-project-id': 'project-123',
   },
-  body: JSON.stringify({ scope: 'cdp-direct' }),
+  body: JSON.stringify({ expiresIn: 600 }), // Optional: custom expiration
 });
 
 const { cdpUrl } = await response.json();
@@ -238,7 +456,7 @@ const browser = await chromium.connectOverCDP(cdpUrl);
 const response = await fetch('/sessions/sess_123/cdp-url', {
   method: 'POST',
   headers: { 'x-wc-api-key': 'key' },
-  body: JSON.stringify({ scope: 'screencast' }),
+  body: JSON.stringify({}), // No additional parameters needed
 });
 
 const { cdpUrl, debuggerUrl } = await response.json();
@@ -256,7 +474,7 @@ window.open(debuggerUrl, '_blank'); // Opens screencast viewer
 
 - Token generation and validation
 - Cryptographic signature handling
-- Expiration and scope checking
+- Expiration checking
 
 ### 2. **CDP Proxy** (`cmd/cdp-proxy/main.go`)
 
@@ -306,7 +524,6 @@ log.Fatal(http.ListenAndServeTLS(":9223", "cert.pem", "key.pem", nil))
 | ------------------------- | --------------- | ------------------------- |
 | **Token Format**          | JWE (encrypted) | JWT (signed)              |
 | **Expiration**            | ~5 minutes      | 10 minutes (configurable) |
-| **Scope Control**         | ✅ Yes          | ✅ Yes                    |
 | **Project Isolation**     | ✅ Yes          | ✅ Yes                    |
 | **IP Binding**            | Unknown         | ✅ Optional               |
 | **Audit Logging**         | Unknown         | ✅ Comprehensive          |
@@ -382,7 +599,7 @@ graph TB
 const response = await fetch('/sessions/sess_123/cdp-url', {
   method: 'POST',
   headers: { 'x-wc-api-key': 'api-key' },
-  body: JSON.stringify({ scope: 'screencast' }),
+  body: JSON.stringify({ expiresIn: 600 }),
 });
 
 const { cdpUrl } = await response.json();
@@ -525,7 +742,6 @@ graph TB
       "id": "sess_123_1735273200000000000",
       "session_id": "sess_123",
       "project_id": "proj_456",
-      "scope": "cdp-direct",
       "client_ip": "192.168.1.100",
       "connected_at": "2025-01-27T07:45:00Z",
       "last_activity": "2025-01-27T07:50:15Z",
@@ -633,7 +849,7 @@ async function connectToWallcrawler(sessionId: string, apiKey: string): Promise<
       const response = await fetch(`/sessions/${sessionId}/cdp-url`, {
         method: 'POST',
         headers: { 'x-wc-api-key': apiKey },
-        body: JSON.stringify({ scope: 'cdp-direct' }),
+        body: JSON.stringify({ expiresIn: 600 }),
       });
 
       if (response.status === 429) {

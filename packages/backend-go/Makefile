@@ -10,19 +10,38 @@ build: ## Build all Lambda functions for AWS deployment
 	@./build.sh
 
 lambda-only: ## Build only Lambda functions (without ECS controller)
-	@echo "Building Lambda functions only..."
+	@echo "Building Lambda functions only (excluding ECS controller)..."
 	@rm -rf build
 	@mkdir -p build
-	@for func in $$(find cmd -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -v ecs-controller); do \
-		echo "Building $$func..."; \
-		mkdir -p "build/$$func"; \
-		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "build/$$func/bootstrap" "./cmd/$$func"; \
-		cd "build/$$func" && zip -q "../$$func.zip" bootstrap && cd - > /dev/null; \
+	# Use a modified build approach that excludes ECS controller
+	@for func_def in \
+		"cmd/sdk/sessions-create:sdk/sessions-create" \
+		"cmd/sdk/sessions-list:sdk/sessions-list" \
+		"cmd/sdk/sessions-retrieve:sdk/sessions-retrieve" \
+		"cmd/sdk/sessions-update:sdk/sessions-update" \
+		"cmd/api/sessions-start:api/sessions-start" \
+		"cmd/session-cdp-url:cdp-url" \
+		"cmd/session-provisioner:session-provisioner"; do \
+		source_path=$$(echo $$func_def | cut -d: -f1); \
+		build_path=$$(echo $$func_def | cut -d: -f2); \
+		func_name=$$(basename $$build_path); \
+		if [ -f "$$source_path/main.go" ]; then \
+			echo "Building $$func_name from $$source_path..."; \
+			mkdir -p "build/$$build_path"; \
+			GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "build/$$build_path/bootstrap" "./$$source_path"; \
+			cd "build/$$build_path" && zip -q "../$$(basename $$build_path).zip" bootstrap && cd - > /dev/null; \
+		fi; \
 	done
 
 docker-build: ## Build ECS controller Docker image
 	@echo "Building ECS controller Docker image..."
 	@docker build -t wallcrawler-ecs-controller .
+
+build-ecs-controller: ## Build only the ECS controller binary
+	@echo "Building ECS controller..."
+	@mkdir -p build/ecs-controller
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/ecs-controller/bootstrap ./cmd/ecs-controller
+	@cd build/ecs-controller && zip -q ../ecs-controller.zip bootstrap
 
 test: ## Run tests
 	@echo "Running tests..."
@@ -48,11 +67,6 @@ build-sessions-start: ## Build sessions-start Lambda function
 	@mkdir -p build/sessions-start
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/sessions-start/bootstrap ./cmd/sessions-start
 	@cd build/sessions-start && zip -q ../sessions-start.zip bootstrap
-
-build-ecs-controller: ## Build ECS controller
-	@mkdir -p build/ecs-controller
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o build/ecs-controller/bootstrap ./cmd/ecs-controller
-	@cd build/ecs-controller && zip -q ../ecs-controller.zip bootstrap
 
 # Development helpers
 dev-build: ## Build for local development (current OS)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/wallcrawler/backend-go/internal/cdpproxy"
 	"github.com/wallcrawler/backend-go/internal/types"
 	"github.com/wallcrawler/backend-go/internal/utils"
 
@@ -28,6 +29,7 @@ type Controller struct {
 	allocatorCancel context.CancelFunc
 	ctx             context.Context
 	cancel          context.CancelFunc
+	cdpProxy        *cdpproxy.CDPProxy
 }
 
 func main() {
@@ -55,7 +57,7 @@ func main() {
 
 	// Create controller
 	controller := &Controller{
-		sessionID: sessionID,
+		sessionID:   sessionID,
 		redisClient: rdb,
 	}
 
@@ -78,7 +80,7 @@ func main() {
 	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusReady); err != nil {
 		log.Printf("Failed to update session status: %v", err)
 	}
-	
+
 	// Add session ready event with connection details
 	readyEvent := map[string]interface{}{
 		"sessionId":   sessionID,
@@ -91,15 +93,15 @@ func main() {
 
 	log.Printf("Chrome ready for session %s on port 9222", sessionID)
 
-	// Start authenticated CDP proxy
+	// Start integrated CDP proxy
 	if err := controller.startCDPProxy(); err != nil {
 		log.Printf("Failed to start CDP proxy: %v", err)
 	} else {
 		log.Printf("CDP proxy ready for session %s on port 9223", sessionID)
 	}
 
-	// Listen for frame capture events
-	go controller.listenForCaptureEvents(context.Background())
+	// Listen for session events (LLM operations)
+	go controller.listenForSessionEvents(context.Background())
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -115,11 +117,11 @@ func (c *Controller) startChrome() error {
 	// Chrome command line arguments for remote debugging
 	args := []string{
 		"--no-sandbox",
-		"--disable-setuid-sandbox", 
+		"--disable-setuid-sandbox",
 		"--disable-dev-shm-usage",
 		"--disable-gpu",
 		"--disable-background-timer-throttling",
-		"--disable-backgrounding-occluded-windows", 
+		"--disable-backgrounding-occluded-windows",
 		"--disable-renderer-backgrounding",
 		"--disable-features=TranslateUI",
 		"--disable-extensions",
@@ -154,7 +156,7 @@ func (c *Controller) startChrome() error {
 
 	// Start Chrome process
 	c.chromeCmd = exec.Command("google-chrome", args...)
-	
+
 	// Set environment
 	c.chromeCmd.Env = append(os.Environ(),
 		"DISPLAY=:99",
@@ -215,55 +217,32 @@ func (c *Controller) initCDP() error {
 }
 
 func (c *Controller) startCDPProxy() error {
-	// Start the CDP proxy as a goroutine
-	go func() {
-		// Set environment for CDP proxy
-		os.Setenv("CDP_PROXY_PORT", "9223")
-		
-		log.Printf("Starting CDP proxy server on port 9223")
-		
-		// This would ideally import and run the CDP proxy
-		// For now, we'll use exec to run the compiled binary
-		cdpProxyCmd := exec.Command("./cdp-proxy")
-		cdpProxyCmd.Stdout = os.Stdout
-		cdpProxyCmd.Stderr = os.Stderr
-		
-		if err := cdpProxyCmd.Start(); err != nil {
-			log.Printf("Failed to start CDP proxy: %v", err)
-			return
-		}
-		
-		// Wait for process to finish
-		if err := cdpProxyCmd.Wait(); err != nil {
-			log.Printf("CDP proxy exited with error: %v", err)
-		}
-	}()
-	
-	// Give the proxy a moment to start
-	time.Sleep(2 * time.Second)
-	
-	// Test if proxy is responding
-	resp, err := http.Get("http://localhost:9223/health")
-	if err != nil {
-		return fmt.Errorf("CDP proxy health check failed: %v", err)
+	// Initialize the integrated CDP proxy
+	c.cdpProxy = cdpproxy.NewCDPProxy("127.0.0.1:9222")
+
+	// Get port from environment
+	port := os.Getenv("CDP_PROXY_PORT")
+	if port == "" {
+		port = "9223"
 	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("CDP proxy unhealthy, status: %d", resp.StatusCode)
+
+	// Start the CDP proxy
+	if err := c.cdpProxy.Start(port); err != nil {
+		return fmt.Errorf("failed to start CDP proxy: %v", err)
 	}
-	
+
+	log.Printf("Integrated CDP proxy ready for session %s on port %s", c.sessionID, port)
 	return nil
 }
 
-func (c *Controller) listenForCaptureEvents(ctx context.Context) {
-	// Subscribe to EventBridge events via Redis (simplified for this implementation)
-	// In production, you might use AWS EventBridge directly or Redis Streams
+func (c *Controller) listenForSessionEvents(ctx context.Context) {
+	// Subscribe to session events via Redis for LLM operations
+	// Events include: extract, observe, navigate, agentExecute, act
 	eventChannel := fmt.Sprintf("session:%s:events", c.sessionID)
 	pubsub := c.redisClient.Subscribe(ctx, eventChannel)
 	defer pubsub.Close()
 
-	log.Printf("Listening for capture events on channel: %s", eventChannel)
+	log.Printf("Listening for session events on channel: %s", eventChannel)
 
 	for {
 		select {
@@ -289,14 +268,7 @@ func (c *Controller) listenForCaptureEvents(ctx context.Context) {
 			}
 
 			switch action {
-			case "start_capture":
-				// Native Chrome screencast is now used via direct CDP connections
-				// Clients connect directly to Chrome DevTools screencast through the CDP proxy
-				log.Printf("Frame capture request received - using native Chrome screencast via CDP proxy")
-			case "stop_capture":
-				// Native Chrome screencast is now used via direct CDP connections
-				log.Printf("Stop capture request received - clients disconnect from CDP screencast directly")
-			// Add LLM processing handlers
+			// LLM processing handlers
 			case "extract":
 				go c.handleExtractRequest(ctx, event)
 			case "observe":
@@ -315,13 +287,13 @@ func (c *Controller) listenForCaptureEvents(ctx context.Context) {
 // handleExtractRequest processes data extraction with LLM
 func (c *Controller) handleExtractRequest(ctx context.Context, event map[string]interface{}) {
 	log.Printf("Processing extract request for session %s", c.sessionID)
-	
+
 	// TODO: Implement actual extraction logic
 	// 1. Get accessibility tree via CDP
 	// 2. Send to LLM with instruction and schema
 	// 3. Parse LLM response
 	// 4. Return structured data via Redis pub/sub
-	
+
 	// For now, return placeholder
 	result := map[string]interface{}{
 		"success": true,
@@ -329,20 +301,20 @@ func (c *Controller) handleExtractRequest(ctx context.Context, event map[string]
 			"extracted": "Sample data - implement actual LLM processing",
 		},
 	}
-	
+
 	c.publishResult(ctx, "extract_result", result)
 }
 
 // handleObserveRequest processes DOM observation with LLM
 func (c *Controller) handleObserveRequest(ctx context.Context, event map[string]interface{}) {
 	log.Printf("Processing observe request for session %s", c.sessionID)
-	
+
 	// TODO: Implement actual observation logic
 	// 1. Get accessibility tree via CDP
 	// 2. Send to LLM with instruction
 	// 3. Parse LLM response for element identification
 	// 4. Return element selectors and actions via Redis pub/sub
-	
+
 	// For now, return placeholder
 	result := map[string]interface{}{
 		"success": true,
@@ -355,28 +327,28 @@ func (c *Controller) handleObserveRequest(ctx context.Context, event map[string]
 			},
 		},
 	}
-	
+
 	c.publishResult(ctx, "observe_result", result)
 }
 
 // handleNavigateRequest processes navigation with options
 func (c *Controller) handleNavigateRequest(ctx context.Context, event map[string]interface{}) {
 	log.Printf("Processing navigate request for session %s", c.sessionID)
-	
+
 	url, ok := event["url"].(string)
 	if !ok {
 		log.Printf("Invalid URL in navigate request")
 		return
 	}
-	
+
 	// TODO: Implement actual navigation logic via CDP
 	// 1. Use CDP Page.navigate
 	// 2. Wait for page load events
 	// 3. Handle navigation options (timeout, waitUntil)
 	// 4. Return navigation result via Redis pub/sub
-	
+
 	log.Printf("Navigating to URL: %s", url)
-	
+
 	// For now, return placeholder
 	result := map[string]interface{}{
 		"success":    true,
@@ -384,20 +356,20 @@ func (c *Controller) handleNavigateRequest(ctx context.Context, event map[string
 		"finalUrl":   url,
 		"statusCode": 200,
 	}
-	
+
 	c.publishResult(ctx, "navigate_result", result)
 }
 
 // handleAgentExecuteRequest processes autonomous agent workflows
 func (c *Controller) handleAgentExecuteRequest(ctx context.Context, event map[string]interface{}) {
 	log.Printf("Processing agent execute request for session %s", c.sessionID)
-	
+
 	// TODO: Implement actual agent execution logic
 	// 1. Multi-step workflow with observe -> act cycles
 	// 2. LLM planning and decision making
 	// 3. Action execution and result evaluation
 	// 4. Stream progress updates via Redis pub/sub
-	
+
 	// For now, return placeholder
 	result := map[string]interface{}{
 		"success":   true,
@@ -405,54 +377,54 @@ func (c *Controller) handleAgentExecuteRequest(ctx context.Context, event map[st
 		"actions":   []map[string]interface{}{},
 		"completed": true,
 	}
-	
+
 	c.publishResult(ctx, "agent_result", result)
 }
 
 // handleActRequest processes action execution
 func (c *Controller) handleActRequest(ctx context.Context, event map[string]interface{}) {
 	log.Printf("Processing act request for session %s", c.sessionID)
-	
+
 	action, ok := event["action"].(string)
 	if !ok {
 		log.Printf("Invalid action in act request")
 		return
 	}
-	
+
 	// TODO: Implement actual action execution logic
 	// 1. Use observe to find elements based on action description
 	// 2. Execute action via CDP
 	// 3. Return execution result via Redis pub/sub
-	
+
 	log.Printf("Executing action: %s", action)
-	
+
 	// For now, return placeholder
 	result := map[string]interface{}{
 		"success": true,
 		"message": "Action completed - implement actual LLM processing",
 		"action":  action,
 	}
-	
+
 	c.publishResult(ctx, "act_result", result)
 }
 
 // publishResult publishes operation results via Redis pub/sub
 func (c *Controller) publishResult(ctx context.Context, resultType string, result map[string]interface{}) {
 	resultChannel := fmt.Sprintf("session:%s:results", c.sessionID)
-	
+
 	resultData := map[string]interface{}{
 		"type":      resultType,
 		"sessionId": c.sessionID,
 		"result":    result,
 		"timestamp": time.Now().UnixMilli(),
 	}
-	
+
 	resultJSON, err := json.Marshal(resultData)
 	if err != nil {
 		log.Printf("Error marshaling result: %v", err)
 		return
 	}
-	
+
 	if err := c.redisClient.Publish(ctx, resultChannel, string(resultJSON)).Err(); err != nil {
 		log.Printf("Error publishing result: %v", err)
 	}
@@ -462,17 +434,17 @@ func (c *Controller) publishResult(ctx context.Context, resultType string, resul
 // Custom frame capture has been removed in favor of Chrome's built-in DevTools screencast
 // Clients can connect directly to Chrome's screencast via signed CDP URLs
 
-// stopFrameCapture is no longer needed as we use Chrome's native screencast
-// Kept for backwards compatibility but does nothing
-func (c *Controller) stopFrameCapture() {
-	log.Printf("Stop frame capture called for session %s - using native Chrome screencast", c.sessionID)
-}
-
 func (c *Controller) cleanup() {
 	log.Printf("Cleaning up controller for session %s", c.sessionID)
 
-	// Stop frame capture
-	c.stopFrameCapture()
+	// Shutdown CDP proxy server
+	if c.cdpProxy != nil {
+		if err := c.cdpProxy.Stop(); err != nil {
+			log.Printf("CDP proxy shutdown error: %v", err)
+		} else {
+			log.Printf("CDP proxy shut down gracefully")
+		}
+	}
 
 	if c.cancel != nil {
 		c.cancel()
@@ -485,12 +457,13 @@ func (c *Controller) cleanup() {
 	if err := utils.UpdateSessionStatus(context.Background(), c.redisClient, c.sessionID, types.SessionStatusStopped); err != nil {
 		log.Printf("Failed to update session status: %v", err)
 	}
-	
+
 	// Add cleanup completed event
 	cleanupEvent := map[string]interface{}{
-		"sessionId":       c.sessionID,
+		"sessionId":        c.sessionID,
 		"resourcesCleaned": true,
-		"chromeShutdown":  true,
+		"chromeShutdown":   true,
+		"proxyShutdown":    true,
 	}
 	if err := utils.AddSessionEvent(context.Background(), c.redisClient, c.sessionID, "SessionCleanupCompleted", "wallcrawler.ecs-controller", cleanupEvent); err != nil {
 		log.Printf("Failed to add cleanup event: %v", err)
@@ -499,7 +472,7 @@ func (c *Controller) cleanup() {
 	// Stop Chrome process
 	if c.chromeCmd != nil && c.chromeCmd.Process != nil {
 		log.Printf("Terminating Chrome process %d", c.chromeCmd.Process.Pid)
-		
+
 		// Try graceful shutdown first
 		if err := c.chromeCmd.Process.Signal(syscall.SIGTERM); err != nil {
 			log.Printf("Failed to send SIGTERM: %v", err)
@@ -531,4 +504,4 @@ func (c *Controller) cleanup() {
 	}
 
 	log.Printf("Controller shutdown complete for session %s", c.sessionID)
-} 
+}
