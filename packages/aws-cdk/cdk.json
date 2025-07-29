@@ -1,5 +1,5 @@
 {
-    "app": "npx ts-node --prefer-ts-exts src/bin/wallcrawler.ts",
+    "app": "npx tsx src/bin/wallcrawler.ts",
     "watch": {
         "include": [
             "**"
@@ -54,6 +54,19 @@
         "@aws-cdk/core:includePrefixInUniqueNameGeneration": true,
         "@aws-cdk/aws-efs:denyAnonymousAccess": true,
         "@aws-cdk/aws-opensearchservice:enableLogging": true,
-        "@aws-cdk/aws-lambda:useLatestRuntimeVersion": true
+        "@aws-cdk/aws-lambda:useLatestRuntimeVersion": true,
+        "@aws-cdk/core:bootstrapQualifier": "hnb659fds",
+        "@aws-cdk/core:newStyleStackSynthesis": true,
+        "docker": {
+            "buildKit": true,
+            "cacheFrom": [
+                {
+                    "type": "registry",
+                    "params": {
+                        "ref": "842434829012.dkr.ecr.us-east-1.amazonaws.com/wallcrawler-build-cache:latest"
+                    }
+                }
+            ]
+        }
     }
 }

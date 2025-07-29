@@ -232,6 +232,12 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 		log.Printf("Published session ready notification to channel %s", channel)
 	}
 
+	// Log ECS task ready event
+	utils.LogECSTaskEvent(sessionID, taskArn, "RUNNING", map[string]interface{}{
+		"public_ip": taskIP,
+		"eni_id":    eniID,
+	})
+
 	log.Printf("Successfully processed ECS task state change for session %s with IP %s", sessionID, taskIP)
 	return nil
 }

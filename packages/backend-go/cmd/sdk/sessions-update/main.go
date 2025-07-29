@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -73,6 +74,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	// Update session status to STOPPED
 	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusStopped); err != nil {
 		log.Printf("Error updating session status: %v", err)
+		utils.LogSessionError(sessionID, req.ProjectID, err, "update_status", nil)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to update session status"))
 	}
 
@@ -81,6 +83,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		log.Printf("Stopping ECS task %s for session %s", sessionState.ECSTaskARN, sessionID)
 		if err := utils.StopECSTask(ctx, sessionState.ECSTaskARN); err != nil {
 			log.Printf("Error stopping ECS task: %v", err)
+			utils.LogSessionError(sessionID, req.ProjectID, err, "stop_ecs_task", map[string]interface{}{
+				"task_arn": sessionState.ECSTaskARN,
+			})
 			// Don't fail the request - task might already be stopped
 		}
 	}
@@ -103,6 +108,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		log.Printf("Error getting updated session: %v", err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to retrieve updated session"))
 	}
+
+	// Calculate session duration
+	sessionDuration := time.Since(sessionState.CreatedAt)
+	utils.LogSessionTerminated(sessionID, req.ProjectID, "manual", sessionDuration.Milliseconds(), map[string]interface{}{
+		"requested_by": "user",
+	})
 
 	log.Printf("Successfully terminated session %s", sessionID)
 	return utils.CreateAPIResponse(200, utils.SuccessResponse(updatedSession))

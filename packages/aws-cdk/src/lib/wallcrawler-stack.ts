@@ -77,12 +77,22 @@ export class WallcrawlerStack extends cdk.Stack {
         const jwtSigningKey = manualJwtKey || jwtSigningSecret.secretValue.unsafeUnwrap();
 
         // VPC for ECS and Redis
+        // In development, we use only public subnets to avoid NAT Gateway costs
+        const isDevelopment = environment === 'development';
         const vpc = new ec2.Vpc(this, 'WallcrawlerVPC', {
             maxAzs: 2,
-            natGateways: 1,
+            natGateways: isDevelopment ? 0 : 1, // No NAT Gateway in dev
             enableDnsHostnames: true,
             enableDnsSupport: true,
-            subnetConfiguration: [
+            subnetConfiguration: isDevelopment ? [
+                // Development: Only public subnets (no NAT costs)
+                {
+                    cidrMask: 24,
+                    name: 'Public',
+                    subnetType: ec2.SubnetType.PUBLIC,
+                },
+            ] : [
+                // Production: Public and private subnets with NAT
                 {
                     cidrMask: 24,
                     name: 'Public',
@@ -147,19 +157,27 @@ export class WallcrawlerStack extends cdk.Stack {
         // External access goes through the authenticated CDP proxy on port 9223
 
         // ElastiCache Redis cluster for session state
-        const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
-            description: 'Subnet group for Wallcrawler Redis cluster',
-            subnetIds: vpc.privateSubnets.map(subnet => subnet.subnetId),
-        });
+        // In development, Redis is optional - we'll use in-memory storage
+        let redisEndpoint: string | undefined;
+        let redisCluster: elasticache.CfnCacheCluster | undefined;
 
-        const redisCluster = new elasticache.CfnCacheCluster(this, 'RedisCluster', {
-            cacheNodeType: 'cache.t3.micro',
-            engine: 'redis',
-            numCacheNodes: 1,
-            cacheSubnetGroupName: redisSubnetGroup.ref,
-            vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
-            port: 6379,
-        });
+        if (!isDevelopment) {
+            const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
+                description: 'Subnet group for Wallcrawler Redis cluster',
+                subnetIds: vpc.privateSubnets.map(subnet => subnet.subnetId),
+            });
+
+            redisCluster = new elasticache.CfnCacheCluster(this, 'RedisCluster', {
+                cacheNodeType: 'cache.t3.micro',
+                engine: 'redis',
+                numCacheNodes: 1,
+                cacheSubnetGroupName: redisSubnetGroup.ref,
+                vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
+                port: 6379,
+            });
+
+            redisEndpoint = `${redisCluster.attrRedisEndpointAddress}:6379`;
+        }
 
         // ECS Cluster for browser containers
         const ecsCluster = new ecs.Cluster(this, 'BrowserCluster', {
@@ -218,9 +236,10 @@ export class WallcrawlerStack extends cdk.Stack {
                 },
             ],
             environment: {
-                REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:6379`,
+                REDIS_ADDR: redisEndpoint || 'memory://', // Use in-memory storage in dev
                 ECS_CLUSTER: ecsCluster.clusterName,
-                ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
+                // Use task definition family name instead of ARN to avoid circular reference
+                ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
                 CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
                 WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
                 CDP_PROXY_PORT: '9223',
@@ -243,38 +262,16 @@ export class WallcrawlerStack extends cdk.Stack {
             serviceName: 'wallcrawler-browsers',
         });
 
-        // Lambda execution role with necessary permissions
+        // Lambda execution role - create without inline policies first
         const lambdaExecutionRole = new iam.Role(this, 'LambdaExecutionRole', {
             assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
             ],
+            // Add basic permissions directly to avoid circular dependencies
             inlinePolicies: {
-                WallcrawlerPolicy: new iam.PolicyDocument({
+                LambdaBasicPolicy: new iam.PolicyDocument({
                     statements: [
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: [
-                                'ecs:RunTask',
-                                'ecs:DescribeTasks',
-                                'ecs:StopTask',
-                                'ecs:ListTasks',
-                            ],
-                            resources: [
-                                browserTaskDefinition.taskDefinitionArn,
-                                `${ecsCluster.clusterArn}/*`,
-                            ],
-                        }),
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: [
-                                'iam:PassRole',
-                            ],
-                            resources: [
-                                browserTaskDefinition.taskRole.roleArn,
-                                browserTaskDefinition.executionRole!.roleArn,
-                            ],
-                        }),
                         new iam.PolicyStatement({
                             effect: iam.Effect.ALLOW,
                             actions: [
@@ -306,9 +303,10 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // Common Lambda environment variables
         const commonLambdaEnvironment = {
-            REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:6379`,
+            REDIS_ADDR: redisEndpoint || 'memory://',
             ECS_CLUSTER: ecsCluster.clusterName,
-            ECS_TASK_DEFINITION: browserTaskDefinition.taskDefinitionArn,
+            // Use task definition family name instead of ARN to avoid circular reference
+            ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
             CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
             WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
             CDP_PROXY_PORT: '9223',
@@ -322,9 +320,13 @@ export class WallcrawlerStack extends cdk.Stack {
                 code: lambda.Code.fromAsset(`../backend-go/build/${handler.toLowerCase()}`),
                 timeout: cdk.Duration.minutes(timeoutMinutes),
                 memorySize: 1024,
-                vpc,
+                // In development, Lambdas run outside VPC for cost savings
+                vpc: isDevelopment ? undefined : vpc,
+                vpcSubnets: isDevelopment ? undefined : { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+                securityGroups: isDevelopment ? undefined : [lambdaSecurityGroup],
                 environment: commonLambdaEnvironment,
                 description,
+                role: lambdaExecutionRole,
             });
         };
 
@@ -398,12 +400,8 @@ export class WallcrawlerStack extends cdk.Stack {
                 detailType: ['ECS Task State Change'],
                 detail: {
                     clusterArn: [ecsCluster.clusterArn],
-                    // Only monitor tasks from our browser task definition family
-                    taskDefinitionArn: [
-                        {
-                            prefix: `arn:aws:ecs:${this.region}:${this.account}:task-definition/wallcrawler-browser`
-                        }
-                    ]
+                    // Match tasks by family name in the group field instead of taskDefinitionArn
+                    group: [`family:wallcrawler-browser`]
                 }
             },
         });
@@ -686,56 +684,86 @@ export class WallcrawlerStack extends cdk.Stack {
             eventBusName: 'wallcrawler-events',
         });
 
-        // WAF for API protection
-        const webAcl = new wafv2.CfnWebACL(this, 'WallcrawlerWebACL', {
-            scope: 'REGIONAL',
-            defaultAction: { allow: {} },
-            rules: [
-                {
-                    name: 'AWSManagedRulesCommonRuleSet',
-                    priority: 1,
-                    statement: {
-                        managedRuleGroupStatement: {
-                            vendorName: 'AWS',
-                            name: 'AWSManagedRulesCommonRuleSet',
+        // WAF for API protection (only in production)
+        if (!isDevelopment) {
+            const webAcl = new wafv2.CfnWebACL(this, 'WallcrawlerWebACL', {
+                scope: 'REGIONAL',
+                defaultAction: { allow: {} },
+                rules: [
+                    {
+                        name: 'AWSManagedRulesCommonRuleSet',
+                        priority: 1,
+                        statement: {
+                            managedRuleGroupStatement: {
+                                vendorName: 'AWS',
+                                name: 'AWSManagedRulesCommonRuleSet',
+                            },
+                        },
+                        overrideAction: { none: {} },
+                        visibilityConfig: {
+                            sampledRequestsEnabled: true,
+                            cloudWatchMetricsEnabled: true,
+                            metricName: 'CommonRuleSet',
                         },
                     },
-                    overrideAction: { none: {} },
-                    visibilityConfig: {
-                        sampledRequestsEnabled: true,
-                        cloudWatchMetricsEnabled: true,
-                        metricName: 'CommonRuleSet',
-                    },
-                },
-                {
-                    name: 'RateLimitRule',
-                    priority: 2,
-                    statement: {
-                        rateBasedStatement: {
-                            limit: 1000,
-                            aggregateKeyType: 'IP',
+                    {
+                        name: 'RateLimitRule',
+                        priority: 2,
+                        statement: {
+                            rateBasedStatement: {
+                                limit: 1000,
+                                aggregateKeyType: 'IP',
+                            },
+                        },
+                        action: { block: {} },
+                        visibilityConfig: {
+                            sampledRequestsEnabled: true,
+                            cloudWatchMetricsEnabled: true,
+                            metricName: 'RateLimit',
                         },
                     },
-                    action: { block: {} },
-                    visibilityConfig: {
-                        sampledRequestsEnabled: true,
-                        cloudWatchMetricsEnabled: true,
-                        metricName: 'RateLimit',
-                    },
+                ],
+                visibilityConfig: {
+                    sampledRequestsEnabled: true,
+                    cloudWatchMetricsEnabled: true,
+                    metricName: 'WallcrawlerWebACL',
                 },
-            ],
-            visibilityConfig: {
-                sampledRequestsEnabled: true,
-                cloudWatchMetricsEnabled: true,
-                metricName: 'WallcrawlerWebACL',
-            },
-        });
+            });
 
-        // Associate WAF with API Gateway
-        new wafv2.CfnWebACLAssociation(this, 'WebACLAssociation', {
-            webAclArn: webAcl.attrArn,
-            resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${api.deploymentStage.stageName}`,
-        });
+            // Associate WAF with API Gateway
+            new wafv2.CfnWebACLAssociation(this, 'WebACLAssociation', {
+                webAclArn: webAcl.attrArn,
+                resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${api.deploymentStage.stageName}`,
+            });
+        }
+
+        // Add ECS permissions to Lambda role after all resources are created
+        // Use addToRolePolicy to avoid circular dependencies
+        lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'ecs:RunTask',
+                'ecs:DescribeTasks',
+                'ecs:StopTask',
+                'ecs:ListTasks',
+            ],
+            resources: [
+                // Use wildcard for task definition to avoid circular reference
+                `arn:aws:ecs:${this.region}:${this.account}:task-definition/wallcrawler-browser:*`,
+                `${ecsCluster.clusterArn}/*`,
+            ],
+        }));
+
+        lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'iam:PassRole',
+            ],
+            resources: [
+                browserTaskDefinition.taskRole.roleArn,
+                browserTaskDefinition.executionRole!.roleArn,
+            ],
+        }));
 
         // CloudFormation outputs
         new cdk.CfnOutput(this, 'APIGatewayURL', {
@@ -748,10 +776,12 @@ export class WallcrawlerStack extends cdk.Stack {
             value: apiKey.keyId,
         });
 
-        new cdk.CfnOutput(this, 'RedisEndpoint', {
-            description: 'Redis cluster endpoint',
-            value: redisCluster.attrRedisEndpointAddress,
-        });
+        if (redisCluster) {
+            new cdk.CfnOutput(this, 'RedisEndpoint', {
+                description: 'Redis cluster endpoint',
+                value: redisCluster.attrRedisEndpointAddress,
+            });
+        }
 
         new cdk.CfnOutput(this, 'ECSClusterName', {
             description: 'ECS cluster name for browser containers',
@@ -782,5 +812,13 @@ export class WallcrawlerStack extends cdk.Stack {
             description: 'AWS Secrets Manager ARN for JWT signing key',
             value: jwtSigningSecret.secretArn,
         });
+
+        // Development mode cost savings output
+        if (isDevelopment) {
+            new cdk.CfnOutput(this, 'DevelopmentMode', {
+                description: 'Development mode is enabled with cost optimizations',
+                value: 'ENABLED - No NAT Gateway ($45/mo saved), No ElastiCache ($13/mo saved), Lambdas outside VPC',
+            });
+        }
     }
 } 

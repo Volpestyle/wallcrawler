@@ -84,10 +84,18 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
+	// Log session creation
+	utils.LogSessionCreated(sessionID, req.ProjectID, map[string]interface{}{
+		"timeout":       req.Timeout,
+		"user_metadata": req.UserMetadata,
+		"api_key":       request.Headers["X-Wc-Api-Key"],
+	})
+
 	// Store session in Redis with initial CREATING status
 	rdb := utils.GetRedisClient()
 	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
 		log.Printf("Error storing session: %v", err)
+		utils.LogSessionError(sessionID, req.ProjectID, err, "store_session", nil)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to create session"))
 	}
 
@@ -106,6 +114,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	jwtToken, err := utils.CreateCDPToken(payload)
 	if err != nil {
 		log.Printf("Error creating JWT token for session %s: %v", sessionID, err)
+		utils.LogSessionError(sessionID, req.ProjectID, err, "create_jwt", nil)
 		// Clean up session from Redis
 		utils.DeleteSession(ctx, rdb, sessionID)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to generate session authentication token"))
@@ -121,6 +130,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Synchronously provision ECS task and wait for it to be ready
 	log.Printf("Starting synchronous ECS task provisioning for session %s", sessionID)
+	provisioningStart := time.Now()
 
 	// Update status to PROVISIONING
 	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, "PROVISIONING"); err != nil {
@@ -148,6 +158,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	finalSessionState, err := utils.WaitForSessionReady(ctx, rdb, sessionID, 150) // 2.5 minute timeout
 	if err != nil {
 		log.Printf("Error waiting for session to become ready: %v", err)
+		utils.LogSessionError(sessionID, req.ProjectID, err, "wait_for_ready", map[string]interface{}{
+			"task_arn": taskARN,
+			"timeout_seconds": 150,
+		})
 		utils.StopECSTask(ctx, taskARN)
 		utils.UpdateSessionStatus(ctx, rdb, sessionID, "FAILED")
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Browser container failed to start within timeout"))
@@ -157,6 +171,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	connectURL := finalSessionState.ConnectURL
 	taskIP := finalSessionState.PublicIP
 	seleniumURL := fmt.Sprintf("http://%s:4444/wd/hub", taskIP)
+
+	// Log successful session creation
+	provisioningTime := time.Since(provisioningStart)
+	utils.LogSessionReady(sessionID, req.ProjectID, taskIP, provisioningTime.Milliseconds())
 
 	// Return SDK-compatible response with real URLs
 	response := utils.ConvertToSDKCreateResponse(finalSessionState, connectURL, seleniumURL, jwtToken, req.UserMetadata)

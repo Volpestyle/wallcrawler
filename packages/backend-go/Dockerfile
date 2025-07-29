@@ -1,15 +1,23 @@
-FROM golang:1.21-bullseye
+FROM golang:1.24-bullseye
 
-# Install Chrome dependencies
+# Install Chrome/Chromium based on architecture
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     ca-certificates \
     apt-transport-https \
-    && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        # Install Google Chrome for AMD64
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+        && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+        && apt-get update \
+        && apt-get install -y google-chrome-stable \
+        && ln -sf /usr/bin/google-chrome-stable /usr/bin/chromium; \
+    else \
+        # Install Chromium for ARM64 and other architectures
+        apt-get install -y chromium \
+        && ln -sf /usr/bin/chromium /usr/bin/google-chrome-stable; \
+    fi \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -39,8 +47,10 @@ USER wallcrawler
 # Expose port if needed (optional for debugging)
 EXPOSE 9222
 
-# Set Chrome to run in sandbox mode
-ENV CHROME_BIN=/usr/bin/google-chrome
+# Set Chrome/Chromium environment variables
+# The symlinks created above ensure compatibility regardless of which browser is installed
+ENV CHROME_BIN=/usr/bin/google-chrome-stable
+ENV CHROMIUM_BIN=/usr/bin/chromium
 ENV DISPLAY=:99
 
 # Health check

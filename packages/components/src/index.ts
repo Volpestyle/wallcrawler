@@ -1,1 +1,1 @@
-export { default as BrowserViewer } from './BrowserViewer'; 
+export { BrowserViewport } from './BrowserViewport'; 

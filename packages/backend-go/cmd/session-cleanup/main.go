@@ -43,10 +43,12 @@ func Handler(ctx context.Context, event events.CloudWatchEvent) error {
 
 		if sessionAge > sessionTimeout {
 			log.Printf("Session %s has timed out (age: %v, timeout: %v)", session.ID, sessionAge, sessionTimeout)
+			utils.LogSessionTimeout(session.ID, session.ProjectID, sessionAge)
 
 			// Update session status to STOPPED
 			if err := utils.UpdateSessionStatus(ctx, rdb, session.ID, types.SessionStatusStopped); err != nil {
 				log.Printf("Error updating session %s status: %v", session.ID, err)
+				utils.LogSessionError(session.ID, session.ProjectID, err, "update_status", nil)
 				errorCount++
 				continue
 			}
@@ -56,6 +58,9 @@ func Handler(ctx context.Context, event events.CloudWatchEvent) error {
 				log.Printf("Stopping ECS task %s for timed out session %s", session.ECSTaskARN, session.ID)
 				if err := utils.StopECSTask(ctx, session.ECSTaskARN); err != nil {
 					log.Printf("Error stopping ECS task for session %s: %v", session.ID, err)
+					utils.LogSessionError(session.ID, session.ProjectID, err, "stop_ecs_task", map[string]interface{}{
+						"task_arn": session.ECSTaskARN,
+					})
 					// Don't increment error count - task might already be stopped
 				}
 			}
@@ -72,31 +77,15 @@ func Handler(ctx context.Context, event events.CloudWatchEvent) error {
 				log.Printf("Error adding timeout event for session %s: %v", session.ID, err)
 			}
 
+			// Log successful termination
+			utils.LogSessionTerminated(session.ID, session.ProjectID, "timeout", sessionAge.Milliseconds(), map[string]interface{}{
+				"timeout_minutes": sessionTimeout.Minutes(),
+			})
 			cleanedCount++
 		}
 	}
 
-	// Also cleanup very old terminated sessions (24 hours)
-	oldSessionThreshold := time.Duration(24) * time.Hour
-	deletedCount := 0
-
-	for _, session := range sessions {
-		if (session.Status == types.SessionStatusStopped ||
-			session.Status == types.SessionStatusFailed) &&
-			time.Since(session.UpdatedAt) > oldSessionThreshold {
-
-			log.Printf("Deleting old terminated session %s (age: %v)", session.ID, time.Since(session.UpdatedAt))
-
-			if err := utils.DeleteSession(ctx, rdb, session.ID); err != nil {
-				log.Printf("Error deleting old session %s: %v", session.ID, err)
-				errorCount++
-			} else {
-				deletedCount++
-			}
-		}
-	}
-
-	log.Printf("Session cleanup completed: %d sessions timed out, %d old sessions deleted, %d errors", cleanedCount, deletedCount, errorCount)
+	log.Printf("Session cleanup completed: %d sessions timed out, %d errors", cleanedCount, errorCount)
 
 	if errorCount > 0 {
 		log.Printf("WARNING: %d errors occurred during cleanup", errorCount)

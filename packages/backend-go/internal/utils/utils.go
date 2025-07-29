@@ -22,10 +22,10 @@ import (
 )
 
 var (
-	RedisAddr  = os.Getenv("REDIS_ADDR")
-	ECSCluster = os.Getenv("ECS_CLUSTER")
-	ECSTaskDef = os.Getenv("ECS_TASK_DEFINITION")
-	ConnectURL = os.Getenv("CONNECT_URL_BASE")
+	RedisAddr       = os.Getenv("REDIS_ADDR")
+	ECSCluster      = os.Getenv("ECS_CLUSTER")
+	ECSTaskDefFamily = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
+	ConnectURL      = os.Getenv("CONNECT_URL_BASE")
 )
 
 // GetRedisClient returns a configured Redis client
@@ -62,15 +62,29 @@ func ErrorResponse(message string) types.ErrorResponse {
 	}
 }
 
-// StoreSession stores session state in Redis
+// StoreSession stores session state in Redis with intelligent expiration
 func StoreSession(ctx context.Context, rdb *redis.Client, sessionState *types.SessionState) error {
 	sessionData, err := json.Marshal(sessionState)
 	if err != nil {
 		return err
 	}
 
-	// Store with 24 hour expiration
-	return rdb.Set(ctx, "session:"+sessionState.ID, sessionData, 24*time.Hour).Err()
+	// Set expiration based on session status
+	var expiration time.Duration
+	switch sessionState.Status {
+	case types.SessionStatusStopped, types.SessionStatusFailed:
+		// Keep terminated sessions for 15 minutes for debugging/async operations
+		expiration = 15 * time.Minute
+		log.Printf("Storing terminated session %s with 15-minute expiration", sessionState.ID)
+	case types.SessionStatusActive, types.SessionStatusReady, types.SessionStatusProvisioning:
+		// Active sessions get 6 hours (they should be cleaned up by timeout anyway)
+		expiration = 6 * time.Hour
+	default:
+		// Default expiration for other states
+		expiration = 24 * time.Hour
+	}
+
+	return rdb.Set(ctx, "session:"+sessionState.ID, sessionData, expiration).Err()
 }
 
 // GetSession retrieves session state from Redis
@@ -167,13 +181,13 @@ func CreateECSTask(ctx context.Context, sessionID string, sessionState *types.Se
 
 	input := &ecs.RunTaskInput{
 		Cluster:        aws.String(ECSCluster),
-		TaskDefinition: aws.String(ECSTaskDef),
+		TaskDefinition: aws.String(ECSTaskDefFamily), // Just the family name - AWS will use the latest revision
 		LaunchType:     ecstypes.LaunchTypeFargate,
 		Count:          aws.Int32(1),
 		Overrides: &ecstypes.TaskOverride{
 			ContainerOverrides: []ecstypes.ContainerOverride{
 				{
-					Name:        aws.String("wallcrawler-controller"),
+					Name:        aws.String("controller"), // Updated to match the container name in CDK
 					Environment: env,
 				},
 			},
