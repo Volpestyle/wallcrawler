@@ -38,7 +38,6 @@ This monorepo contains the following packages:
 | `components`      | React components for browser viewing     | TypeScript/React |
 | `aws-cdk`         | AWS Infrastructure as Code               | TypeScript       |
 | `backend-go`      | Lambda handlers and ECS controller       | Go               |
-| `client-nextjs`   | Demo Next.js client application          | TypeScript/React |
 | `stagehand`       | Forked Stagehand library (git submodule) | TypeScript       |
 
 ## 🚀 Quick Start
@@ -97,7 +96,6 @@ wallcrawler/
 │   ├── components/       # React components
 │   ├── aws-cdk/          # Infrastructure code
 │   ├── backend-go/       # Go Lambda handlers
-│   ├── client-nextjs/    # Demo client app
 │   └── stagehand/        # Stagehand library (submodule)
 ├── docs/                 # Documentation
 └── [config files]       # Workspace configuration

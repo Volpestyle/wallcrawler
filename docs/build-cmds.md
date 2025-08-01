@@ -107,7 +107,7 @@ pnpm build
 ### Next.js Client
 
 ```bash
-cd packages/client-nextjs
+cd packages/nextjs-demo
 
 # Build Next.js app
 pnpm build
