@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -56,7 +57,7 @@ var (
 func initSecretsManager() {
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		fmt.Printf("Error loading AWS config: %v\n", err)
+		log.Printf("Error loading AWS config: %v\n", err)
 		return
 	}
 	secretsClient = secretsmanager.NewFromConfig(cfg)

@@ -2,17 +2,22 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/wallcrawler/backend-go/internal/cdpproxy"
 
 	"github.com/chromedp/cdproto/target"
@@ -20,14 +25,18 @@ import (
 )
 
 type Controller struct {
-	sessionID       string
-	chromeCmd       *exec.Cmd
-	redisClient     *redis.Client
-	allocator       context.Context
-	allocatorCancel context.CancelFunc
-	ctx             context.Context
-	cancel          context.CancelFunc
-	cdpProxy        *cdpproxy.CDPProxy
+	sessionID         string
+	ddbClient         *dynamodb.Client
+	ecsClient         *ecs.Client
+	cdpProxy          *cdpproxy.CDPProxy
+	chromeCmd         *exec.Cmd
+	disconnectTimeout time.Duration
+	shutdownRequested bool
+	mu                sync.Mutex
+	allocator         context.Context
+	allocatorCancel   context.CancelFunc
+	ctx               context.Context
+	cancel            context.CancelFunc
 }
 
 func main() {
@@ -36,27 +45,26 @@ func main() {
 		log.Fatal("SESSION_ID environment variable is required")
 	}
 
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
+	// Setup AWS config
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to load AWS config: %v", err)
 	}
 
-	// Setup Redis client
-	rdb := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
-
-	// Test Redis connection
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+	// Parse disconnect timeout
+	disconnectTimeout, _ := time.ParseDuration(os.Getenv("CDP_DISCONNECT_TIMEOUT") + "s")
+	if disconnectTimeout == 0 {
+		disconnectTimeout = 2 * time.Minute
 	}
 
 	log.Printf("Starting ECS controller for session %s", sessionID)
 
 	// Create controller
 	controller := &Controller{
-		sessionID:   sessionID,
-		redisClient: rdb,
+		sessionID:         sessionID,
+		ddbClient:         dynamodb.NewFromConfig(cfg),
+		ecsClient:         ecs.NewFromConfig(cfg),
+		disconnectTimeout: disconnectTimeout,
 	}
 
 	// Start Chrome with remote debugging
@@ -73,7 +81,7 @@ func main() {
 		log.Fatalf("Failed to initialize CDP connection: %v", err)
 	}
 
-	// Log Chrome ready status 
+	// Log Chrome ready status
 	log.Printf("Chrome ready for session %s on port 9222 (PID: %d)", sessionID, controller.chromeCmd.Process.Pid)
 
 	// Start integrated CDP proxy
@@ -83,8 +91,17 @@ func main() {
 		log.Printf("CDP proxy ready for session %s on port 9223", sessionID)
 	}
 
+	// Set disconnect callback
+	controller.cdpProxy.SetOnDisconnect(func() {
+		log.Printf("CDP proxy reported disconnect")
+	})
+
+	// Start health monitor
+	ctx := context.Background()
+	go controller.startHealthMonitor(ctx)
+
 	// Listen for session events (LLM operations)
-	go controller.listenForSessionEvents(context.Background())
+	go controller.listenForSessionEvents(ctx)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -199,6 +216,101 @@ func (c *Controller) initCDP() error {
 	return nil
 }
 
+// startHealthMonitor monitors CDP connection health and triggers shutdown after timeout
+func (c *Controller) startHealthMonitor(ctx context.Context) {
+	checkInterval, _ := time.ParseDuration(os.Getenv("CDP_HEALTH_CHECK_INTERVAL") + "s")
+	if checkInterval == 0 {
+		checkInterval = 10 * time.Second
+	}
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	var disconnectedSince *time.Time
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			if c.shutdownRequested {
+				c.mu.Unlock()
+				return
+			}
+			c.mu.Unlock()
+
+			if c.cdpProxy.IsConnected() {
+				// Connection is active, reset timer
+				if disconnectedSince != nil {
+					log.Printf("CDP connection restored")
+					disconnectedSince = nil
+				}
+			} else {
+				// No connection
+				if disconnectedSince == nil {
+					disconnectedSince = &time.Time{}
+					*disconnectedSince = time.Now()
+					log.Printf("CDP connection lost, starting %v disconnect timer", c.disconnectTimeout)
+				} else {
+					elapsed := time.Since(*disconnectedSince)
+					if elapsed > c.disconnectTimeout {
+						log.Printf("CDP disconnected for %v, initiating self-termination", elapsed)
+						c.initiateShutdown(ctx)
+						return
+					}
+					log.Printf("CDP disconnected for %v / %v", elapsed, c.disconnectTimeout)
+				}
+			}
+		}
+	}
+}
+
+// initiateShutdown performs graceful shutdown and updates DynamoDB
+func (c *Controller) initiateShutdown(ctx context.Context) {
+	c.mu.Lock()
+	if c.shutdownRequested {
+		c.mu.Unlock()
+		return
+	}
+	c.shutdownRequested = true
+	c.mu.Unlock()
+
+	log.Printf("Initiating graceful shutdown for session %s", c.sessionID)
+
+	// Update session status in DynamoDB
+	tableName := os.Getenv("DYNAMODB_TABLE_NAME")
+	if tableName != "" {
+		updateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, err := c.ddbClient.UpdateItem(updateCtx, &dynamodb.UpdateItemInput{
+			TableName: aws.String(tableName),
+			Key: map[string]dynamotypes.AttributeValue{
+				"sessionId": &dynamotypes.AttributeValueMemberS{Value: c.sessionID},
+			},
+			UpdateExpression: aws.String("SET #status = :status, updatedAt = :now"),
+			ExpressionAttributeNames: map[string]string{
+				"#status": "status",
+			},
+			ExpressionAttributeValues: map[string]dynamotypes.AttributeValue{
+				":status": &dynamotypes.AttributeValueMemberS{Value: "STOPPED"},
+				":now":    &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Unix(), 10)},
+			},
+		})
+
+		if err != nil {
+			log.Printf("Error updating session status: %v", err)
+		}
+	}
+
+	// Cleanup and exit
+	c.cleanup()
+
+	// Exit cleanly - ECS will detect task exit
+	os.Exit(0)
+}
+
 func (c *Controller) startCDPProxy() error {
 	// Initialize the integrated CDP proxy
 	c.cdpProxy = cdpproxy.NewCDPProxy("127.0.0.1:9222")
@@ -219,203 +331,18 @@ func (c *Controller) startCDPProxy() error {
 }
 
 func (c *Controller) listenForSessionEvents(ctx context.Context) {
-	// Subscribe to session events via Redis for LLM operations
-	// Events include: extract, observe, navigate, agentExecute, act
-	eventChannel := fmt.Sprintf("session:%s:events", c.sessionID)
-	pubsub := c.redisClient.Subscribe(ctx, eventChannel)
-	defer pubsub.Close()
+	// In the DynamoDB architecture, LLM operations are handled by Lambda functions
+	// The ECS controller only manages Chrome and CDP proxy
+	// This function is kept for future extensibility
+	log.Printf("ECS controller ready for session %s", c.sessionID)
 
-	log.Printf("Listening for session events on channel: %s", eventChannel)
+	// Just keep the goroutine alive
+	<-ctx.Done()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			msg, err := pubsub.ReceiveMessage(ctx)
-			if err != nil {
-				log.Printf("Error receiving message: %v", err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			var event map[string]interface{}
-			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
-				log.Printf("Error parsing event: %v", err)
-				continue
-			}
-
-			action, ok := event["action"].(string)
-			if !ok {
-				continue
-			}
-
-			switch action {
-			// LLM processing handlers
-			case "extract":
-				go c.handleExtractRequest(ctx, event)
-			case "observe":
-				go c.handleObserveRequest(ctx, event)
-			case "navigate":
-				go c.handleNavigateRequest(ctx, event)
-			case "agentExecute":
-				go c.handleAgentExecuteRequest(ctx, event)
-			case "act":
-				go c.handleActRequest(ctx, event)
-			}
-		}
-	}
-}
-
-// handleExtractRequest processes data extraction with LLM
-func (c *Controller) handleExtractRequest(ctx context.Context, event map[string]interface{}) {
-	log.Printf("Processing extract request for session %s", c.sessionID)
-
-	// TODO: Implement actual extraction logic
-	// 1. Get accessibility tree via CDP
-	// 2. Send to LLM with instruction and schema
-	// 3. Parse LLM response
-	// 4. Return structured data via Redis pub/sub
-
-	// For now, return placeholder
-	result := map[string]interface{}{
-		"success": true,
-		"data": map[string]interface{}{
-			"extracted": "Sample data - implement actual LLM processing",
-		},
-	}
-
-	c.publishResult(ctx, "extract_result", result)
-}
-
-// handleObserveRequest processes DOM observation with LLM
-func (c *Controller) handleObserveRequest(ctx context.Context, event map[string]interface{}) {
-	log.Printf("Processing observe request for session %s", c.sessionID)
-
-	// TODO: Implement actual observation logic
-	// 1. Get accessibility tree via CDP
-	// 2. Send to LLM with instruction
-	// 3. Parse LLM response for element identification
-	// 4. Return element selectors and actions via Redis pub/sub
-
-	// For now, return placeholder
-	result := map[string]interface{}{
-		"success": true,
-		"elements": []map[string]interface{}{
-			{
-				"selector":    "#sample-element",
-				"description": "Sample element - implement actual LLM processing",
-				"method":      "click",
-				"arguments":   []string{},
-			},
-		},
-	}
-
-	c.publishResult(ctx, "observe_result", result)
-}
-
-// handleNavigateRequest processes navigation with options
-func (c *Controller) handleNavigateRequest(ctx context.Context, event map[string]interface{}) {
-	log.Printf("Processing navigate request for session %s", c.sessionID)
-
-	url, ok := event["url"].(string)
-	if !ok {
-		log.Printf("Invalid URL in navigate request")
-		return
-	}
-
-	// TODO: Implement actual navigation logic via CDP
-	// 1. Use CDP Page.navigate
-	// 2. Wait for page load events
-	// 3. Handle navigation options (timeout, waitUntil)
-	// 4. Return navigation result via Redis pub/sub
-
-	log.Printf("Navigating to URL: %s", url)
-
-	// For now, return placeholder
-	result := map[string]interface{}{
-		"success":    true,
-		"url":        url,
-		"finalUrl":   url,
-		"statusCode": 200,
-	}
-
-	c.publishResult(ctx, "navigate_result", result)
-}
-
-// handleAgentExecuteRequest processes autonomous agent workflows
-func (c *Controller) handleAgentExecuteRequest(ctx context.Context, event map[string]interface{}) {
-	log.Printf("Processing agent execute request for session %s", c.sessionID)
-
-	// TODO: Implement actual agent execution logic
-	// 1. Multi-step workflow with observe -> act cycles
-	// 2. LLM planning and decision making
-	// 3. Action execution and result evaluation
-	// 4. Stream progress updates via Redis pub/sub
-
-	// For now, return placeholder
-	result := map[string]interface{}{
-		"success":   true,
-		"message":   "Agent workflow completed - implement actual LLM processing",
-		"actions":   []map[string]interface{}{},
-		"completed": true,
-	}
-
-	c.publishResult(ctx, "agent_result", result)
-}
-
-// handleActRequest processes action execution
-func (c *Controller) handleActRequest(ctx context.Context, event map[string]interface{}) {
-	log.Printf("Processing act request for session %s", c.sessionID)
-
-	action, ok := event["action"].(string)
-	if !ok {
-		log.Printf("Invalid action in act request")
-		return
-	}
-
-	// TODO: Implement actual action execution logic
-	// 1. Use observe to find elements based on action description
-	// 2. Execute action via CDP
-	// 3. Return execution result via Redis pub/sub
-
-	log.Printf("Executing action: %s", action)
-
-	// For now, return placeholder
-	result := map[string]interface{}{
-		"success": true,
-		"message": "Action completed - implement actual LLM processing",
-		"action":  action,
-	}
-
-	c.publishResult(ctx, "act_result", result)
-}
-
-// publishResult publishes operation results via Redis pub/sub
-func (c *Controller) publishResult(ctx context.Context, resultType string, result map[string]interface{}) {
-	resultChannel := fmt.Sprintf("session:%s:results", c.sessionID)
-
-	resultData := map[string]interface{}{
-		"type":      resultType,
-		"sessionId": c.sessionID,
-		"result":    result,
-		"timestamp": time.Now().UnixMilli(),
-	}
-
-	resultJSON, err := json.Marshal(resultData)
-	if err != nil {
-		log.Printf("Error marshaling result: %v", err)
-		return
-	}
-
-	if err := c.redisClient.Publish(ctx, resultChannel, string(resultJSON)).Err(); err != nil {
-		log.Printf("Error publishing result: %v", err)
-	}
 }
 
 // Native Chrome screencast is now handled via direct CDP connections through the CDP proxy
-// Custom frame capture has been removed in favor of Chrome's built-in DevTools screencast
-// Clients can connect directly to Chrome's screencast via signed CDP URLs
+// LLM operations are handled by Lambda functions, not the ECS controller
 
 func (c *Controller) cleanup() {
 	log.Printf("Cleaning up controller for session %s", c.sessionID)
@@ -436,10 +363,9 @@ func (c *Controller) cleanup() {
 		c.allocatorCancel()
 	}
 
-	// ✅ REMOVED: Session status updates are now handled by ecs-task-processor via EventBridge
-	// When ECS task stops, ecs-task-processor will update session status to STOPPED
+	// Note: Session status was already updated in initiateShutdown if this was a health monitor termination
+	// For other terminations (SIGTERM, etc), the ecs-task-processor will handle status updates
 
-	// Log cleanup completion (no EventBridge needed - was only used for logging)
 	log.Printf("Container cleanup completed for session %s (resources cleaned, Chrome shutdown, proxy shutdown)", c.sessionID)
 
 	// Stop Chrome process
@@ -471,10 +397,7 @@ func (c *Controller) cleanup() {
 		}
 	}
 
-	// Close Redis connection
-	if c.redisClient != nil {
-		c.redisClient.Close()
-	}
+	// AWS SDK clients don't need explicit cleanup
 
 	log.Printf("Controller shutdown complete for session %s", c.sessionID)
 }

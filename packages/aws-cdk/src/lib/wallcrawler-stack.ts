@@ -1,11 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
-import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as elasticache from 'aws-cdk-lib/aws-elasticache';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
@@ -76,7 +76,7 @@ export class WallcrawlerStack extends cdk.Stack {
         const manualJwtKey = this.node.tryGetContext('jwtSigningKey');
         const jwtSigningKey = manualJwtKey || jwtSigningSecret.secretValue.unsafeUnwrap();
 
-        // VPC for ECS and Redis
+        // VPC for ECS
         // In development, we use only public subnets to avoid NAT Gateway costs
         const isDevelopment = environment === 'development';
         const vpc = new ec2.Vpc(this, 'WallcrawlerVPC', {
@@ -119,25 +119,83 @@ export class WallcrawlerStack extends cdk.Stack {
             allowAllOutbound: true,
         });
 
-        const redisSecurityGroup = new ec2.SecurityGroup(this, 'RedisSecurityGroup', {
-            vpc,
-            description: 'Security group for Redis cluster',
-            allowAllOutbound: false,
+        // DynamoDB table for session management
+        const sessionsTable = new dynamodb.Table(this, 'SessionsTable', {
+            tableName: 'wallcrawler-sessions',
+            partitionKey: { name: 'sessionId', type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            timeToLiveAttribute: 'expiresAt', // TTL field for automatic cleanup
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY, // For dev/test environments
         });
 
-        // Allow Lambda to access Redis
+        // Global Secondary Index for project queries
+        sessionsTable.addGlobalSecondaryIndex({
+            indexName: 'projectId-createdAt-index',
+            partitionKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
+            sortKey: { name: 'createdAt', type: dynamodb.AttributeType.NUMBER },
+            projectionType: dynamodb.ProjectionType.ALL
+        });
+
+        // GSI for efficient active session queries
+        sessionsTable.addGlobalSecondaryIndex({
+            indexName: 'status-expiresAt-index',
+            partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+            sortKey: { name: 'expiresAt', type: dynamodb.AttributeType.NUMBER },
+            projectionType: dynamodb.ProjectionType.KEYS_ONLY
+        });
+
+        // Redis/ElastiCache for pub/sub events (lightweight configuration)
+        // Used only for real-time notifications, not for session storage
+        const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
+            description: 'Subnet group for Redis pub/sub',
+            subnetIds: isDevelopment 
+                ? vpc.publicSubnets.map(subnet => subnet.subnetId)
+                : vpc.privateSubnets.map(subnet => subnet.subnetId),
+            cacheSubnetGroupName: 'wallcrawler-redis-pubsub',
+        });
+
+        const redisSecurityGroup = new ec2.SecurityGroup(this, 'RedisSecurityGroup', {
+            vpc,
+            description: 'Security group for Redis pub/sub',
+            allowAllOutbound: true,
+        });
+
+        // Allow Lambda and ECS to access Redis
         redisSecurityGroup.addIngressRule(
             lambdaSecurityGroup,
             ec2.Port.tcp(6379),
             'Lambda access to Redis'
         );
 
-        // Allow ECS to access Redis
         redisSecurityGroup.addIngressRule(
             ecsSecurityGroup,
             ec2.Port.tcp(6379),
             'ECS access to Redis'
         );
+
+        // Small Redis instance for pub/sub only (not for storage)
+        const redisCluster = new elasticache.CfnCacheCluster(this, 'RedisPubSubCluster', {
+            cacheNodeType: 'cache.t3.micro', // Smallest instance for pub/sub
+            engine: 'redis',
+            numCacheNodes: 1,
+            cacheSubnetGroupName: redisSubnetGroup.ref,
+            vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
+            clusterName: 'wallcrawler-pubsub',
+            engineVersion: '7.0',
+            preferredMaintenanceWindow: 'sun:05:00-sun:06:00',
+            snapshotRetentionLimit: 0, // No backups needed for pub/sub
+            tags: [
+                {
+                    key: 'Purpose',
+                    value: 'PubSub-Only'
+                },
+                {
+                    key: 'Note',
+                    value: 'Not used for storage - DynamoDB handles all session state'
+                }
+            ],
+        });
 
         // Allow Lambda to access ECS tasks (CDP proxy)
         ecsSecurityGroup.addIngressRule(
@@ -155,29 +213,6 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // Chrome CDP (port 9222) is only accessible from localhost for security
         // External access goes through the authenticated CDP proxy on port 9223
-
-        // ElastiCache Redis cluster for session state
-        // In development, Redis is optional - we'll use in-memory storage
-        let redisEndpoint: string | undefined;
-        let redisCluster: elasticache.CfnCacheCluster | undefined;
-
-        if (!isDevelopment) {
-            const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
-                description: 'Subnet group for Wallcrawler Redis cluster',
-                subnetIds: vpc.privateSubnets.map(subnet => subnet.subnetId),
-            });
-
-            redisCluster = new elasticache.CfnCacheCluster(this, 'RedisCluster', {
-                cacheNodeType: 'cache.t3.micro',
-                engine: 'redis',
-                numCacheNodes: 1,
-                cacheSubnetGroupName: redisSubnetGroup.ref,
-                vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
-                port: 6379,
-            });
-
-            redisEndpoint = `${redisCluster.attrRedisEndpointAddress}:6379`;
-        }
 
         // ECS Cluster for browser containers
         const ecsCluster = new ecs.Cluster(this, 'BrowserCluster', {
@@ -197,14 +232,6 @@ export class WallcrawlerStack extends cdk.Stack {
             },
         });
 
-        // Add permissions for ECS task to manage WebSocket connections
-        browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: [
-                'execute-api:ManageConnections',
-            ],
-            resources: ['*'], // Will be scoped after WebSocket API is created
-        }));
 
         // Add permissions for ECS task to read JWT signing key from Secrets Manager
         browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
@@ -236,14 +263,16 @@ export class WallcrawlerStack extends cdk.Stack {
                 },
             ],
             environment: {
-                REDIS_ADDR: redisEndpoint || 'memory://', // Use in-memory storage in dev
+                DYNAMODB_TABLE_NAME: sessionsTable.tableName,
+                REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:${redisCluster.attrRedisEndpointPort}`,
                 ECS_CLUSTER: ecsCluster.clusterName,
                 // Use task definition family name instead of ARN to avoid circular reference
                 ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
                 CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
                 WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
                 CDP_PROXY_PORT: '9223',
-                // WebSocket endpoint will be added after WebSocket API is created
+                CDP_DISCONNECT_TIMEOUT: '120', // 2 minutes in seconds
+                CDP_HEALTH_CHECK_INTERVAL: '10', // Check every 10 seconds
             },
             logging: ecs.LogDrivers.awsLogs({
                 streamPrefix: 'wallcrawler-controller',
@@ -303,13 +332,15 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // Common Lambda environment variables
         const commonLambdaEnvironment = {
-            REDIS_ADDR: redisEndpoint || 'memory://',
+            DYNAMODB_TABLE_NAME: sessionsTable.tableName,
+            REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:${redisCluster.attrRedisEndpointPort}`,
             ECS_CLUSTER: ecsCluster.clusterName,
             // Use task definition family name instead of ARN to avoid circular reference
             ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
             CONNECT_URL_BASE: domainName ? `https://${domainName}` : 'https://api.wallcrawler.dev',
             WALLCRAWLER_JWT_SIGNING_SECRET_ARN: jwtSigningSecret.secretArn,
             CDP_PROXY_PORT: '9223',
+            SESSION_TIMEOUT_HOURS: '1', // Configurable timeout
         };
 
         // Factory function for consistent Lambda configuration
@@ -374,12 +405,6 @@ export class WallcrawlerStack extends cdk.Stack {
         );
 
         // --- Wallcrawler-Specific Handlers ---
-        const sessionCleanupLambda = createLambdaFunction(
-            'SessionCleanupLambda',
-            'session-cleanup',
-            'Cleanup expired and orphaned sessions'
-        );
-
         // EventBridge for session events
         const sessionEventRule = new events.Rule(this, 'SessionEventRule', {
             description: 'Route session events to appropriate handlers',
@@ -415,14 +440,6 @@ export class WallcrawlerStack extends cdk.Stack {
 
         sessionEventRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
         ecsTaskStateRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
-
-        // Scheduled session cleanup (every 5 minutes)
-        const sessionCleanupRule = new events.Rule(this, 'SessionCleanupRule', {
-            description: 'Cleanup expired and orphaned sessions every 5 minutes',
-            schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
-        });
-
-        sessionCleanupRule.addTarget(new targets.LambdaFunction(sessionCleanupLambda));
 
         // API Gateway for REST endpoints
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
@@ -765,6 +782,32 @@ export class WallcrawlerStack extends cdk.Stack {
             ],
         }));
 
+        // Add DynamoDB permissions to Lambda execution role
+        lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'dynamodb:PutItem',
+                'dynamodb:GetItem',
+                'dynamodb:UpdateItem',
+                'dynamodb:DeleteItem',
+                'dynamodb:Query',
+                'dynamodb:Scan',
+            ],
+            resources: [
+                sessionsTable.tableArn,
+                `${sessionsTable.tableArn}/index/*`,
+            ],
+        }));
+
+        // Add DynamoDB permissions to ECS task role for status updates
+        browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'dynamodb:UpdateItem',
+            ],
+            resources: [sessionsTable.tableArn],
+        }));
+
         // CloudFormation outputs
         new cdk.CfnOutput(this, 'APIGatewayURL', {
             description: 'API Gateway endpoint URL',
@@ -776,12 +819,15 @@ export class WallcrawlerStack extends cdk.Stack {
             value: apiKey.keyId,
         });
 
-        if (redisCluster) {
-            new cdk.CfnOutput(this, 'RedisEndpoint', {
-                description: 'Redis cluster endpoint',
-                value: redisCluster.attrRedisEndpointAddress,
-            });
-        }
+        new cdk.CfnOutput(this, 'DynamoDBTableName', {
+            description: 'DynamoDB table name for sessions',
+            value: sessionsTable.tableName,
+        });
+
+        new cdk.CfnOutput(this, 'RedisEndpoint', {
+            description: 'Redis endpoint for pub/sub events',
+            value: `${redisCluster.attrRedisEndpointAddress}:${redisCluster.attrRedisEndpointPort}`,
+        });
 
         new cdk.CfnOutput(this, 'ECSClusterName', {
             description: 'ECS cluster name for browser containers',
@@ -817,8 +863,14 @@ export class WallcrawlerStack extends cdk.Stack {
         if (isDevelopment) {
             new cdk.CfnOutput(this, 'DevelopmentMode', {
                 description: 'Development mode is enabled with cost optimizations',
-                value: 'ENABLED - No NAT Gateway ($45/mo saved), No ElastiCache ($13/mo saved), Lambdas outside VPC',
+                value: 'ENABLED - No NAT Gateway ($45/mo saved), DynamoDB on-demand pricing, Lambdas outside VPC, Redis t3.micro for pub/sub only',
             });
         }
+        
+        // Hybrid storage architecture output
+        new cdk.CfnOutput(this, 'StorageArchitecture', {
+            description: 'Hybrid storage approach for optimal performance and cost',
+            value: 'DynamoDB for session state + Redis t3.micro for pub/sub events',
+        });
     }
 } 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -23,8 +24,11 @@ var upgrader = websocket.Upgrader{
 
 // CDPProxy represents a simplified CDP proxy that only handles authentication
 type CDPProxy struct {
-	chromeAddr string
-	server     *http.Server
+	chromeAddr      string
+	server          *http.Server
+	hasConnection   bool
+	connectionMutex sync.RWMutex
+	onDisconnect    func() // Callback when connection drops
 }
 
 // PageInfo represents information about a Chrome page/target
@@ -134,9 +138,39 @@ func (p *CDPProxy) handleCDPRequest(w http.ResponseWriter, r *http.Request) {
 	p.handleHTTPRequest(w, r, payload)
 }
 
+// SetConnectionState updates the connection state
+func (p *CDPProxy) SetConnectionState(connected bool) {
+	p.connectionMutex.Lock()
+	defer p.connectionMutex.Unlock()
+
+	wasConnected := p.hasConnection
+	p.hasConnection = connected
+
+	// Trigger disconnect callback if we just disconnected
+	if wasConnected && !connected && p.onDisconnect != nil {
+		go p.onDisconnect()
+	}
+}
+
+// IsConnected returns the current connection state
+func (p *CDPProxy) IsConnected() bool {
+	p.connectionMutex.RLock()
+	defer p.connectionMutex.RUnlock()
+	return p.hasConnection
+}
+
+// SetOnDisconnect sets the callback function to be called when connection drops
+func (p *CDPProxy) SetOnDisconnect(callback func()) {
+	p.onDisconnect = callback
+}
+
 // handleWebSocketConnection handles WebSocket connections
 func (p *CDPProxy) handleWebSocketConnection(w http.ResponseWriter, r *http.Request, payload *utils.CDPSigningPayload) {
 	log.Printf("CDP Proxy: WebSocket connection for session %s", payload.SessionID)
+
+	// Set connection state to true
+	p.SetConnectionState(true)
+	defer p.SetConnectionState(false)
 
 	// Upgrade client connection
 	clientConn, err := upgrader.Upgrade(w, r, nil)

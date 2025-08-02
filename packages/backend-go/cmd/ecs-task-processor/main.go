@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -157,11 +156,22 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 
 	log.Printf("Processing ECS task RUNNING event for session %s, task %s", sessionID, taskArn)
 
-	// Get Redis client
-	rdb := utils.GetRedisClient()
+	// Get DynamoDB and Redis clients
+	ddbClient, err := utils.GetDynamoDBClient(ctx)
+	if err != nil {
+		log.Printf("Error getting DynamoDB client: %v", err)
+		return err
+	}
 
-	// Get current session state
-	sessionState, err := utils.GetSession(ctx, rdb, sessionID)
+	rdb, err := utils.GetRedisClient(ctx)
+	if err != nil {
+		log.Printf("Error getting Redis client: %v", err)
+		return err
+	}
+	defer rdb.Close()
+
+	// Get current session state from DynamoDB
+	sessionState, err := utils.GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		log.Printf("Error getting session %s: %v", sessionID, err)
 		return nil
@@ -212,24 +222,22 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 
 	sessionState.UpdatedAt = time.Now()
 
-	// Update status to READY
-	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusReady); err != nil {
+	// Update status to READY in DynamoDB
+	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusReady); err != nil {
 		log.Printf("Error updating session status to READY: %v", err)
 	}
 
-	// Store updated session
-	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+	// Store updated session in DynamoDB
+	if err := utils.StoreSession(ctx, ddbClient, sessionState); err != nil {
 		log.Printf("Error storing updated session: %v", err)
 		return err
 	}
 
 	// 🔥 Notify waiting session creation lambda via Redis Pub/Sub (instant!)
-	channel := fmt.Sprintf("session:%s:ready", sessionID)
-	err = rdb.Publish(ctx, channel, "ready").Err()
-	if err != nil {
+	if err := utils.PublishSessionReady(ctx, rdb, sessionID); err != nil {
 		log.Printf("Error publishing session ready notification: %v", err)
 	} else {
-		log.Printf("Published session ready notification to channel %s", channel)
+		log.Printf("Successfully notified session ready for %s", sessionID)
 	}
 
 	// Log ECS task ready event
@@ -245,7 +253,7 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 // handleSessionTerminated processes manual session termination events
 func handleSessionTerminated(ctx context.Context, event EventBridgeEvent) error {
 	log.Printf("Processing SessionTerminated event")
-	
+
 	sessionID, ok := event.Detail["sessionId"].(string)
 	if !ok {
 		log.Printf("No sessionId found in SessionTerminated event")
@@ -260,7 +268,7 @@ func handleSessionTerminated(ctx context.Context, event EventBridgeEvent) error 
 // handleSessionTimedOut processes automatic session timeout events
 func handleSessionTimedOut(ctx context.Context, event EventBridgeEvent) error {
 	log.Printf("Processing SessionTimedOut event")
-	
+
 	sessionID, ok := event.Detail["sessionId"].(string)
 	if !ok {
 		log.Printf("No sessionId found in SessionTimedOut event")

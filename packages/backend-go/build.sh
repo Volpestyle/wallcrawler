@@ -25,7 +25,6 @@ FUNCTIONS=(
     "cmd/api/sessions-start:api/sessions-start"
     "cmd/ecs-controller:ecs-controller"
     "cmd/ecs-task-processor:ecs-task-processor"
-    "cmd/session-cleanup:session-cleanup"
 )
 
 # Build each function

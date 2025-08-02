@@ -26,9 +26,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing session ID parameter"))
 	}
 
-	// Validate headers
-	if err := utils.ValidateHeaders(request.Headers); err != nil {
-		return utils.CreateAPIResponse(401, utils.ErrorResponse(err.Error()))
+	// Validate API key header only
+	if request.Headers["x-wc-api-key"] == "" {
+		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
 	}
 
 	// Parse request body
@@ -47,11 +47,15 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Only REQUEST_RELEASE status is supported"))
 	}
 
-	// Get Redis client
-	rdb := utils.GetRedisClient()
+	// Get DynamoDB client
+	ddbClient, err := utils.GetDynamoDBClient(ctx)
+	if err != nil {
+		log.Printf("Error getting DynamoDB client: %v", err)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
+	}
 
-	// Get current session state
-	sessionState, err := utils.GetSession(ctx, rdb, sessionID)
+	// Get current session state from DynamoDB
+	sessionState, err := utils.GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		log.Printf("Error getting session %s: %v", sessionID, err)
 		return utils.CreateAPIResponse(404, utils.ErrorResponse("Session not found"))
@@ -71,8 +75,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	log.Printf("Processing termination request for session %s", sessionID)
 
-	// Update session status to STOPPED
-	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, types.SessionStatusStopped); err != nil {
+	// Update session status to STOPPED in DynamoDB
+	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusStopped); err != nil {
 		log.Printf("Error updating session status: %v", err)
 		utils.LogSessionError(sessionID, req.ProjectID, err, "update_status", nil)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to update session status"))
@@ -98,12 +102,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		"source":    "sessions-update",
 	}
 
-	if err := utils.AddSessionEvent(ctx, rdb, sessionID, "SessionTerminated", "wallcrawler.sessions-update", eventDetail); err != nil {
+	if err := utils.AddSessionEvent(ctx, ddbClient, sessionID, "SessionTerminated", "wallcrawler.sessions-update", eventDetail); err != nil {
 		log.Printf("Error adding session termination event: %v", err)
 	}
 
 	// Get updated session state to return
-	updatedSession, err := utils.GetSession(ctx, rdb, sessionID)
+	updatedSession, err := utils.GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		log.Printf("Error getting updated session: %v", err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to retrieve updated session"))

@@ -38,15 +38,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing required field: projectId"))
 	}
 
-	// Validate headers
-	if err := utils.ValidateHeaders(request.Headers); err != nil {
-		return utils.CreateAPIResponse(401, utils.ErrorResponse(err.Error()))
-	}
-
-	// Validate that project ID in body matches header
-	headerProjectID := request.Headers["x-wc-project-id"]
-	if req.ProjectID != headerProjectID {
-		return utils.CreateAPIResponse(400, utils.ErrorResponse("Project ID in body must match x-wc-project-id header"))
+	// Validate API key header only
+	if request.Headers["x-wc-api-key"] == "" {
+		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
 	}
 
 	// Generate session ID
@@ -91,9 +85,22 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		"api_key":       request.Headers["X-Wc-Api-Key"],
 	})
 
-	// Store session in Redis with initial CREATING status
-	rdb := utils.GetRedisClient()
-	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+	// Get DynamoDB and Redis clients
+	ddbClient, err := utils.GetDynamoDBClient(ctx)
+	if err != nil {
+		log.Printf("Error getting DynamoDB client: %v", err)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
+	}
+
+	rdb, err := utils.GetRedisClient(ctx)
+	if err != nil {
+		log.Printf("Error getting Redis client: %v", err)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize pub/sub"))
+	}
+	defer rdb.Close()
+
+	// Store session in DynamoDB with initial CREATING status
+	if err := utils.StoreSession(ctx, ddbClient, sessionState); err != nil {
 		log.Printf("Error storing session: %v", err)
 		utils.LogSessionError(sessionID, req.ProjectID, err, "store_session", nil)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to create session"))
@@ -116,15 +123,15 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		log.Printf("Error creating JWT token for session %s: %v", sessionID, err)
 		utils.LogSessionError(sessionID, req.ProjectID, err, "create_jwt", nil)
 		// Clean up session from Redis
-		utils.DeleteSession(ctx, rdb, sessionID)
+		utils.DeleteSession(ctx, ddbClient, sessionID)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to generate session authentication token"))
 	}
 
 	// Store the JWT token in session state
 	sessionState.SigningKey = jwtToken
-	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+	if err := utils.StoreSession(ctx, ddbClient, sessionState); err != nil {
 		log.Printf("Error storing session with JWT token: %v", err)
-		utils.DeleteSession(ctx, rdb, sessionID)
+		utils.DeleteSession(ctx, ddbClient, sessionID)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to store session"))
 	}
 
@@ -133,9 +140,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	provisioningStart := time.Now()
 
 	// Update status to PROVISIONING
-	if err := utils.UpdateSessionStatus(ctx, rdb, sessionID, "PROVISIONING"); err != nil {
+	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, "PROVISIONING"); err != nil {
 		log.Printf("Error updating session status to provisioning: %v", err)
-		utils.DeleteSession(ctx, rdb, sessionID)
+		utils.DeleteSession(ctx, ddbClient, sessionID)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to update session status"))
 	}
 
@@ -143,27 +150,27 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	taskARN, err := utils.CreateECSTask(ctx, sessionID, sessionState)
 	if err != nil {
 		log.Printf("Error creating ECS task for session %s: %v", sessionID, err)
-		utils.UpdateSessionStatus(ctx, rdb, sessionID, "FAILED")
+		utils.UpdateSessionStatus(ctx, ddbClient, sessionID, "FAILED")
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to provision browser container"))
 	}
 
 	// Update session with task ARN
 	sessionState.ECSTaskARN = taskARN
-	if err := utils.StoreSession(ctx, rdb, sessionState); err != nil {
+	if err := utils.StoreSession(ctx, ddbClient, sessionState); err != nil {
 		log.Printf("Error storing session with task ARN: %v", err)
 	}
 
 	// Wait for session to become READY via EventBridge (much more efficient than ECS API polling)
 	log.Printf("Waiting for session %s to become READY via EventBridge events...", sessionID)
-	finalSessionState, err := utils.WaitForSessionReady(ctx, rdb, sessionID, 150) // 2.5 minute timeout
+	finalSessionState, err := utils.WaitForSessionReady(ctx, ddbClient, rdb, sessionID, 150) // 2.5 minute timeout
 	if err != nil {
 		log.Printf("Error waiting for session to become ready: %v", err)
 		utils.LogSessionError(sessionID, req.ProjectID, err, "wait_for_ready", map[string]interface{}{
-			"task_arn": taskARN,
+			"task_arn":        taskARN,
 			"timeout_seconds": 150,
 		})
 		utils.StopECSTask(ctx, taskARN)
-		utils.UpdateSessionStatus(ctx, rdb, sessionID, "FAILED")
+		utils.UpdateSessionStatus(ctx, ddbClient, sessionID, "FAILED")
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Browser container failed to start within timeout"))
 	}
 

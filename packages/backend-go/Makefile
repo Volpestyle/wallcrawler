@@ -20,8 +20,7 @@ lambda-only: ## Build only Lambda functions (excludes ECS controller)
 		"cmd/sdk/sessions-debug:sdk/sessions-debug" \
 		"cmd/sdk/sessions-update:sdk/sessions-update" \
 		"cmd/api/sessions-start:api/sessions-start" \
-		"cmd/ecs-task-processor:ecs-task-processor" \
-		"cmd/session-cleanup:session-cleanup"; do \
+		"cmd/ecs-task-processor:ecs-task-processor"; do \
 		source_path=$$(echo $$func_def | cut -d: -f1); \
 		build_path=$$(echo $$func_def | cut -d: -f2); \
 		func_name=$$(basename $$build_path); \
@@ -57,8 +56,7 @@ dev-build: ## Build for local development (current OS)
 		"cmd/sdk/sessions-update:sessions-update" \
 		"cmd/api/sessions-start:sessions-start" \
 		"cmd/ecs-controller:ecs-controller" \
-		"cmd/ecs-task-processor:ecs-task-processor" \
-		"cmd/session-cleanup:session-cleanup"; do \
+		"cmd/ecs-task-processor:ecs-task-processor"; do \
 		source_path=$$(echo $$func_def | cut -d: -f1); \
 		build_name=$$(echo $$func_def | cut -d: -f2); \
 		echo "Building $$build_name for development..."; \

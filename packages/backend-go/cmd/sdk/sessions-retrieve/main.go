@@ -17,14 +17,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing session ID parameter"))
 	}
 
-	// Validate headers
-	if err := utils.ValidateHeaders(request.Headers); err != nil {
-		return utils.CreateAPIResponse(401, utils.ErrorResponse(err.Error()))
+	// Validate API key header only
+	if request.Headers["x-wc-api-key"] == "" {
+		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
 	}
 
-	// Get session from Redis
-	rdb := utils.GetRedisClient()
-	sessionState, err := utils.GetSession(ctx, rdb, sessionID)
+	// Get DynamoDB client
+	ddbClient, err := utils.GetDynamoDBClient(ctx)
+	if err != nil {
+		log.Printf("Error getting DynamoDB client: %v", err)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
+	}
+
+	// Get session from DynamoDB
+	sessionState, err := utils.GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		log.Printf("Error getting session %s: %v", sessionID, err)
 		return utils.CreateAPIResponse(404, utils.ErrorResponse("Session not found"))

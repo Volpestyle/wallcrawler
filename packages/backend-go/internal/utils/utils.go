@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
@@ -22,17 +26,44 @@ import (
 )
 
 var (
-	RedisAddr       = os.Getenv("REDIS_ADDR")
-	ECSCluster      = os.Getenv("ECS_CLUSTER")
-	ECSTaskDefFamily = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
-	ConnectURL      = os.Getenv("CONNECT_URL_BASE")
+	DynamoDBTableName = os.Getenv("DYNAMODB_TABLE_NAME")
+	RedisAddr         = os.Getenv("REDIS_ADDR")
+	ECSCluster        = os.Getenv("ECS_CLUSTER")
+	ECSTaskDefFamily  = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
+	ConnectURL        = os.Getenv("CONNECT_URL_BASE")
 )
 
-// GetRedisClient returns a configured Redis client
-func GetRedisClient() *redis.Client {
-	return redis.NewClient(&redis.Options{
-		Addr: RedisAddr,
+// GetDynamoDBClient returns a configured DynamoDB client
+func GetDynamoDBClient(ctx context.Context) (*dynamodb.Client, error) {
+	cfg, err := GetAWSConfig()
+	if err != nil {
+		return nil, err
+	}
+	return dynamodb.NewFromConfig(cfg), nil
+}
+
+// GetRedisClient returns a configured Redis client for pub/sub only
+func GetRedisClient(ctx context.Context) (*redis.Client, error) {
+	if RedisAddr == "" {
+		return nil, fmt.Errorf("REDIS_ADDR environment variable not set")
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         RedisAddr,
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		PoolSize:     10,
+		PoolTimeout:  30 * time.Second,
 	})
+
+	// Test connection
+	_, err := rdb.Ping(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Redis: %v", err)
+	}
+
+	return rdb, nil
 }
 
 // GetAWSConfig returns AWS configuration
@@ -62,50 +93,125 @@ func ErrorResponse(message string) types.ErrorResponse {
 	}
 }
 
-// StoreSession stores session state in Redis with intelligent expiration
-func StoreSession(ctx context.Context, rdb *redis.Client, sessionState *types.SessionState) error {
-	sessionData, err := json.Marshal(sessionState)
+// StoreSession stores session state in DynamoDB with TTL
+func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState *types.SessionState) error {
+	// Set TTL to 1 hour from now
+	expiresAt := time.Now().Add(1 * time.Hour).Unix()
+
+	// Convert session state to DynamoDB attributes
+	item := map[string]dynamotypes.AttributeValue{
+		"sessionId":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ID},
+		"status":     &dynamotypes.AttributeValueMemberS{Value: sessionState.Status},
+		"projectId":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ProjectID},
+		"connectUrl": &dynamotypes.AttributeValueMemberS{Value: sessionState.ConnectURL},
+		"publicIP":   &dynamotypes.AttributeValueMemberS{Value: sessionState.PublicIP},
+		"signingKey": &dynamotypes.AttributeValueMemberS{Value: sessionState.SigningKey},
+		"ecsTaskArn": &dynamotypes.AttributeValueMemberS{Value: sessionState.ECSTaskARN},
+		"createdAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.CreatedAt.Unix(), 10)},
+		"updatedAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.UpdatedAt.Unix(), 10)},
+		"expiresAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)},
+	}
+
+	// Add optional fields
+	if sessionState.UserMetadata != nil && len(sessionState.UserMetadata) > 0 {
+		metadataAV, err := attributevalue.Marshal(sessionState.UserMetadata)
+		if err == nil {
+			item["userMetadata"] = metadataAV
+		}
+	}
+
+	if sessionState.ModelConfig != nil {
+		configAV, err := attributevalue.Marshal(sessionState.ModelConfig)
+		if err == nil {
+			item["modelConfig"] = configAV
+		}
+	}
+
+	// Store in DynamoDB
+	_, err := ddbClient.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(DynamoDBTableName),
+		Item:      item,
+	})
+
 	if err != nil {
+		log.Printf("Error storing session %s in DynamoDB: %v", sessionState.ID, err)
 		return err
 	}
 
-	// Set expiration based on session status
-	var expiration time.Duration
-	switch sessionState.Status {
-	case types.SessionStatusStopped, types.SessionStatusFailed:
-		// Keep terminated sessions for 15 minutes for debugging/async operations
-		expiration = 15 * time.Minute
-		log.Printf("Storing terminated session %s with 15-minute expiration", sessionState.ID)
-	case types.SessionStatusActive, types.SessionStatusReady, types.SessionStatusProvisioning:
-		// Active sessions get 6 hours (they should be cleaned up by timeout anyway)
-		expiration = 6 * time.Hour
-	default:
-		// Default expiration for other states
-		expiration = 24 * time.Hour
-	}
-
-	return rdb.Set(ctx, "session:"+sessionState.ID, sessionData, expiration).Err()
+	log.Printf("Stored session %s in DynamoDB with TTL %d", sessionState.ID, expiresAt)
+	return nil
 }
 
-// GetSession retrieves session state from Redis
-func GetSession(ctx context.Context, rdb *redis.Client, sessionID string) (*types.SessionState, error) {
-	data, err := rdb.Get(ctx, "session:"+sessionID).Result()
+// GetSession retrieves session state from DynamoDB
+func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID string) (*types.SessionState, error) {
+	result, err := ddbClient.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(DynamoDBTableName),
+		Key: map[string]dynamotypes.AttributeValue{
+			"sessionId": &dynamotypes.AttributeValueMemberS{Value: sessionID},
+		},
+	})
+
 	if err != nil {
 		return nil, err
 	}
 
+	if result.Item == nil {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	// Convert DynamoDB item to SessionState
 	var sessionState types.SessionState
-	err = json.Unmarshal([]byte(data), &sessionState)
+	err = attributevalue.UnmarshalMap(result.Item, &sessionState)
 	if err != nil {
-		return nil, err
+		// Try manual unmarshaling for better control
+		sessionState.ID = getStringValue(result.Item["sessionId"])
+		sessionState.Status = getStringValue(result.Item["status"])
+		sessionState.ProjectID = getStringValue(result.Item["projectId"])
+		sessionState.ConnectURL = getStringValue(result.Item["connectUrl"])
+		sessionState.PublicIP = getStringValue(result.Item["publicIP"])
+		sessionState.SigningKey = getStringValue(result.Item["signingKey"])
+		sessionState.ECSTaskARN = getStringValue(result.Item["ecsTaskArn"])
+
+		// Parse timestamps
+		if createdAt := getNumberValue(result.Item["createdAt"]); createdAt != 0 {
+			sessionState.CreatedAt = time.Unix(createdAt, 0)
+		}
+		if updatedAt := getNumberValue(result.Item["updatedAt"]); updatedAt != 0 {
+			sessionState.UpdatedAt = time.Unix(updatedAt, 0)
+		}
+
+		// Parse optional fields
+		if metadata, ok := result.Item["userMetadata"]; ok {
+			attributevalue.Unmarshal(metadata, &sessionState.UserMetadata)
+		}
+		if config, ok := result.Item["modelConfig"]; ok {
+			attributevalue.Unmarshal(config, &sessionState.ModelConfig)
+		}
+		return &sessionState, nil
 	}
 
 	return &sessionState, nil
 }
 
+// Helper functions for DynamoDB attribute extraction
+func getStringValue(attr dynamotypes.AttributeValue) string {
+	if v, ok := attr.(*dynamotypes.AttributeValueMemberS); ok {
+		return v.Value
+	}
+	return ""
+}
+
+func getNumberValue(attr dynamotypes.AttributeValue) int64 {
+	if v, ok := attr.(*dynamotypes.AttributeValueMemberN); ok {
+		n, _ := strconv.ParseInt(v.Value, 10, 64)
+		return n
+	}
+	return 0
+}
+
 // UpdateSessionStatus updates session status in Redis with proper lifecycle tracking
-func UpdateSessionStatus(ctx context.Context, rdb *redis.Client, sessionID, status string) error {
-	sessionState, err := GetSession(ctx, rdb, sessionID)
+func UpdateSessionStatus(ctx context.Context, ddbClient *dynamodb.Client, sessionID, status string) error {
+	sessionState, err := GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		return err
 	}
@@ -146,12 +252,18 @@ func UpdateSessionStatus(ctx context.Context, rdb *redis.Client, sessionID, stat
 	sessionState.EventHistory = append(sessionState.EventHistory, sessionEvent)
 	sessionState.LastEventTimestamp = &now
 
-	return StoreSession(ctx, rdb, sessionState)
+	return StoreSession(ctx, ddbClient, sessionState)
 }
 
-// DeleteSession removes session from Redis
-func DeleteSession(ctx context.Context, rdb *redis.Client, sessionID string) error {
-	return rdb.Del(ctx, "session:"+sessionID).Err()
+// DeleteSession removes session from DynamoDB
+func DeleteSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID string) error {
+	_, err := ddbClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(DynamoDBTableName),
+		Key: map[string]dynamotypes.AttributeValue{
+			"sessionId": &dynamotypes.AttributeValueMemberS{Value: sessionID},
+		},
+	})
+	return err
 }
 
 // CreateECSTask creates an ECS task for browser automation
@@ -166,7 +278,7 @@ func CreateECSTask(ctx context.Context, sessionID string, sessionState *types.Se
 	// Environment variables for the task
 	env := []ecstypes.KeyValuePair{
 		{Name: aws.String("SESSION_ID"), Value: aws.String(sessionID)},
-		{Name: aws.String("REDIS_ADDR"), Value: aws.String(RedisAddr)},
+		{Name: aws.String("DYNAMODB_TABLE_NAME"), Value: aws.String(DynamoDBTableName)},
 		{Name: aws.String("PROJECT_ID"), Value: aws.String(sessionState.ProjectID)},
 	}
 
@@ -253,7 +365,16 @@ func PublishEvent(ctx context.Context, sessionID string, eventType string, detai
 	return err
 }
 
-// ValidateHeaders validates required headers
+// ValidateAPIKey validates only the API key header
+func ValidateAPIKey(headers map[string]string) error {
+	if headers["x-wc-api-key"] == "" {
+		return fmt.Errorf("missing required header: x-wc-api-key")
+	}
+	return nil
+}
+
+// ValidateHeaders validates required headers (deprecated, use ValidateAPIKey instead)
+// Kept for backward compatibility with any services that still expect both headers
 func ValidateHeaders(headers map[string]string) error {
 	if headers["x-wc-api-key"] == "" {
 		return fmt.Errorf("missing required header: x-wc-api-key")
@@ -330,7 +451,7 @@ func CreateAPIResponse(statusCode int, body interface{}) (events.APIGatewayProxy
 }
 
 // WaitForSessionReady waits for a session to become READY using Redis Pub/Sub (no polling!)
-func WaitForSessionReady(ctx context.Context, rdb *redis.Client, sessionID string, timeoutSeconds int) (*types.SessionState, error) {
+func WaitForSessionReady(ctx context.Context, ddbClient *dynamodb.Client, rdb *redis.Client, sessionID string, timeoutSeconds int) (*types.SessionState, error) {
 	timeout := time.Duration(timeoutSeconds) * time.Second
 
 	log.Printf("Waiting for session %s to become READY via Redis Pub/Sub (no polling)...", sessionID)
@@ -348,7 +469,7 @@ func WaitForSessionReady(ctx context.Context, rdb *redis.Client, sessionID strin
 	defer timeoutTimer.Stop()
 
 	// Check current status first (in case we missed the event)
-	sessionState, err := GetSession(ctx, rdb, sessionID)
+	sessionState, err := GetSession(ctx, ddbClient, sessionID)
 	if err == nil {
 		if sessionState.Status == types.SessionStatusReady &&
 			sessionState.PublicIP != "" &&
@@ -367,8 +488,8 @@ func WaitForSessionReady(ctx context.Context, rdb *redis.Client, sessionID strin
 	case msg := <-ch:
 		log.Printf("Received Redis pub/sub message for session %s: %s", sessionID, msg.Payload)
 
-		// Get updated session state
-		sessionState, err := GetSession(ctx, rdb, sessionID)
+		// Get updated session state from DynamoDB
+		sessionState, err := GetSession(ctx, ddbClient, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("error getting session after pub/sub notification: %v", err)
 		}
@@ -515,8 +636,8 @@ func CreateDebuggerFullscreenURL(taskIP, jwtToken string) string {
 }
 
 // AddSessionEvent adds an event to session history and publishes to EventBridge
-func AddSessionEvent(ctx context.Context, rdb *redis.Client, sessionID, eventType, source string, detail map[string]interface{}) error {
-	sessionState, err := GetSession(ctx, rdb, sessionID)
+func AddSessionEvent(ctx context.Context, ddbClient *dynamodb.Client, sessionID, eventType, source string, detail map[string]interface{}) error {
+	sessionState, err := GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		return err
 	}
@@ -537,7 +658,7 @@ func AddSessionEvent(ctx context.Context, rdb *redis.Client, sessionID, eventTyp
 	sessionState.UpdatedAt = now
 
 	// Store updated session state
-	if err := StoreSession(ctx, rdb, sessionState); err != nil {
+	if err := StoreSession(ctx, ddbClient, sessionState); err != nil {
 		return err
 	}
 
@@ -593,8 +714,8 @@ func IsSessionTerminal(status string) bool {
 }
 
 // IncrementSessionRetryCount increments the retry count for a session
-func IncrementSessionRetryCount(ctx context.Context, rdb *redis.Client, sessionID string) error {
-	sessionState, err := GetSession(ctx, rdb, sessionID)
+func IncrementSessionRetryCount(ctx context.Context, ddbClient *dynamodb.Client, sessionID string) error {
+	sessionState, err := GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
 		return err
 	}
@@ -602,7 +723,7 @@ func IncrementSessionRetryCount(ctx context.Context, rdb *redis.Client, sessionI
 	sessionState.RetryCount++
 	sessionState.UpdatedAt = time.Now()
 
-	return StoreSession(ctx, rdb, sessionState)
+	return StoreSession(ctx, ddbClient, sessionState)
 }
 
 // MapStatusToSDK converts internal session status to SDK-compatible status
@@ -623,42 +744,118 @@ func MapStatusToSDK(internalStatus string) string {
 	}
 }
 
-// GetAllSessions retrieves all sessions from Redis using SCAN for production safety
-func GetAllSessions(ctx context.Context, rdb *redis.Client) ([]*types.SessionState, error) {
+// GetAllSessions retrieves all sessions from DynamoDB using Scan
+func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.SessionState, error) {
 	var sessions []*types.SessionState
-	var cursor uint64
+	var lastEvaluatedKey map[string]dynamotypes.AttributeValue
 
 	for {
-		// Use SCAN instead of KEYS for production safety
-		keys, newCursor, err := rdb.Scan(ctx, cursor, "session:*", 100).Result()
+		// Scan sessions table
+		scanInput := &dynamodb.ScanInput{
+			TableName: aws.String(DynamoDBTableName),
+			Limit:     aws.Int32(100), // Batch size
+		}
+
+		if lastEvaluatedKey != nil {
+			scanInput.ExclusiveStartKey = lastEvaluatedKey
+		}
+
+		result, err := ddbClient.Scan(ctx, scanInput)
 		if err != nil {
 			return nil, err
 		}
 
-		// Get all session data in batch
-		if len(keys) > 0 {
-			values, err := rdb.MGet(ctx, keys...).Result()
+		// Convert items to SessionState
+		for _, item := range result.Items {
+			var sessionState types.SessionState
+			err := attributevalue.UnmarshalMap(item, &sessionState)
 			if err != nil {
-				return nil, err
+				// Try manual unmarshaling
+				sessionState.ID = getStringValue(item["sessionId"])
+				sessionState.Status = getStringValue(item["status"])
+				sessionState.ProjectID = getStringValue(item["projectId"])
+
+				if sessionState.ID == "" {
+					continue // Skip invalid sessions
+				}
 			}
 
-			for _, value := range values {
-				if value == nil {
-					continue // Skip deleted keys
-				}
-
-				var sessionState types.SessionState
-				if err := json.Unmarshal([]byte(value.(string)), &sessionState); err != nil {
-					log.Printf("Error unmarshaling session data: %v", err)
-					continue // Skip corrupted sessions
-				}
-
-				sessions = append(sessions, &sessionState)
-			}
+			sessions = append(sessions, &sessionState)
 		}
 
-		cursor = newCursor
-		if cursor == 0 {
+		// Check if there are more items
+		lastEvaluatedKey = result.LastEvaluatedKey
+		if lastEvaluatedKey == nil {
+			break
+		}
+	}
+
+	return sessions, nil
+}
+
+// GetSessionsByProjectID retrieves all sessions for a specific project using GSI
+func GetSessionsByProjectID(ctx context.Context, ddbClient *dynamodb.Client, projectID string) ([]*types.SessionState, error) {
+	var sessions []*types.SessionState
+	var lastEvaluatedKey map[string]dynamotypes.AttributeValue
+
+	for {
+		// Query using GSI
+		queryInput := &dynamodb.QueryInput{
+			TableName:              aws.String(DynamoDBTableName),
+			IndexName:              aws.String("projectId-createdAt-index"),
+			KeyConditionExpression: aws.String("projectId = :projectId"),
+			ExpressionAttributeValues: map[string]dynamotypes.AttributeValue{
+				":projectId": &dynamotypes.AttributeValueMemberS{Value: projectID},
+			},
+			ScanIndexForward: aws.Bool(false), // Sort by createdAt descending
+			Limit:            aws.Int32(100),
+		}
+
+		if lastEvaluatedKey != nil {
+			queryInput.ExclusiveStartKey = lastEvaluatedKey
+		}
+
+		result, err := ddbClient.Query(ctx, queryInput)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert items to SessionState
+		for _, item := range result.Items {
+			var sessionState types.SessionState
+			err := attributevalue.UnmarshalMap(item, &sessionState)
+			if err != nil {
+				// Try manual unmarshaling
+				sessionState.ID = getStringValue(item["sessionId"])
+				sessionState.Status = getStringValue(item["status"])
+				sessionState.ProjectID = getStringValue(item["projectId"])
+				sessionState.ConnectURL = getStringValue(item["connectUrl"])
+				sessionState.PublicIP = getStringValue(item["publicIP"])
+
+				if sessionState.ID == "" {
+					continue // Skip invalid sessions
+				}
+
+				// Parse timestamps
+				if createdAt := getNumberValue(item["createdAt"]); createdAt != 0 {
+					sessionState.CreatedAt = time.Unix(createdAt, 0)
+				}
+				if updatedAt := getNumberValue(item["updatedAt"]); updatedAt != 0 {
+					sessionState.UpdatedAt = time.Unix(updatedAt, 0)
+				}
+
+				// Parse optional fields
+				if metadata, ok := item["userMetadata"]; ok {
+					attributevalue.Unmarshal(metadata, &sessionState.UserMetadata)
+				}
+			}
+
+			sessions = append(sessions, &sessionState)
+		}
+
+		// Check if there are more items
+		lastEvaluatedKey = result.LastEvaluatedKey
+		if lastEvaluatedKey == nil {
 			break
 		}
 	}

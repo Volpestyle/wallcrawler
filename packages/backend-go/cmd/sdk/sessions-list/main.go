@@ -17,13 +17,25 @@ import (
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Processing sessions list request")
 
-	// Validate headers
-	if err := utils.ValidateHeaders(request.Headers); err != nil {
-		return utils.CreateAPIResponse(401, utils.ErrorResponse(err.Error()))
+	// Validate API key header only
+	if request.Headers["x-wc-api-key"] == "" {
+		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
 	}
 
-	// Get project ID from headers
-	projectID := request.Headers["x-wc-project-id"]
+	// Get project ID from query parameters
+	projectID := ""
+	if request.QueryStringParameters != nil {
+		projectID = request.QueryStringParameters["projectId"]
+	}
+
+	// For backward compatibility, fall back to header if query param not provided
+	if projectID == "" {
+		projectID = request.Headers["x-wc-project-id"]
+	}
+
+	if projectID == "" {
+		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing required parameter: projectId"))
+	}
 
 	// Get query parameters for filtering
 	queryParams := request.QueryStringParameters
@@ -34,13 +46,17 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		queryFilter = queryParams["q"]
 	}
 
-	// Connect to Redis
-	rdb := utils.GetRedisClient()
-
-	// Get all sessions using production-safe SCAN method
-	allSessions, err := utils.GetAllSessions(ctx, rdb)
+	// Get DynamoDB client
+	ddbClient, err := utils.GetDynamoDBClient(ctx)
 	if err != nil {
-		log.Printf("Error getting all sessions: %v", err)
+		log.Printf("Error getting DynamoDB client: %v", err)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
+	}
+
+	// Get sessions for the project using GSI
+	allSessions, err := utils.GetSessionsByProjectID(ctx, ddbClient, projectID)
+	if err != nil {
+		log.Printf("Error getting sessions for project %s: %v", projectID, err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to retrieve sessions"))
 	}
 
@@ -48,10 +64,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Filter and convert sessions
 	for _, sessionState := range allSessions {
-		// Filter by project ID
-		if sessionState.ProjectID != projectID {
-			continue
-		}
+		// Project ID already filtered by GSI query
 
 		// Filter by status if provided
 		if statusFilter != "" && !matchesStatus(sessionState.Status, statusFilter) {
