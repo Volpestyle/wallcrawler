@@ -373,18 +373,6 @@ func ValidateAPIKey(headers map[string]string) error {
 	return nil
 }
 
-// ValidateHeaders validates required headers (deprecated, use ValidateAPIKey instead)
-// Kept for backward compatibility with any services that still expect both headers
-func ValidateHeaders(headers map[string]string) error {
-	if headers["x-wc-api-key"] == "" {
-		return fmt.Errorf("missing required header: x-wc-api-key")
-	}
-	if headers["x-wc-project-id"] == "" {
-		return fmt.Errorf("missing required header: x-wc-project-id")
-	}
-	return nil
-}
-
 // FormatStreamEvent formats a streaming event
 func FormatStreamEvent(eventType string, data interface{}) string {
 	event := types.StreamEvent{
@@ -516,6 +504,74 @@ func WaitForSessionReady(ctx context.Context, ddbClient *dynamodb.Client, rdb *r
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context cancelled while waiting for session %s", sessionID)
 	}
+}
+
+// GetAllSessions retrieves all sessions from DynamoDB using Scan
+func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.SessionState, error) {
+	var sessions []*types.SessionState
+	var lastEvaluatedKey map[string]dynamotypes.AttributeValue
+
+	for {
+		// Scan the table
+		scanInput := &dynamodb.ScanInput{
+			TableName: aws.String(DynamoDBTableName),
+			Limit:     aws.Int32(100),
+		}
+		if lastEvaluatedKey != nil {
+			scanInput.ExclusiveStartKey = lastEvaluatedKey
+		}
+
+		result, err := ddbClient.Scan(ctx, scanInput)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert items to SessionState
+		for _, item := range result.Items {
+			var sessionState types.SessionState
+			err := attributevalue.UnmarshalMap(item, &sessionState)
+			if err != nil {
+				// Try manual unmarshaling
+				sessionState.ID = getStringValue(item["sessionId"])
+				sessionState.Status = getStringValue(item["status"])
+				sessionState.ProjectID = getStringValue(item["projectId"])
+				sessionState.ConnectURL = getStringValue(item["connectUrl"])
+				sessionState.PublicIP = getStringValue(item["publicIP"])
+				sessionState.SigningKey = getStringValue(item["signingKey"])
+				sessionState.ECSTaskARN = getStringValue(item["ecsTaskArn"])
+
+				// Parse timestamps
+				if createdAt := getNumberValue(item["createdAt"]); createdAt != 0 {
+					sessionState.CreatedAt = time.Unix(createdAt, 0)
+				}
+				if updatedAt := getNumberValue(item["updatedAt"]); updatedAt != 0 {
+					sessionState.UpdatedAt = time.Unix(updatedAt, 0)
+				}
+
+				// Parse optional fields
+				if metadata, ok := item["userMetadata"]; ok {
+					attributevalue.Unmarshal(metadata, &sessionState.UserMetadata)
+				}
+				if config, ok := item["modelConfig"]; ok {
+					attributevalue.Unmarshal(config, &sessionState.ModelConfig)
+				}
+
+				if sessionState.ID == "" {
+					continue // Skip invalid sessions
+				}
+			}
+
+			sessions = append(sessions, &sessionState)
+		}
+
+		// Check if there are more items
+		lastEvaluatedKey = result.LastEvaluatedKey
+		if lastEvaluatedKey == nil {
+			break
+		}
+	}
+
+	return sessions, nil
 }
 
 // GetECSTaskPublicIP gets the public IP of an ECS task for CDP connection
@@ -742,55 +798,6 @@ func MapStatusToSDK(internalStatus string) string {
 	default:
 		return "ERROR" // Unknown status, default to error
 	}
-}
-
-// GetAllSessions retrieves all sessions from DynamoDB using Scan
-func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.SessionState, error) {
-	var sessions []*types.SessionState
-	var lastEvaluatedKey map[string]dynamotypes.AttributeValue
-
-	for {
-		// Scan sessions table
-		scanInput := &dynamodb.ScanInput{
-			TableName: aws.String(DynamoDBTableName),
-			Limit:     aws.Int32(100), // Batch size
-		}
-
-		if lastEvaluatedKey != nil {
-			scanInput.ExclusiveStartKey = lastEvaluatedKey
-		}
-
-		result, err := ddbClient.Scan(ctx, scanInput)
-		if err != nil {
-			return nil, err
-		}
-
-		// Convert items to SessionState
-		for _, item := range result.Items {
-			var sessionState types.SessionState
-			err := attributevalue.UnmarshalMap(item, &sessionState)
-			if err != nil {
-				// Try manual unmarshaling
-				sessionState.ID = getStringValue(item["sessionId"])
-				sessionState.Status = getStringValue(item["status"])
-				sessionState.ProjectID = getStringValue(item["projectId"])
-
-				if sessionState.ID == "" {
-					continue // Skip invalid sessions
-				}
-			}
-
-			sessions = append(sessions, &sessionState)
-		}
-
-		// Check if there are more items
-		lastEvaluatedKey = result.LastEvaluatedKey
-		if lastEvaluatedKey == nil {
-			break
-		}
-	}
-
-	return sessions, nil
 }
 
 // GetSessionsByProjectID retrieves all sessions for a specific project using GSI

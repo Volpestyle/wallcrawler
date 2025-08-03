@@ -9,7 +9,11 @@
         "dev": "pnpm -r dev",
         "lint": "pnpm -r lint",
         "clean": "pnpm -r clean",
-        "install:submodules": "git submodule update --init --recursive"
+        "install:submodules": "git submodule update --init --recursive",
+        "deploy": "pnpm --filter @wallcrawler/aws-cdk deploy",
+        "deploy:ci": "pnpm --filter @wallcrawler/aws-cdk deploy:ci",
+        "cdk": "pnpm --filter @wallcrawler/aws-cdk cdk",
+        "generate-env": "pnpm --filter @wallcrawler/aws-cdk generate-env"
     },
     "keywords": [
         "browser-automation",

@@ -15,6 +15,8 @@
         "deploy": "npm run pre-deploy && npm run build && cdk deploy --require-approval never",
         "deploy:ci": "npm run build && cdk deploy --require-approval never",
         "destroy": "cdk destroy",
+        "generate-env": "./scripts/generate-env-local.sh",
+        "post-deploy": "npm run generate-env",
         "synth": "npm run build && cdk synth",
         "diff": "npm run build && cdk diff",
         "bootstrap": "cdk bootstrap"

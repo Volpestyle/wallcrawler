@@ -177,7 +177,6 @@ type LogMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// Enhanced session state for Redis matching design doc
 type SessionState struct {
 	// Core fields
 	ID         string `json:"id"`

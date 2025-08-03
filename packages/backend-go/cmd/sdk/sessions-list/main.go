@@ -22,21 +22,6 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
 	}
 
-	// Get project ID from query parameters
-	projectID := ""
-	if request.QueryStringParameters != nil {
-		projectID = request.QueryStringParameters["projectId"]
-	}
-
-	// For backward compatibility, fall back to header if query param not provided
-	if projectID == "" {
-		projectID = request.Headers["x-wc-project-id"]
-	}
-
-	if projectID == "" {
-		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing required parameter: projectId"))
-	}
-
 	// Get query parameters for filtering
 	queryParams := request.QueryStringParameters
 	statusFilter := ""
@@ -53,14 +38,16 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
 	}
 
-	// Get sessions for the project using GSI
-	allSessions, err := utils.GetSessionsByProjectID(ctx, ddbClient, projectID)
+	// Get all sessions - we'll need to implement a scan or get project ID from API key
+	// For now, let's implement a scan to get all sessions
+	allSessions, err := utils.GetAllSessions(ctx, ddbClient)
 	if err != nil {
-		log.Printf("Error getting sessions for project %s: %v", projectID, err)
+		log.Printf("Error getting sessions: %v", err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to retrieve sessions"))
 	}
 
-	var filteredSessions []utils.SDKSession
+	// Initialize as empty slice instead of nil to ensure JSON array output
+	filteredSessions := make([]utils.SDKSession, 0)
 
 	// Filter and convert sessions
 	for _, sessionState := range allSessions {
@@ -81,7 +68,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		filteredSessions = append(filteredSessions, session)
 	}
 
-	log.Printf("Listed %d sessions (filtered from %d total) for project %s", len(filteredSessions), len(allSessions), projectID)
+	log.Printf("Listed %d sessions (filtered from %d total)", len(filteredSessions), len(allSessions))
 	return utils.CreateAPIResponse(200, utils.SuccessResponse(filteredSessions))
 }
 

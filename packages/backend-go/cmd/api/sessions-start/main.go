@@ -14,8 +14,8 @@ import (
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("AI sessions endpoint called but not implemented yet")
 
-	// Validate headers for consistency
-	if err := utils.ValidateHeaders(request.Headers); err != nil {
+	// Validate API key only
+	if err := utils.ValidateAPIKey(request.Headers); err != nil {
 		return utils.CreateAPIResponse(401, utils.ErrorResponse(err.Error()))
 	}
 

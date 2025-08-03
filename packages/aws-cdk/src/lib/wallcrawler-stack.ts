@@ -152,7 +152,8 @@ export class WallcrawlerStack extends cdk.Stack {
             subnetIds: isDevelopment
                 ? vpc.publicSubnets.map(subnet => subnet.subnetId)
                 : vpc.privateSubnets.map(subnet => subnet.subnetId),
-            cacheSubnetGroupName: 'wallcrawler-redis-pubsub',
+            // Let CloudFormation generate a unique name to avoid conflicts
+            // cacheSubnetGroupName: 'wallcrawler-redis-pubsub',
         });
 
         const redisSecurityGroup = new ec2.SecurityGroup(this, 'RedisSecurityGroup', {
@@ -181,7 +182,8 @@ export class WallcrawlerStack extends cdk.Stack {
             numCacheNodes: 1,
             cacheSubnetGroupName: redisSubnetGroup.ref,
             vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
-            clusterName: 'wallcrawler-pubsub',
+            // Let CloudFormation generate a unique name to avoid conflicts
+            // clusterName: 'wallcrawler-pubsub',
             engineVersion: '7.0',
             preferredMaintenanceWindow: 'sun:05:00-sun:06:00',
             snapshotRetentionLimit: 0, // No backups needed for pub/sub
@@ -474,6 +476,7 @@ export class WallcrawlerStack extends cdk.Stack {
             apiKeyName: 'wallcrawler-api-key',
             description: 'API key for Wallcrawler access',
         });
+        
 
         const usagePlan = api.addUsagePlan('WallcrawlerUsagePlan', {
             name: 'Wallcrawler Usage Plan',
@@ -488,6 +491,9 @@ export class WallcrawlerStack extends cdk.Stack {
         });
 
         usagePlan.addApiKey(apiKey);
+        usagePlan.addApiStage({
+            stage: api.deploymentStage
+        });
 
         // Request validator for API
         const requestValidator = new apigateway.RequestValidator(this, 'RequestValidator', {
@@ -821,6 +827,11 @@ export class WallcrawlerStack extends cdk.Stack {
         new cdk.CfnOutput(this, 'ApiKeyId', {
             description: 'API Key ID for authentication',
             value: apiKey.keyId,
+        });
+
+        new cdk.CfnOutput(this, 'GetApiKeyCommand', {
+            description: 'Command to retrieve the actual API key value',
+            value: `aws apigateway get-api-key --api-key ${apiKey.keyId} --include-value --query value --output text --region ${this.region}`,
         });
 
         new cdk.CfnOutput(this, 'DynamoDBTableName', {

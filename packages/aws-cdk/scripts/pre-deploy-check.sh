@@ -41,6 +41,45 @@ if ! command -v cdk > /dev/null 2>&1; then
 fi
 echo "✓ Node.js and CDK are installed"
 
+# Check Go installation
+echo "✓ Checking Go installation..."
+if ! command -v go > /dev/null 2>&1; then
+    echo "❌ Go is not installed"
+    echo "💡 Install Go from: https://golang.org/dl/"
+    exit 1
+fi
+echo "✓ Go is installed ($(go version))"
+
+# Build Go packages
+echo "✓ Building Go Lambda functions..."
+BACKEND_GO_DIR="../backend-go"
+if [ ! -d "$BACKEND_GO_DIR" ]; then
+    echo "❌ Backend Go directory not found at $BACKEND_GO_DIR"
+    exit 1
+fi
+
+# Change to backend-go directory and run build
+cd "$BACKEND_GO_DIR"
+if [ ! -f "build.sh" ]; then
+    echo "❌ build.sh not found in $BACKEND_GO_DIR"
+    exit 1
+fi
+
+# Make build script executable if it isn't already
+chmod +x build.sh
+
+# Run the build script
+echo "🔨 Running Go build script..."
+if ./build.sh; then
+    echo "✓ Go packages built successfully"
+else
+    echo "❌ Go build failed"
+    exit 1
+fi
+
+# Return to original directory
+cd - > /dev/null
+
 # Check CDK bootstrap status
 echo "✓ Checking CDK bootstrap..."
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
