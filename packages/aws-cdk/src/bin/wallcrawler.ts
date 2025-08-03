@@ -5,7 +5,13 @@ import { WallcrawlerStack } from '../lib/wallcrawler-stack';
 
 const app = new cdk.App();
 
-new WallcrawlerStack(app, 'WallcrawlerStack', {
+// Get environment from context (defaults to 'dev')
+const environment = app.node.tryGetContext('environment') || 'dev';
+
+// Capitalize first letter for stack name
+const stageName = environment.charAt(0).toUpperCase() + environment.slice(1);
+
+new WallcrawlerStack(app, `WallcrawlerStack${stageName}`, {
     /* If you don't specify 'env', this stack will be environment-agnostic.
      * Account/Region-dependent features and context lookups will not work,
      * but a single synthesized template can be deployed anywhere. */
@@ -29,7 +35,7 @@ new WallcrawlerStack(app, 'WallcrawlerStack', {
 
     tags: {
         Project: 'Wallcrawler',
-        Environment: process.env.WALLCRAWLER_ENV || 'development',
+        Environment: process.env.WALLCRAWLER_ENV || 'dev',
         ManagedBy: 'CDK'
     }
 }); 

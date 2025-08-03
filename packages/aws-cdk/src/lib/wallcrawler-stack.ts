@@ -72,13 +72,14 @@ export class WallcrawlerStack extends cdk.Stack {
             });
         }
 
+        const isDevelopment = environment === 'dev';
+
         // Allow overriding with context for development/testing
         const manualJwtKey = this.node.tryGetContext('jwtSigningKey');
         const jwtSigningKey = manualJwtKey || jwtSigningSecret.secretValue.unsafeUnwrap();
 
         // VPC for ECS
         // In development, we use only public subnets to avoid NAT Gateway costs
-        const isDevelopment = environment === 'development';
         const vpc = new ec2.Vpc(this, 'WallcrawlerVPC', {
             maxAzs: 2,
             natGateways: isDevelopment ? 0 : 1, // No NAT Gateway in dev
@@ -476,7 +477,7 @@ export class WallcrawlerStack extends cdk.Stack {
             apiKeyName: 'wallcrawler-api-key',
             description: 'API key for Wallcrawler access',
         });
-        
+
 
         const usagePlan = api.addUsagePlan('WallcrawlerUsagePlan', {
             name: 'Wallcrawler Usage Plan',

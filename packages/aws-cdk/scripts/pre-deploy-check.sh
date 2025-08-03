@@ -52,7 +52,7 @@ echo "✓ Go is installed ($(go version))"
 
 # Build Go packages
 echo "✓ Building Go Lambda functions..."
-BACKEND_GO_DIR="../backend-go"
+BACKEND_GO_DIR="../../backend-go"
 if [ ! -d "$BACKEND_GO_DIR" ]; then
     echo "❌ Backend Go directory not found at $BACKEND_GO_DIR"
     exit 1
