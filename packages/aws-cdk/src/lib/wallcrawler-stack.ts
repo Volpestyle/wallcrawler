@@ -18,7 +18,7 @@ export class WallcrawlerStack extends cdk.Stack {
         super(scope, id, props);
 
         // Environment variables from context
-        const environment = this.node.tryGetContext('environment') || 'development';
+        const environment = this.node.tryGetContext('environment') || 'dev';
         const domainName = this.node.tryGetContext('domainName');
 
         // JWT signing key for CDP authentication
@@ -149,7 +149,7 @@ export class WallcrawlerStack extends cdk.Stack {
         // Used only for real-time notifications, not for session storage
         const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
             description: 'Subnet group for Redis pub/sub',
-            subnetIds: isDevelopment 
+            subnetIds: isDevelopment
                 ? vpc.publicSubnets.map(subnet => subnet.subnetId)
                 : vpc.privateSubnets.map(subnet => subnet.subnetId),
             cacheSubnetGroupName: 'wallcrawler-redis-pubsub',
@@ -445,6 +445,10 @@ export class WallcrawlerStack extends cdk.Stack {
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
             restApiName: 'Wallcrawler API',
             description: 'Remote browser automation API compatible with Stagehand',
+            deployOptions: {
+                stageName: environment,
+                description: `${environment} stage`,
+            },
             defaultCorsPreflightOptions: {
                 allowOrigins: apigateway.Cors.ALL_ORIGINS,
                 allowMethods: apigateway.Cors.ALL_METHODS,
@@ -866,7 +870,7 @@ export class WallcrawlerStack extends cdk.Stack {
                 value: 'ENABLED - No NAT Gateway ($45/mo saved), DynamoDB on-demand pricing, Lambdas outside VPC, Redis t3.micro for pub/sub only',
             });
         }
-        
+
         // Hybrid storage architecture output
         new cdk.CfnOutput(this, 'StorageArchitecture', {
             description: 'Hybrid storage approach for optimal performance and cost',
