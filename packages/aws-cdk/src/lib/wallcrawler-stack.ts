@@ -12,6 +12,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as cr from 'aws-cdk-lib/custom-resources';
 
 export class WallcrawlerStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -819,10 +820,134 @@ export class WallcrawlerStack extends cdk.Stack {
             resources: [sessionsTable.tableArn],
         }));
 
+        // =================================================================
+        // PUBLIC PROXY API - No AWS API Key Required
+        // This is the public-facing API that only requires Wallcrawler API key
+        // =================================================================
+
+        // Proxy Lambda function
+        const proxyLambda = createLambdaFunction(
+            'ProxyLambda',
+            'proxy',
+            'Public API proxy that adds AWS API key server-side',
+            1 // 1 minute timeout should be enough for most requests
+        );
+
+        // Pass the internal API URL to the proxy
+        proxyLambda.addEnvironment('INTERNAL_API_URL', api.url);
+        
+        // Create a custom resource to retrieve and set the API key
+        const apiKeyRetriever = new cr.AwsCustomResource(this, 'ApiKeyRetriever', {
+            onCreate: {
+                service: 'APIGateway',
+                action: 'getApiKey',
+                parameters: {
+                    apiKey: apiKey.keyId,
+                    includeValue: true,
+                },
+                physicalResourceId: cr.PhysicalResourceId.of(apiKey.keyId),
+            },
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new iam.PolicyStatement({
+                    actions: ['apigateway:GET'],
+                    resources: ['*'],
+                }),
+            ]),
+        });
+
+        // Update the proxy Lambda with the API key
+        const apiKeyUpdater = new cr.AwsCustomResource(this, 'ProxyApiKeyUpdater', {
+            onCreate: {
+                service: 'Lambda',
+                action: 'updateFunctionConfiguration',
+                parameters: {
+                    FunctionName: proxyLambda.functionName,
+                    Environment: {
+                        Variables: {
+                            INTERNAL_API_URL: api.url,
+                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
+                        },
+                    },
+                },
+                physicalResourceId: cr.PhysicalResourceId.of(`${proxyLambda.functionName}-api-key-update`),
+            },
+            onUpdate: {
+                service: 'Lambda',
+                action: 'updateFunctionConfiguration',
+                parameters: {
+                    FunctionName: proxyLambda.functionName,
+                    Environment: {
+                        Variables: {
+                            INTERNAL_API_URL: api.url,
+                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
+                        },
+                    },
+                },
+            },
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new iam.PolicyStatement({
+                    actions: ['lambda:UpdateFunctionConfiguration'],
+                    resources: [proxyLambda.functionArn],
+                }),
+            ]),
+        });
+
+        // Ensure the update happens after the API key is created
+        apiKeyUpdater.node.addDependency(apiKey);
+        apiKeyUpdater.node.addDependency(apiKeyRetriever);
+
+        // Create PUBLIC API Gateway (no AWS key required)
+        const publicApi = new apigateway.RestApi(this, 'WallcrawlerPublicAPI', {
+            restApiName: 'Wallcrawler Public API',
+            description: 'Public API that only requires Wallcrawler API key',
+            deployOptions: {
+                stageName: environment,
+                description: `${environment} stage - Public API`,
+            },
+            defaultCorsPreflightOptions: {
+                allowOrigins: apigateway.Cors.ALL_ORIGINS,
+                allowMethods: apigateway.Cors.ALL_METHODS,
+                allowHeaders: [
+                    'Content-Type',
+                    'x-wc-api-key',
+                    'x-wc-project-id', 
+                    'x-wc-session-id',
+                    'x-model-api-key',
+                    'x-stream-response',
+                    'x-sent-at',
+                    'x-language',
+                    'x-sdk-version',
+                ],
+            },
+        });
+
+        // Proxy ALL requests to the Lambda
+        const proxyIntegration = new apigateway.LambdaIntegration(proxyLambda, {
+            proxy: true,
+        });
+
+        // Add proxy for root and all paths
+        publicApi.root.addProxy({
+            defaultIntegration: proxyIntegration,
+            anyMethod: true,
+        });
+
         // CloudFormation outputs
-        new cdk.CfnOutput(this, 'APIGatewayURL', {
-            description: 'API Gateway endpoint URL',
+        new cdk.CfnOutput(this, 'PublicAPIGatewayURL', {
+            description: 'Public API Gateway URL (only requires Wallcrawler API key)',
+            value: publicApi.url,
+            exportName: 'WallcrawlerPublicAPIURL',
+        });
+
+        new cdk.CfnOutput(this, 'InternalAPIGatewayURL', {
+            description: 'Internal API Gateway URL (requires AWS API key)',
             value: api.url,
+        });
+
+        // Keep the original output name but point to public API
+        new cdk.CfnOutput(this, 'APIGatewayURL', {
+            description: 'API Gateway endpoint URL (Public API)',
+            value: publicApi.url,
         });
 
         new cdk.CfnOutput(this, 'ApiKeyId', {

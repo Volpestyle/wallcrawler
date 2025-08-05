@@ -36,9 +36,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(404, utils.ErrorResponse("Session not found"))
 	}
 
-	// Return full session details
-	response := utils.ConvertToSDKRetrieveResponse(sessionState)
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(response))
+	// Return full session details - no conversion needed
+	return utils.CreateAPIResponse(200, utils.SuccessResponse(sessionState))
 }
 
 func main() {

@@ -12,8 +12,8 @@ import (
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
 
-// SDKSessionCreateParams matches the SDK's SessionCreateParams interface
-type SDKSessionCreateParams struct {
+// SessionCreateParams matches the SDK's SessionCreateParams interface
+type SessionCreateParams struct {
 	ProjectID       string                 `json:"projectId"`
 	BrowserSettings map[string]interface{} `json:"browserSettings,omitempty"`
 	ExtensionID     string                 `json:"extensionId,omitempty"`
@@ -27,7 +27,7 @@ type SDKSessionCreateParams struct {
 // Handler processes POST /v1/sessions (SDK-compatible basic browser session creation)
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Parse request body
-	var req SDKSessionCreateParams
+	var req SessionCreateParams
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		log.Printf("Error parsing request body: %v", err)
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Invalid request body"))
@@ -61,20 +61,26 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	// For basic sessions, we don't need AI model configuration
 	sessionState := utils.CreateSessionWithDefaults(sessionID, req.ProjectID, nil)
 
+	// Update fields from request
+	sessionState.KeepAlive = req.KeepAlive
+	sessionState.Region = region
+
+	// Update expiration based on timeout
+	expiresAt := time.Now().Add(time.Duration(req.Timeout) * time.Second)
+	sessionState.ExpiresAt = expiresAt.Format(time.RFC3339)
+
 	// Store SDK-specific metadata
 	if sessionState.UserMetadata == nil {
-		sessionState.UserMetadata = make(map[string]string)
+		sessionState.UserMetadata = make(map[string]interface{})
 	}
 
-	// Add SDK-specific fields to metadata (convert to strings)
+	// Add SDK-specific fields to metadata
 	sessionState.UserMetadata["sessionType"] = "basic"
-	sessionState.UserMetadata["keepAlive"] = fmt.Sprintf("%t", req.KeepAlive)
-	sessionState.UserMetadata["timeout"] = fmt.Sprintf("%d", req.Timeout)
-	sessionState.UserMetadata["region"] = region
+	sessionState.UserMetadata["timeout"] = req.Timeout
 
 	if req.UserMetadata != nil {
 		for k, v := range req.UserMetadata {
-			sessionState.UserMetadata[k] = fmt.Sprintf("%v", v)
+			sessionState.UserMetadata[k] = v
 		}
 	}
 
@@ -108,13 +114,13 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	// Generate JWT token for this session with proper expiration
 	now := time.Now()
-	expiresAt := now.Add(time.Duration(req.Timeout) * time.Second)
+	jwtExpiresAt := now.Add(time.Duration(req.Timeout) * time.Second)
 
 	payload := utils.CDPSigningPayload{
 		SessionID: sessionID,
 		ProjectID: req.ProjectID,
 		IssuedAt:  now.Unix(),
-		ExpiresAt: expiresAt.Unix(),
+		ExpiresAt: jwtExpiresAt.Unix(),
 		Nonce:     utils.GenerateRandomNonce(),
 	}
 
@@ -128,7 +134,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Store the JWT token in session state
-	sessionState.SigningKey = jwtToken
+	sessionState.SigningKey = &jwtToken
 	if err := utils.StoreSession(ctx, ddbClient, sessionState); err != nil {
 		log.Printf("Error storing session with JWT token: %v", err)
 		utils.DeleteSession(ctx, ddbClient, sessionID)
@@ -175,7 +181,6 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Extract final URLs from ready session state
-	connectURL := finalSessionState.ConnectURL
 	taskIP := finalSessionState.PublicIP
 	seleniumURL := fmt.Sprintf("http://%s:4444/wd/hub", taskIP)
 
@@ -183,11 +188,18 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	provisioningTime := time.Since(provisioningStart)
 	utils.LogSessionReady(sessionID, req.ProjectID, taskIP, provisioningTime.Milliseconds())
 
-	// Return SDK-compatible response with real URLs
-	response := utils.ConvertToSDKCreateResponse(finalSessionState, connectURL, seleniumURL, jwtToken, req.UserMetadata)
+	// Update session with final URLs
+	finalSessionState.SeleniumRemoteURL = &seleniumURL
+	finalSessionState.SigningKey = &jwtToken
+
+	// Validate required fields for SessionCreateResponse
+	if finalSessionState.ConnectURL == nil || *finalSessionState.ConnectURL == "" {
+		log.Printf("Error: ConnectURL is missing for session %s", sessionID)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Session created but connectUrl is missing"))
+	}
 
 	log.Printf("Successfully created and provisioned SDK session %s with IP %s via EventBridge", sessionID, taskIP)
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(response))
+	return utils.CreateAPIResponse(200, utils.SuccessResponse(finalSessionState))
 }
 
 func main() {

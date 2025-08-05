@@ -5,9 +5,14 @@
 
 set -e
 
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
 # Default values
 STACK_NAME="WallcrawlerStack"
-OUTPUT_FILE=".env.local"
+OUTPUT_FILE="wallcrawler-config.txt"
 REGION="us-east-1"
 
 # Override with command line arguments if provided
@@ -17,6 +22,12 @@ fi
 
 if [ "$2" ]; then
     OUTPUT_FILE="$2"
+fi
+
+# Get region from AWS config if available
+CONFIGURED_REGION=$(aws configure get region 2>/dev/null || echo "")
+if [ -n "$CONFIGURED_REGION" ]; then
+    REGION="$CONFIGURED_REGION"
 fi
 
 # Check if AWS CLI is installed
@@ -33,16 +44,20 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-echo "Fetching outputs from stack: $STACK_NAME..."
+echo -e "${YELLOW}Fetching outputs from stack: $STACK_NAME in region $REGION...${NC}"
 
 # Get stack outputs
 OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].Outputs' 2>/dev/null || echo "[]")
 
 if [ "$OUTPUTS" = "[]" ]; then
     echo "Error: Stack '$STACK_NAME' not found or has no outputs."
-    echo "Make sure you've run 'pnpm deploy' first."
+    echo "Make sure you've run 'npm run deploy' first."
     exit 1
 fi
+
+# Get stack status
+STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
+echo -e "Stack Status: ${GREEN}$STACK_STATUS${NC}"
 
 # Function to get output value by key
 get_output() {
@@ -82,19 +97,21 @@ if [ -z "$JWT_SIGNING_KEY" ]; then
     JWT_SIGNING_KEY="<YOUR_JWT_SIGNING_KEY_HERE>"
 fi
 
-# Generate .env.local file
+# Generate configuration file
 echo "Generating $OUTPUT_FILE..."
 
 cat > "$OUTPUT_FILE" << EOF
-# Wallcrawler Environment Variables
+# Wallcrawler Configuration
 # Generated on $(date)
 # Stack: $STACK_NAME
+# Region: $REGION
 
-# API Gateway
+# API Access
 WALLCRAWLER_API_URL=$API_GATEWAY_URL
-WALLCRAWLER_API_KEY=$API_KEY_VALUE
+WALLCRAWLER_AWS_API_KEY=$API_KEY_VALUE
+WALLCRAWLER_PROJECT_ID=default
 
-# AWS Resources
+# AWS Resources (for internal use)
 WALLCRAWLER_DYNAMODB_TABLE=$DYNAMODB_TABLE
 WALLCRAWLER_REDIS_ENDPOINT=$REDIS_ENDPOINT
 WALLCRAWLER_ECS_CLUSTER=$ECS_CLUSTER
@@ -105,33 +122,30 @@ WALLCRAWLER_TASK_DEFINITION_ARN=$TASK_DEFINITION_ARN
 WALLCRAWLER_JWT_SECRET_ARN=$JWT_SECRET_ARN
 WALLCRAWLER_JWT_SIGNING_KEY=$JWT_SIGNING_KEY
 
-# SDK Configuration
-BROWSERBASE_API_KEY=$API_KEY_VALUE
-BROWSERBASE_PROJECT_ID=default
-
-# Optional: Override API URL for SDK (defaults to official Browserbase API)
-# BROWSERBASE_API_URL=$API_GATEWAY_URL
-
 # AWS Configuration (if not using default profile)
 # AWS_REGION=$REGION
 # AWS_PROFILE=your-profile-name
 EOF
 
 echo ""
-echo "✅ Successfully generated $OUTPUT_FILE"
+echo -e "${GREEN}✅ Successfully generated $OUTPUT_FILE${NC}"
 echo ""
-echo "Summary:"
+echo -e "${YELLOW}Summary:${NC}"
 echo "  API URL: $API_GATEWAY_URL"
 echo "  API Key: ${API_KEY_VALUE:0:10}..."
 echo "  DynamoDB Table: $DYNAMODB_TABLE"
 echo "  Redis Endpoint: $REDIS_ENDPOINT"
 echo "  ECS Cluster: $ECS_CLUSTER"
+echo "  JWT Secret ARN: $JWT_SECRET_ARN"
 echo ""
-echo "To use Wallcrawler SDK:"
-echo "  1. Copy $OUTPUT_FILE to your application directory"
-echo "  2. Load it in your application (e.g., with dotenv)"
-echo "  3. Initialize the SDK with BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID"
+echo -e "${YELLOW}Usage Instructions:${NC}"
 echo ""
-echo "Note: The SDK will use the official Browserbase API by default."
-echo "      To use your Wallcrawler deployment, set:"
-echo "      BROWSERBASE_API_URL=$API_GATEWAY_URL"
+echo "1. For Wallcrawler SDK users:"
+echo "   - Set WALLCRAWLER_API_URL and WALLCRAWLER_AWS_API_KEY in your application"
+echo "   - Use WALLCRAWLER_PROJECT_ID=default (or your custom project ID)"
+echo ""
+echo "2. For Direct Mode (CDP) access:"
+echo "   - Use WALLCRAWLER_JWT_SIGNING_KEY for authentication"
+echo "   - Connect to sessions via the connectUrl returned by the API"
+echo ""
+echo "3. Copy the relevant variables from $OUTPUT_FILE to your application's .env file"

@@ -103,13 +103,41 @@ func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState 
 		"sessionId":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ID},
 		"status":     &dynamotypes.AttributeValueMemberS{Value: sessionState.Status},
 		"projectId":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ProjectID},
-		"connectUrl": &dynamotypes.AttributeValueMemberS{Value: sessionState.ConnectURL},
+		"keepAlive":  &dynamotypes.AttributeValueMemberBOOL{Value: sessionState.KeepAlive},
+		"region":     &dynamotypes.AttributeValueMemberS{Value: sessionState.Region},
+		"startedAt":  &dynamotypes.AttributeValueMemberS{Value: sessionState.StartedAt},
+		"expiresAt":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ExpiresAt},
+		"proxyBytes": &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(sessionState.ProxyBytes)},
 		"publicIP":   &dynamotypes.AttributeValueMemberS{Value: sessionState.PublicIP},
-		"signingKey": &dynamotypes.AttributeValueMemberS{Value: sessionState.SigningKey},
 		"ecsTaskArn": &dynamotypes.AttributeValueMemberS{Value: sessionState.ECSTaskARN},
-		"createdAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.CreatedAt.Unix(), 10)},
-		"updatedAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.UpdatedAt.Unix(), 10)},
-		"expiresAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)},
+		"ttl":        &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)}, // TTL for DynamoDB expiration
+	}
+
+	// Add timestamp fields (store as strings for SDK compatibility)
+	item["createdAt"] = &dynamotypes.AttributeValueMemberS{Value: sessionState.CreatedAt}
+	item["updatedAt"] = &dynamotypes.AttributeValueMemberS{Value: sessionState.UpdatedAt}
+
+	// Add optional pointer fields
+	if sessionState.ConnectURL != nil {
+		item["connectUrl"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.ConnectURL}
+	}
+	if sessionState.SigningKey != nil {
+		item["signingKey"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.SigningKey}
+	}
+	if sessionState.SeleniumRemoteURL != nil {
+		item["seleniumRemoteUrl"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.SeleniumRemoteURL}
+	}
+	if sessionState.AvgCPUUsage != nil {
+		item["avgCpuUsage"] = &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(*sessionState.AvgCPUUsage)}
+	}
+	if sessionState.ContextID != nil {
+		item["contextId"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.ContextID}
+	}
+	if sessionState.EndedAt != nil {
+		item["endedAt"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.EndedAt}
+	}
+	if sessionState.MemoryUsage != nil {
+		item["memoryUsage"] = &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(*sessionState.MemoryUsage)}
 	}
 
 	// Add optional fields
@@ -167,17 +195,39 @@ func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID strin
 		sessionState.ID = getStringValue(result.Item["sessionId"])
 		sessionState.Status = getStringValue(result.Item["status"])
 		sessionState.ProjectID = getStringValue(result.Item["projectId"])
-		sessionState.ConnectURL = getStringValue(result.Item["connectUrl"])
+		sessionState.KeepAlive = getBoolValue(result.Item["keepAlive"])
+		sessionState.Region = getStringValue(result.Item["region"])
+		sessionState.StartedAt = getStringValue(result.Item["startedAt"])
+		sessionState.ExpiresAt = getStringValue(result.Item["expiresAt"])
+		sessionState.ProxyBytes = int(getNumberValue(result.Item["proxyBytes"]))
 		sessionState.PublicIP = getStringValue(result.Item["publicIP"])
-		sessionState.SigningKey = getStringValue(result.Item["signingKey"])
 		sessionState.ECSTaskARN = getStringValue(result.Item["ecsTaskArn"])
+		sessionState.CreatedAt = getStringValue(result.Item["createdAt"])
+		sessionState.UpdatedAt = getStringValue(result.Item["updatedAt"])
 
-		// Parse timestamps
-		if createdAt := getNumberValue(result.Item["createdAt"]); createdAt != 0 {
-			sessionState.CreatedAt = time.Unix(createdAt, 0)
+		// Handle optional pointer fields
+		if connectURL := getStringValue(result.Item["connectUrl"]); connectURL != "" {
+			sessionState.ConnectURL = &connectURL
 		}
-		if updatedAt := getNumberValue(result.Item["updatedAt"]); updatedAt != 0 {
-			sessionState.UpdatedAt = time.Unix(updatedAt, 0)
+		if signingKey := getStringValue(result.Item["signingKey"]); signingKey != "" {
+			sessionState.SigningKey = &signingKey
+		}
+		if seleniumURL := getStringValue(result.Item["seleniumRemoteUrl"]); seleniumURL != "" {
+			sessionState.SeleniumRemoteURL = &seleniumURL
+		}
+		if contextID := getStringValue(result.Item["contextId"]); contextID != "" {
+			sessionState.ContextID = &contextID
+		}
+		if endedAt := getStringValue(result.Item["endedAt"]); endedAt != "" {
+			sessionState.EndedAt = &endedAt
+		}
+		if avgCPU := getNumberValue(result.Item["avgCpuUsage"]); avgCPU != 0 {
+			cpu := int(avgCPU)
+			sessionState.AvgCPUUsage = &cpu
+		}
+		if memUsage := getNumberValue(result.Item["memoryUsage"]); memUsage != 0 {
+			mem := int(memUsage)
+			sessionState.MemoryUsage = &mem
 		}
 
 		// Parse optional fields
@@ -209,6 +259,13 @@ func getNumberValue(attr dynamotypes.AttributeValue) int64 {
 	return 0
 }
 
+func getBoolValue(attr dynamotypes.AttributeValue) bool {
+	if v, ok := attr.(*dynamotypes.AttributeValueMemberBOOL); ok {
+		return v.Value
+	}
+	return false
+}
+
 // UpdateSessionStatus updates session status in Redis with proper lifecycle tracking
 func UpdateSessionStatus(ctx context.Context, ddbClient *dynamodb.Client, sessionID, status string) error {
 	sessionState, err := GetSession(ctx, ddbClient, sessionID)
@@ -218,26 +275,27 @@ func UpdateSessionStatus(ctx context.Context, ddbClient *dynamodb.Client, sessio
 
 	// Update status with proper lifecycle timing
 	previousStatus := sessionState.Status
-	sessionState.Status = status
-	sessionState.UpdatedAt = time.Now()
+	sessionState.Status = MapStatusToSDK(status) // Map internal status to SDK status
+	now := time.Now()
+	nowStr := now.Format(time.RFC3339)
+	sessionState.UpdatedAt = nowStr
 
 	// Track specific lifecycle timestamps
-	now := time.Now()
 	switch status {
 	case types.SessionStatusProvisioning:
-		sessionState.ProvisioningStartedAt = &now
+		sessionState.ProvisioningStartedAt = &nowStr
 	case types.SessionStatusReady:
-		sessionState.ReadyAt = &now
+		sessionState.ReadyAt = &nowStr
 	case types.SessionStatusActive:
-		sessionState.LastActiveAt = &now
+		sessionState.LastActiveAt = &nowStr
 	case types.SessionStatusTerminating, types.SessionStatusStopped, types.SessionStatusFailed:
-		sessionState.TerminatedAt = &now
+		sessionState.EndedAt = &nowStr // SDK field
 	}
 
 	// Add event to history
 	sessionEvent := types.SessionEvent{
 		EventType: "StatusChanged",
-		Timestamp: now,
+		Timestamp: nowStr,
 		Source:    "wallcrawler.utils",
 		Detail: map[string]interface{}{
 			"previousStatus": previousStatus,
@@ -250,7 +308,7 @@ func UpdateSessionStatus(ctx context.Context, ddbClient *dynamodb.Client, sessio
 		sessionState.EventHistory = []types.SessionEvent{}
 	}
 	sessionState.EventHistory = append(sessionState.EventHistory, sessionEvent)
-	sessionState.LastEventTimestamp = &now
+	sessionState.LastEventTimestamp = &nowStr
 
 	return StoreSession(ctx, ddbClient, sessionState)
 }
@@ -461,7 +519,7 @@ func WaitForSessionReady(ctx context.Context, ddbClient *dynamodb.Client, rdb *r
 	if err == nil {
 		if sessionState.Status == types.SessionStatusReady &&
 			sessionState.PublicIP != "" &&
-			sessionState.ConnectURL != "" {
+			sessionState.ConnectURL != nil && *sessionState.ConnectURL != "" {
 			log.Printf("Session %s is already READY with IP %s", sessionID, sessionState.PublicIP)
 			return sessionState, nil
 		}
@@ -485,7 +543,7 @@ func WaitForSessionReady(ctx context.Context, ddbClient *dynamodb.Client, rdb *r
 		// Check if session is ready
 		if sessionState.Status == types.SessionStatusReady &&
 			sessionState.PublicIP != "" &&
-			sessionState.ConnectURL != "" {
+			sessionState.ConnectURL != nil && *sessionState.ConnectURL != "" {
 			log.Printf("Session %s is READY with IP %s via pub/sub", sessionID, sessionState.PublicIP)
 			return sessionState, nil
 		}
@@ -535,17 +593,23 @@ func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.S
 				sessionState.ID = getStringValue(item["sessionId"])
 				sessionState.Status = getStringValue(item["status"])
 				sessionState.ProjectID = getStringValue(item["projectId"])
-				sessionState.ConnectURL = getStringValue(item["connectUrl"])
 				sessionState.PublicIP = getStringValue(item["publicIP"])
-				sessionState.SigningKey = getStringValue(item["signingKey"])
 				sessionState.ECSTaskARN = getStringValue(item["ecsTaskArn"])
+
+				// Handle optional pointer fields
+				if connectURL := getStringValue(item["connectUrl"]); connectURL != "" {
+					sessionState.ConnectURL = &connectURL
+				}
+				if signingKey := getStringValue(item["signingKey"]); signingKey != "" {
+					sessionState.SigningKey = &signingKey
+				}
 
 				// Parse timestamps
 				if createdAt := getNumberValue(item["createdAt"]); createdAt != 0 {
-					sessionState.CreatedAt = time.Unix(createdAt, 0)
+					sessionState.CreatedAt = time.Unix(createdAt, 0).Format(time.RFC3339)
 				}
 				if updatedAt := getNumberValue(item["updatedAt"]); updatedAt != 0 {
-					sessionState.UpdatedAt = time.Unix(updatedAt, 0)
+					sessionState.UpdatedAt = time.Unix(updatedAt, 0).Format(time.RFC3339)
 				}
 
 				// Parse optional fields
@@ -699,9 +763,10 @@ func AddSessionEvent(ctx context.Context, ddbClient *dynamodb.Client, sessionID,
 	}
 
 	now := time.Now()
+	nowStr := now.Format(time.RFC3339)
 	sessionEvent := types.SessionEvent{
 		EventType: eventType,
-		Timestamp: now,
+		Timestamp: nowStr,
 		Source:    source,
 		Detail:    detail,
 	}
@@ -710,8 +775,8 @@ func AddSessionEvent(ctx context.Context, ddbClient *dynamodb.Client, sessionID,
 		sessionState.EventHistory = []types.SessionEvent{}
 	}
 	sessionState.EventHistory = append(sessionState.EventHistory, sessionEvent)
-	sessionState.LastEventTimestamp = &now
-	sessionState.UpdatedAt = now
+	sessionState.LastEventTimestamp = &nowStr
+	sessionState.UpdatedAt = nowStr
 
 	// Store updated session state
 	if err := StoreSession(ctx, ddbClient, sessionState); err != nil {
@@ -725,6 +790,8 @@ func AddSessionEvent(ctx context.Context, ddbClient *dynamodb.Client, sessionID,
 // CreateSessionWithDefaults creates a new session with default resource limits and billing info
 func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.ModelConfig) *types.SessionState {
 	now := time.Now()
+	nowStr := now.Format(time.RFC3339)
+	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339)
 
 	// Default resource limits
 	defaultLimits := &types.ResourceLimits{
@@ -744,15 +811,21 @@ func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.M
 
 	return &types.SessionState{
 		ID:             sessionID,
-		Status:         types.SessionStatusCreating,
+		Status:         types.SessionStatusRunning, // SDK status - session is being prepared
 		ProjectID:      projectID,
 		ModelConfig:    modelConfig,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		CreatedAt:      nowStr,
+		StartedAt:      nowStr,
+		UpdatedAt:      nowStr,
+		ExpiresAt:      expiresAt,
+		KeepAlive:      false,
+		Region:         "us-east-1",
+		ProxyBytes:     0,
 		ResourceLimits: defaultLimits,
 		BillingInfo:    billingInfo,
 		EventHistory:   []types.SessionEvent{},
 		RetryCount:     0,
+		UserMetadata:   make(map[string]interface{}),
 	}
 }
 
@@ -777,7 +850,7 @@ func IncrementSessionRetryCount(ctx context.Context, ddbClient *dynamodb.Client,
 	}
 
 	sessionState.RetryCount++
-	sessionState.UpdatedAt = time.Now()
+	sessionState.UpdatedAt = time.Now().Format(time.RFC3339)
 
 	return StoreSession(ctx, ddbClient, sessionState)
 }
@@ -836,8 +909,12 @@ func GetSessionsByProjectID(ctx context.Context, ddbClient *dynamodb.Client, pro
 				sessionState.ID = getStringValue(item["sessionId"])
 				sessionState.Status = getStringValue(item["status"])
 				sessionState.ProjectID = getStringValue(item["projectId"])
-				sessionState.ConnectURL = getStringValue(item["connectUrl"])
 				sessionState.PublicIP = getStringValue(item["publicIP"])
+
+				// Handle optional pointer fields
+				if connectURL := getStringValue(item["connectUrl"]); connectURL != "" {
+					sessionState.ConnectURL = &connectURL
+				}
 
 				if sessionState.ID == "" {
 					continue // Skip invalid sessions
@@ -845,10 +922,10 @@ func GetSessionsByProjectID(ctx context.Context, ddbClient *dynamodb.Client, pro
 
 				// Parse timestamps
 				if createdAt := getNumberValue(item["createdAt"]); createdAt != 0 {
-					sessionState.CreatedAt = time.Unix(createdAt, 0)
+					sessionState.CreatedAt = time.Unix(createdAt, 0).Format(time.RFC3339)
 				}
 				if updatedAt := getNumberValue(item["updatedAt"]); updatedAt != 0 {
-					sessionState.UpdatedAt = time.Unix(updatedAt, 0)
+					sessionState.UpdatedAt = time.Unix(updatedAt, 0).Format(time.RFC3339)
 				}
 
 				// Parse optional fields

@@ -1,348 +1,117 @@
-# Wallcrawler AWS CDK Deployment Guide
+# Wallcrawler CDK Deployment Guide
 
 ## Quick Start
 
-Deploy Wallcrawler with a single command from the root directory:
-
 ```bash
-# Deploy to development (default)
-pnpm run deploy
+# Development
+npm run deploy:dev
 
-# Deploy to staging
-pnpm run deploy:staging
+# Staging
+npm run deploy:staging
 
-# Deploy to production
-pnpm run deploy:prod
+# Production
+npm run deploy:prod
 ```
 
-That's it! The `pnpm run deploy` command handles everything:
+## What Happens During Deployment
 
-- ✅ Pre-deployment validation
-- ✅ Building Go backend (Lambda functions & ECS containers)
-- ✅ Compiling CDK TypeScript
-- ✅ Deploying to AWS
+1. **Pre-deployment Checks**
+   - ✅ AWS credentials validation
+   - ✅ Docker daemon running
+   - ✅ Go functions built automatically
+   - ✅ CDK bootstrap verification
+   - ⚠️ Production requires explicit confirmation
+
+2. **Deployment**
+   - Builds TypeScript CDK code
+   - Deploys infrastructure to AWS
+   - Creates/updates all resources
+
+3. **Post-deployment** (Automatic)
+   - Generates `.env.local` with your configuration
+   - Creates `wallcrawler-config.txt` for external consumers
+
+## Environment Configurations
+
+| Environment | API Endpoint                                             | Features                                                                   | Cost Optimizations |
+| ----------- | -------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------ |
+| **dev**     | `https://xxx.execute-api.{region}.amazonaws.com/dev`     | - No NAT Gateway<br>- DynamoDB on-demand<br>- Minimal Redis (t3.micro)     | ~$10/month         |
+| **staging** | `https://xxx.execute-api.{region}.amazonaws.com/staging` | - Same as dev<br>- For integration testing                                 | ~$10/month         |
+| **prod**    | `https://xxx.execute-api.{region}.amazonaws.com/prod`    | - NAT Gateway enabled<br>- Production security<br>- Optional custom domain | ~$60/month + usage |
+
+## Files Generated
+
+### `.env.local` (For your development)
+
+```bash
+WALLCRAWLER_API_URL=https://xxx.execute-api.us-east-1.amazonaws.com/dev
+WALLCRAWLER_API_KEY=...
+WALLCRAWLER_JWT_SIGNING_KEY=base64-encoded-key
+# ... other internal configs
+```
+
+### `wallcrawler-config.txt` (For external consumers)
+
+```bash
+# Clean configuration for sharing
+WALLCRAWLER_API_URL=https://xxx.execute-api.us-east-1.amazonaws.com/dev
+WALLCRAWLER_AWS_API_KEY=...
+```
 
 ## Prerequisites
 
-### 1. Install Required Tools
+- AWS CLI configured (`aws configure`)
+- Docker Desktop running
+- Node.js 18+ and npm
+- Go 1.20+ (for Lambda functions)
+- CDK bootstrapped: `cdk bootstrap aws://ACCOUNT-ID/REGION`
+
+## First Time Setup
 
 ```bash
-# AWS CLI
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip && sudo ./aws/install
+# Install dependencies
+npm install
 
-# Configure AWS credentials
-aws configure
+# Bootstrap CDK (one time per account/region)
+npm run bootstrap
 
-# Node.js 18+ (via nvm)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-nvm install 18 && nvm use 18
-
-# AWS CDK
-npm install -g aws-cdk@2.120.0
-
-# Go 1.24+
-wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/go/bin
-
-# Docker - install from https://www.docker.com/products/docker-desktop
+# Deploy to dev
+npm run deploy:dev
 ```
 
-### 2. Bootstrap CDK (First Time Only)
+## Destroy Stack
 
 ```bash
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-export AWS_REGION=$(aws configure get region || echo "us-east-1")
-cdk bootstrap aws://$AWS_ACCOUNT_ID/$AWS_REGION
+# Development/Staging
+npm run destroy:dev
+npm run destroy:staging
+
+# Production (requires manual confirmation)
+cdk destroy --all --context environment=prod
 ```
 
-## Environment-Specific Deployments
+## Custom Domain (Optional)
 
-### Development (Default)
+For production with custom domain:
 
 ```bash
-pnpm run deploy
+export CDK_CONTEXT_DOMAIN_NAME=api.wallcrawler.com
+npm run deploy:prod
 ```
-
-- No NAT Gateway (saves ~$45/month)
-- No ElastiCache (saves ~$13/month)
-- Minimal resources for cost optimization
-
-### Staging
-
-```bash
-pnpm run deploy:staging
-```
-
-- Production-like with reduced scale
-- Includes NAT Gateway and Redis
-- Enhanced monitoring
-
-### Production
-
-```bash
-pnpm run deploy:prod
-
-# With custom domain
-pnpm run deploy:prod -- --context domainName=api.wallcrawler.com
-```
-
-- Multi-AZ deployment
-- WAF protection
-- Full monitoring and logging
-- Automatic JWT key rotation
-
-## What Gets Deployed
-
-1. **API Gateway** - REST API endpoints
-2. **Lambda Functions** - Session management functions
-3. **ECS Cluster** - Browser automation containers
-4. **ElastiCache Redis** - Session state (staging/prod only)
-5. **VPC & Networking** - Secure network isolation
-6. **CloudWatch** - Logs and monitoring
-
-## Getting Your API Endpoint
-
-After deployment, get your API endpoint:
-
-```bash
-# Get all stack outputs
-aws cloudformation describe-stacks \
-  --stack-name WallcrawlerStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`APIGatewayURL`].OutputValue' \
-  --output text
-```
-
-Example output:
-
-- Development: `https://abc123.execute-api.us-east-1.amazonaws.com/dev`
-- Staging: `https://abc123.execute-api.us-east-1.amazonaws.com/staging`
-- Production: `https://abc123.execute-api.us-east-1.amazonaws.com/prod`
-
-## API Keys Explained
-
-Wallcrawler uses two types of API keys:
-
-### 1. AWS API Gateway Key (Required)
-
-- **Purpose**: Rate limiting, DDoS protection at AWS level
-- **Generated by**: AWS automatically during deployment
-- **Required for**: ALL API requests (enforced by API Gateway)
-- **Used by**: Any service that needs to access your API
-- **Security**: Keep this key secure - only share with trusted services
-
-To retrieve the AWS API Gateway key (if needed for internal use):
-
-```bash
-# Get the API key ID
-API_KEY_ID=$(aws cloudformation describe-stacks \
-  --stack-name WallcrawlerStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`ApiKeyId`].OutputValue' \
-  --output text)
-
-# Get the actual key value
-aws apigateway get-api-key \
-  --api-key $API_KEY_ID \
-  --include-value \
-  --query value \
-  --output text
-```
-
-### 2. Wallcrawler API Key (Customer Authentication)
-
-- **Purpose**: Authenticate your customers/users
-- **Generated by**: Your application (you manage these)
-- **Used by**: Your customers
-- **This is what goes in `.env.local`**
-
-## Setting Up Your Application
-
-### For Direct API Access
-
-Since the AWS API Gateway key is required for ALL requests, any service accessing your API needs both keys:
-
-```bash
-# .env.local (for any service accessing the API)
-WALLCRAWLER_API_URL=https://abc123.execute-api.us-east-1.amazonaws.com/dev
-WALLCRAWLER_API_KEY=service-wallcrawler-api-key  # Service's Wallcrawler key
-WALLCRAWLER_AWS_API_KEY=7j9km0WaXj...           # The AWS API Gateway key (REQUIRED)
-WALLCRAWLER_PROJECT_ID=service-project-id
-```
-
-**Important**: Without the AWS API Gateway key, ALL requests will receive `403 Forbidden` errors.
-
-The SDK will automatically send both keys in the headers:
-
-- `X-Api-Key`: AWS API Gateway key (required by API Gateway)
-- `x-wc-api-key`: Wallcrawler API key (validated by Lambda functions)
-
-### Managing Customer API Keys
-
-You need to implement your own system for:
-
-1. Generating Wallcrawler API keys for customers
-2. Storing them securely (e.g., in DynamoDB)
-3. Validating them in your Lambda functions
-
-Example customer API key format:
-
-```
-wc_live_abc123def456...  # Production keys
-wc_test_xyz789...        # Test keys
-```
-
-### Security Best Practices
-
-1. **Never expose the AWS API Gateway key to external customers**
-2. **Rotate both keys regularly**
-3. **Use different Wallcrawler API keys for different services/customers**
-4. **Monitor API usage through CloudWatch**
 
 ## Troubleshooting
 
-### Docker Not Running
+| Issue                       | Solution                                      |
+| --------------------------- | --------------------------------------------- |
+| "Docker daemon not running" | Start Docker Desktop                          |
+| "CDK not bootstrapped"      | Run `npm run bootstrap`                       |
+| "Go build failed"           | Check Go installation: `go version`           |
+| "JWT secret not found"      | Will be created automatically on first deploy |
 
-```bash
-# macOS
-open -a Docker
+## Cost Breakdown
 
-# Linux
-sudo systemctl start docker
-```
-
-### CDK Not Bootstrapped
-
-```bash
-cdk bootstrap aws://$AWS_ACCOUNT_ID/$AWS_REGION
-```
-
-### Build Failures
-
-```bash
-# Clean and rebuild
-cd packages/backend-go
-rm -rf build/
-./build.sh
-```
-
-### Check Deployment Status
-
-```bash
-# View CloudFormation stack
-aws cloudformation describe-stacks --stack-name WallcrawlerStack
-
-# View recent events
-aws cloudformation describe-stack-events \
-  --stack-name WallcrawlerStack \
-  --max-items 10
-```
-
-## Cost Optimization
-
-### Development Costs (~$10/month)
-
-- Lambda: ~$5/month
-- API Gateway: ~$3.50/month
-- ECS Fargate: Pay per use
-- CloudWatch: ~$1/month
-
-### Production Costs (~$150-200/month)
-
-- NAT Gateway: ~$45/month
-- ElastiCache: ~$50/month
-- ECS Fargate: ~$30-50/month
-- API Gateway: ~$10/month
-- Other services: ~$15/month
-
-### Cost Monitoring
-
-```bash
-# Set up billing alarm
-aws cloudwatch put-metric-alarm \
-  --alarm-name wallcrawler-billing-alarm \
-  --alarm-description "Alert when AWS charges exceed $200" \
-  --metric-name EstimatedCharges \
-  --namespace AWS/Billing \
-  --statistic Maximum \
-  --period 86400 \
-  --threshold 200 \
-  --comparison-operator GreaterThanThreshold
-```
-
-## Updating Your Stack
-
-```bash
-# Update and redeploy
-git pull
-pnpm install
-pnpm run deploy
-```
-
-## Destroying the Stack
-
-```bash
-# Remove all resources
-cd packages/aws-cdk
-cdk destroy WallcrawlerStack
-```
-
-⚠️ **Warning**: This will delete all resources including data!
-
-## CI/CD Integration
-
-For GitHub Actions, add to `.github/workflows/deploy.yml`:
-
-```yaml
-name: Deploy Wallcrawler
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Deploy
-        run: pnpm run deploy:${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
-```
-
-## Summary
-
-1. **One command deployment**: `pnpm run deploy`
-2. **Automatic builds**: Backend and CDK compilation handled
-3. **Environment management**: dev/staging/prod configurations
-4. **Cost optimized**: Development ~$10/month, Production ~$150/month
-5. **Easy updates**: Pull, install, deploy
-
-For help, check the logs:
-
-```bash
-# CDK logs
-cd packages/aws-cdk
-cat cdk.out/*.log
-
-# CloudFormation events
-aws cloudformation describe-stack-events --stack-name WallcrawlerStack
-```
+- **Dev/Staging**: ~$10/month (no NAT Gateway, minimal resources)
+- **Production**: ~$60/month base + usage costs
+  - NAT Gateway: $45/month
+  - Redis: $15/month
+  - Lambda/ECS: Pay per use

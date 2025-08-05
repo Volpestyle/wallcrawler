@@ -212,15 +212,15 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 	sessionState.ECSTaskARN = taskArn
 
 	// Generate connect URL if we have a signing key
-	if sessionState.SigningKey != "" {
-		connectURL := utils.CreateAuthenticatedCDPURL(taskIP, sessionState.SigningKey)
-		sessionState.ConnectURL = connectURL
+	if sessionState.SigningKey != nil && *sessionState.SigningKey != "" {
+		connectURL := utils.CreateAuthenticatedCDPURL(taskIP, *sessionState.SigningKey)
+		sessionState.ConnectURL = &connectURL
 		log.Printf("Updated session %s with IP %s and connect URL", sessionID, taskIP)
 	} else {
 		log.Printf("No signing key available for session %s", sessionID)
 	}
 
-	sessionState.UpdatedAt = time.Now()
+	sessionState.UpdatedAt = time.Now().Format(time.RFC3339)
 
 	// Update status to READY in DynamoDB
 	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusReady); err != nil {

@@ -45,8 +45,9 @@ type StartSessionResponse struct {
 	Available bool   `json:"available"`
 }
 
-// Session status enum values
+// Session status enum values - SDK compatible
 const (
+	// Internal statuses (for tracking detailed state)
 	SessionStatusCreating     = "CREATING"
 	SessionStatusProvisioning = "PROVISIONING"
 	SessionStatusStarting     = "STARTING"
@@ -55,14 +56,13 @@ const (
 	SessionStatusTerminating  = "TERMINATING"
 	SessionStatusStopped      = "STOPPED"
 	SessionStatusFailed       = "FAILED"
-)
 
-// Session info types
-type Session struct {
-	ID         string `json:"id"`
-	Status     string `json:"status"`
-	ConnectURL string `json:"connectUrl"`
-}
+	// SDK-compatible statuses
+	SessionStatusRunning   = "RUNNING"
+	SessionStatusError     = "ERROR"
+	SessionStatusTimedOut  = "TIMED_OUT"
+	SessionStatusCompleted = "COMPLETED"
+)
 
 // Action types
 type ActRequest struct {
@@ -178,31 +178,42 @@ type LogMessage struct {
 }
 
 type SessionState struct {
-	// Core fields
-	ID         string `json:"id"`
-	Status     string `json:"status"`
-	ProjectID  string `json:"projectId"`
-	ConnectURL string `json:"connectUrl,omitempty"`
-	SigningKey string `json:"signingKey,omitempty"`
-	ECSTaskARN string `json:"ecsTaskArn,omitempty"`
-	PublicIP   string `json:"publicIP,omitempty"`
+	// SDK-compatible fields
+	ID           string                 `json:"id"`
+	CreatedAt    string                 `json:"createdAt"`
+	ExpiresAt    string                 `json:"expiresAt"`
+	KeepAlive    bool                   `json:"keepAlive"`
+	ProjectID    string                 `json:"projectId"`
+	ProxyBytes   int                    `json:"proxyBytes"`
+	Region       string                 `json:"region"`
+	StartedAt    string                 `json:"startedAt"`
+	Status       string                 `json:"status"` // RUNNING, ERROR, TIMED_OUT, COMPLETED
+	UpdatedAt    string                 `json:"updatedAt"`
+	AvgCPUUsage  *int                   `json:"avgCpuUsage,omitempty"`
+	ContextID    *string                `json:"contextId,omitempty"`
+	EndedAt      *string                `json:"endedAt,omitempty"`
+	MemoryUsage  *int                   `json:"memoryUsage,omitempty"`
+	UserMetadata map[string]interface{} `json:"userMetadata,omitempty"`
 
-	// User-defined data
-	UserMetadata map[string]string `json:"userMetadata,omitempty"`
-	ModelConfig  *ModelConfig      `json:"modelConfig,omitempty"`
+	// Additional fields for session creation response
+	ConnectURL        *string `json:"connectUrl,omitempty"`
+	SeleniumRemoteURL *string `json:"seleniumRemoteUrl,omitempty"`
+	SigningKey        *string `json:"signingKey,omitempty"`
+
+	// Internal fields (not exposed in SDK)
+	ECSTaskARN  string       `json:"ecsTaskArn,omitempty"`
+	PublicIP    string       `json:"publicIP,omitempty"`
+	ModelConfig *ModelConfig `json:"modelConfig,omitempty"`
 
 	// EventBridge Integration
 	EventHistory       []SessionEvent `json:"eventHistory,omitempty"`
-	LastEventTimestamp *time.Time     `json:"lastEventTimestamp,omitempty"`
+	LastEventTimestamp *string        `json:"lastEventTimestamp,omitempty"`
 	RetryCount         int            `json:"retryCount,omitempty"`
 
-	// Performance Tracking
-	CreatedAt             time.Time  `json:"createdAt"`
-	ProvisioningStartedAt *time.Time `json:"provisioningStartedAt,omitempty"`
-	ReadyAt               *time.Time `json:"readyAt,omitempty"`
-	LastActiveAt          *time.Time `json:"lastActiveAt,omitempty"`
-	TerminatedAt          *time.Time `json:"terminatedAt,omitempty"`
-	UpdatedAt             time.Time  `json:"updatedAt"`
+	// Performance Tracking (internal)
+	ProvisioningStartedAt *string `json:"provisioningStartedAt,omitempty"`
+	ReadyAt               *string `json:"readyAt,omitempty"`
+	LastActiveAt          *string `json:"lastActiveAt,omitempty"`
 
 	// Resource Management
 	ResourceLimits *ResourceLimits `json:"resourceLimits,omitempty"`
@@ -212,7 +223,7 @@ type SessionState struct {
 // SessionEvent tracks EventBridge events for complete audit trail
 type SessionEvent struct {
 	EventType     string                 `json:"eventType"`
-	Timestamp     time.Time              `json:"timestamp"`
+	Timestamp     string                 `json:"timestamp"`
 	Source        string                 `json:"source"`
 	Detail        map[string]interface{} `json:"detail"`
 	CorrelationID string                 `json:"correlationId,omitempty"`

@@ -13,6 +13,15 @@ import (
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
 
+// SessionListParams represents the query parameters for listing sessions
+type SessionListParams struct {
+	// Query sessions by user metadata. See
+	// [Querying Sessions by User Metadata](/features/sessions#querying-sessions-by-user-metadata)
+	// for the schema of this query.
+	Q      string `json:"q,omitempty"`
+	Status string `json:"status,omitempty"` // RUNNING, ERROR, TIMED_OUT, or COMPLETED
+}
+
 // Handler processes GET /v1/sessions (SDK-compatible session listing)
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Processing sessions list request")
@@ -22,13 +31,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
 	}
 
-	// Get query parameters for filtering
-	queryParams := request.QueryStringParameters
-	statusFilter := ""
-	queryFilter := ""
-	if queryParams != nil {
-		statusFilter = queryParams["status"]
-		queryFilter = queryParams["q"]
+	// Parse query parameters into SessionListParams
+	params := SessionListParams{
+		Status: request.QueryStringParameters["status"],
+		Q:      request.QueryStringParameters["q"],
 	}
 
 	// Get DynamoDB client
@@ -47,25 +53,24 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Initialize as empty slice instead of nil to ensure JSON array output
-	filteredSessions := make([]utils.SDKSession, 0)
+	filteredSessions := make([]*types.SessionState, 0)
 
-	// Filter and convert sessions
+	// Filter sessions
 	for _, sessionState := range allSessions {
 		// Project ID already filtered by GSI query
 
 		// Filter by status if provided
-		if statusFilter != "" && !matchesStatus(sessionState.Status, statusFilter) {
+		if params.Status != "" && !matchesStatus(sessionState.Status, params.Status) {
 			continue
 		}
 
 		// Filter by query if provided (searches user metadata)
-		if queryFilter != "" && !matchesQuery(sessionState, queryFilter) {
+		if params.Q != "" && !matchesQuery(sessionState, params.Q) {
 			continue
 		}
 
-		// Convert internal session to SDK format
-		session := utils.ConvertToSDKSession(sessionState)
-		filteredSessions = append(filteredSessions, session)
+		// No conversion needed - SessionState already matches SDK format
+		filteredSessions = append(filteredSessions, sessionState)
 	}
 
 	log.Printf("Listed %d sessions (filtered from %d total)", len(filteredSessions), len(allSessions))
@@ -94,7 +99,9 @@ func matchesQuery(sessionState *types.SessionState, query string) bool {
 		if strings.Contains(strings.ToLower(key), queryLower) {
 			return true
 		}
-		if strings.Contains(strings.ToLower(value), queryLower) {
+		// Convert value to string for comparison
+		valueStr := fmt.Sprintf("%v", value)
+		if strings.Contains(strings.ToLower(valueStr), queryLower) {
 			return true
 		}
 	}
@@ -110,14 +117,15 @@ func matchesQuery(sessionState *types.SessionState, query string) bool {
 }
 
 // matchesQueryObject checks if session metadata matches the query object
-func matchesQueryObject(metadata map[string]string, queryObj map[string]interface{}) bool {
+func matchesQueryObject(metadata map[string]interface{}, queryObj map[string]interface{}) bool {
 	for queryKey, queryValue := range queryObj {
 		metadataValue, exists := metadata[queryKey]
 		if !exists {
 			return false
 		}
 
-		// Convert query value to string for comparison
+		// Convert both values to strings for comparison
+		metadataValueStr := fmt.Sprintf("%v", metadataValue)
 		queryValueStr := ""
 		switch v := queryValue.(type) {
 		case string:
@@ -130,7 +138,7 @@ func matchesQueryObject(metadata map[string]string, queryObj map[string]interfac
 			queryValueStr = fmt.Sprintf("%v", v)
 		}
 
-		if metadataValue != queryValueStr {
+		if metadataValueStr != queryValueStr {
 			return false
 		}
 	}

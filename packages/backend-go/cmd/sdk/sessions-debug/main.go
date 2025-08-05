@@ -64,17 +64,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Get JWT token from session state
-	jwtToken := sessionState.SigningKey
-	if jwtToken == "" {
+	if sessionState.SigningKey == nil || *sessionState.SigningKey == "" {
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Session authentication token not available"))
 	}
+	jwtToken := *sessionState.SigningKey
 
 	// Create debug URLs using utility functions for consistency
 	debuggerURL := utils.CreateDebuggerURL(sessionState.PublicIP, jwtToken)
 	debuggerFullscreenURL := utils.CreateDebuggerFullscreenURL(sessionState.PublicIP, jwtToken)
 
 	// The wsUrl for the response should be the same as connectUrl for WebSocket connections
-	responseWSURL := sessionState.ConnectURL
+	responseWSURL := ""
+	if sessionState.ConnectURL != nil {
+		responseWSURL = *sessionState.ConnectURL
+	}
 
 	// Create response with proper debug URLs
 	response := SessionLiveURLsResponse{

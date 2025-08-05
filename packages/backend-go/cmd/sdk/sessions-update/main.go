@@ -114,7 +114,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Calculate session duration
-	sessionDuration := time.Since(sessionState.CreatedAt)
+	createdAt, err := time.Parse(time.RFC3339, sessionState.CreatedAt)
+	if err != nil {
+		log.Printf("Error parsing createdAt timestamp: %v", err)
+		createdAt = time.Now() // Fallback to now if parsing fails
+	}
+	sessionDuration := time.Since(createdAt)
 	utils.LogSessionTerminated(sessionID, req.ProjectID, "manual", sessionDuration.Milliseconds(), map[string]interface{}{
 		"requested_by": "user",
 	})
