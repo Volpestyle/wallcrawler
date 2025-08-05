@@ -21,13 +21,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"github.com/wallcrawler/backend-go/internal/types"
 )
 
 var (
 	DynamoDBTableName = os.Getenv("DYNAMODB_TABLE_NAME")
-	RedisAddr         = os.Getenv("REDIS_ADDR")
 	ECSCluster        = os.Getenv("ECS_CLUSTER")
 	ECSTaskDefFamily  = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
 	ConnectURL        = os.Getenv("CONNECT_URL_BASE")
@@ -40,30 +38,6 @@ func GetDynamoDBClient(ctx context.Context) (*dynamodb.Client, error) {
 		return nil, err
 	}
 	return dynamodb.NewFromConfig(cfg), nil
-}
-
-// GetRedisClient returns a configured Redis client for pub/sub only
-func GetRedisClient(ctx context.Context) (*redis.Client, error) {
-	if RedisAddr == "" {
-		return nil, fmt.Errorf("REDIS_ADDR environment variable not set")
-	}
-
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         RedisAddr,
-		DialTimeout:  10 * time.Second,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		PoolSize:     10,
-		PoolTimeout:  30 * time.Second,
-	})
-
-	// Test connection
-	_, err := rdb.Ping(ctx).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %v", err)
-	}
-
-	return rdb, nil
 }
 
 // GetAWSConfig returns AWS configuration
@@ -496,73 +470,6 @@ func CreateAPIResponse(statusCode int, body interface{}) (events.APIGatewayProxy
 	}, nil
 }
 
-// WaitForSessionReady waits for a session to become READY using Redis Pub/Sub (no polling!)
-func WaitForSessionReady(ctx context.Context, ddbClient *dynamodb.Client, rdb *redis.Client, sessionID string, timeoutSeconds int) (*types.SessionState, error) {
-	timeout := time.Duration(timeoutSeconds) * time.Second
-
-	log.Printf("Waiting for session %s to become READY via Redis Pub/Sub (no polling)...", sessionID)
-
-	// Subscribe to session ready channel
-	channel := fmt.Sprintf("session:%s:ready", sessionID)
-	pubsub := rdb.Subscribe(ctx, channel)
-	defer pubsub.Close()
-
-	// Create a channel to receive messages
-	ch := pubsub.Channel()
-
-	// Set up timeout
-	timeoutTimer := time.NewTimer(timeout)
-	defer timeoutTimer.Stop()
-
-	// Check current status first (in case we missed the event)
-	sessionState, err := GetSession(ctx, ddbClient, sessionID)
-	if err == nil {
-		if sessionState.Status == types.SessionStatusReady &&
-			sessionState.PublicIP != "" &&
-			sessionState.ConnectURL != nil && *sessionState.ConnectURL != "" {
-			log.Printf("Session %s is already READY with IP %s", sessionID, sessionState.PublicIP)
-			return sessionState, nil
-		}
-
-		if sessionState.Status == types.SessionStatusFailed {
-			return nil, fmt.Errorf("session %s failed to provision", sessionID)
-		}
-	}
-
-	// Wait for pub/sub notification or timeout
-	select {
-	case msg := <-ch:
-		log.Printf("Received Redis pub/sub message for session %s: %s", sessionID, msg.Payload)
-
-		// Get updated session state from DynamoDB
-		sessionState, err := GetSession(ctx, ddbClient, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("error getting session after pub/sub notification: %v", err)
-		}
-
-		// Check if session is ready
-		if sessionState.Status == types.SessionStatusReady &&
-			sessionState.PublicIP != "" &&
-			sessionState.ConnectURL != nil && *sessionState.ConnectURL != "" {
-			log.Printf("Session %s is READY with IP %s via pub/sub", sessionID, sessionState.PublicIP)
-			return sessionState, nil
-		}
-
-		// Check if session failed
-		if sessionState.Status == types.SessionStatusFailed {
-			return nil, fmt.Errorf("session %s failed to provision", sessionID)
-		}
-
-		return nil, fmt.Errorf("session %s received notification but not ready: status=%s, ip=%s",
-			sessionID, sessionState.Status, sessionState.PublicIP)
-
-	case <-timeoutTimer.C:
-		return nil, fmt.Errorf("timeout waiting for session %s to become ready after %d seconds", sessionID, timeoutSeconds)
-
-	case <-ctx.Done():
-		return nil, fmt.Errorf("context cancelled while waiting for session %s", sessionID)
-	}
-}
 
 // GetAllSessions retrieves all sessions from DynamoDB using Scan
 func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.SessionState, error) {

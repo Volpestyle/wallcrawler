@@ -17,7 +17,7 @@ mkdir -p build
 # Define functions that need to be built
 # Format: "source_directory:build_path"
 FUNCTIONS=(
-    "cmd/sdk/sessions-create:sdk/sessions-create"
+    "cmd/sdk/sessions-create-sfn:sdk/sessions-create-sfn"
     "cmd/sdk/sessions-list:sdk/sessions-list"
     "cmd/sdk/sessions-retrieve:sdk/sessions-retrieve"
     "cmd/sdk/sessions-debug:sdk/sessions-debug"

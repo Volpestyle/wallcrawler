@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/wallcrawler/backend-go/internal/types"
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
@@ -156,19 +162,12 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 
 	log.Printf("Processing ECS task RUNNING event for session %s, task %s", sessionID, taskArn)
 
-	// Get DynamoDB and Redis clients
+	// Get DynamoDB client
 	ddbClient, err := utils.GetDynamoDBClient(ctx)
 	if err != nil {
 		log.Printf("Error getting DynamoDB client: %v", err)
 		return err
 	}
-
-	rdb, err := utils.GetRedisClient(ctx)
-	if err != nil {
-		log.Printf("Error getting Redis client: %v", err)
-		return err
-	}
-	defer rdb.Close()
 
 	// Get current session state from DynamoDB
 	sessionState, err := utils.GetSession(ctx, ddbClient, sessionID)
@@ -233,11 +232,10 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 		return err
 	}
 
-	// 🔥 Notify waiting session creation lambda via Redis Pub/Sub (instant!)
-	if err := utils.PublishSessionReady(ctx, rdb, sessionID); err != nil {
-		log.Printf("Error publishing session ready notification: %v", err)
-	} else {
-		log.Printf("Successfully notified session ready for %s", sessionID)
+	// Check if this session was created via Step Functions (has a callback token)
+	if err := notifyStepFunctions(ctx, ddbClient, taskArn, sessionID, sessionState); err != nil {
+		log.Printf("Error notifying Step Functions: %v", err)
+		// Not a critical error - might be a regular session creation
 	}
 
 	// Log ECS task ready event
@@ -277,6 +275,97 @@ func handleSessionTimedOut(ctx context.Context, event EventBridgeEvent) error {
 
 	// Additional cleanup logic if needed (e.g., metrics, alerts)
 	log.Printf("Session %s timed out automatically", sessionID)
+	return nil
+}
+
+// notifyStepFunctions checks if this session was created via Step Functions and sends the callback
+func notifyStepFunctions(ctx context.Context, ddbClient *dynamodb.Client, taskArn, sessionID string, sessionState *types.SessionState) error {
+	// Try to retrieve the Step Functions callback token
+	tableName := utils.DynamoDBTableName
+	result, err := ddbClient.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(tableName),
+		Key: map[string]dynamotypes.AttributeValue{
+			"taskArn": &dynamotypes.AttributeValueMemberS{Value: taskArn},
+		},
+	})
+	if err != nil {
+		log.Printf("Error retrieving callback token for task %s: %v", taskArn, err)
+		return err
+	}
+
+	// If no token found, this wasn't a Step Functions session
+	if result.Item == nil {
+		log.Printf("No callback token found for task %s - not a Step Functions session", taskArn)
+		return nil
+	}
+
+	// Extract the callback token
+	tokenAttr, ok := result.Item["taskToken"]
+	if !ok {
+		log.Printf("No taskToken attribute found in DynamoDB item")
+		return nil
+	}
+
+	taskToken, ok := tokenAttr.(*dynamotypes.AttributeValueMemberS)
+	if !ok || taskToken.Value == "" {
+		log.Printf("Invalid taskToken attribute type or empty value")
+		return nil
+	}
+
+	// Get AWS config
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Printf("Error loading AWS config: %v", err)
+		return err
+	}
+
+	// Create Step Functions client
+	sfnClient := sfn.NewFromConfig(cfg)
+
+	// Prepare the output for Step Functions
+	output := map[string]interface{}{
+		"id":               sessionID,
+		"status":           "RUNNING",
+		"connectUrl":       sessionState.ConnectURL,
+		"publicIP":         sessionState.PublicIP,
+		"seleniumRemoteURL": sessionState.SeleniumRemoteURL,
+		"createdAt":        sessionState.CreatedAt,
+		"expiresAt":        sessionState.ExpiresAt,
+		"projectId":        sessionState.ProjectID,
+		"keepAlive":        sessionState.KeepAlive,
+		"region":           sessionState.Region,
+	}
+
+	outputJSON, err := json.Marshal(output)
+	if err != nil {
+		log.Printf("Error marshaling Step Functions output: %v", err)
+		return err
+	}
+
+	// Send task success to Step Functions
+	_, err = sfnClient.SendTaskSuccess(ctx, &sfn.SendTaskSuccessInput{
+		TaskToken: aws.String(taskToken.Value),
+		Output:    aws.String(string(outputJSON)),
+	})
+	if err != nil {
+		log.Printf("Error sending task success to Step Functions: %v", err)
+		return err
+	}
+
+	log.Printf("Successfully notified Step Functions for session %s", sessionID)
+
+	// Clean up the callback token from DynamoDB
+	_, err = ddbClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(tableName),
+		Key: map[string]dynamotypes.AttributeValue{
+			"taskArn": &dynamotypes.AttributeValueMemberS{Value: taskArn},
+		},
+	})
+	if err != nil {
+		log.Printf("Error deleting callback token: %v", err)
+		// Not a critical error
+	}
+
 	return nil
 }
 

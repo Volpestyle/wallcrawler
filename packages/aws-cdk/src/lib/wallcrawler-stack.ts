@@ -6,13 +6,14 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as elasticache from 'aws-cdk-lib/aws-elasticache';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 
 export class WallcrawlerStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -147,60 +148,6 @@ export class WallcrawlerStack extends cdk.Stack {
             projectionType: dynamodb.ProjectionType.KEYS_ONLY
         });
 
-        // Redis/ElastiCache for pub/sub events (lightweight configuration)
-        // Used only for real-time notifications, not for session storage
-        const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
-            description: 'Subnet group for Redis pub/sub',
-            subnetIds: isDevelopment
-                ? vpc.publicSubnets.map(subnet => subnet.subnetId)
-                : vpc.privateSubnets.map(subnet => subnet.subnetId),
-            // Let CloudFormation generate a unique name to avoid conflicts
-            // cacheSubnetGroupName: 'wallcrawler-redis-pubsub',
-        });
-
-        const redisSecurityGroup = new ec2.SecurityGroup(this, 'RedisSecurityGroup', {
-            vpc,
-            description: 'Security group for Redis pub/sub',
-            allowAllOutbound: true,
-        });
-
-        // Allow Lambda and ECS to access Redis
-        redisSecurityGroup.addIngressRule(
-            lambdaSecurityGroup,
-            ec2.Port.tcp(6379),
-            'Lambda access to Redis'
-        );
-
-        redisSecurityGroup.addIngressRule(
-            ecsSecurityGroup,
-            ec2.Port.tcp(6379),
-            'ECS access to Redis'
-        );
-
-        // Small Redis instance for pub/sub only (not for storage)
-        const redisCluster = new elasticache.CfnCacheCluster(this, 'RedisPubSubCluster', {
-            cacheNodeType: 'cache.t3.micro', // Smallest instance for pub/sub
-            engine: 'redis',
-            numCacheNodes: 1,
-            cacheSubnetGroupName: redisSubnetGroup.ref,
-            vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
-            // Let CloudFormation generate a unique name to avoid conflicts
-            // clusterName: 'wallcrawler-pubsub',
-            engineVersion: '7.0',
-            preferredMaintenanceWindow: 'sun:05:00-sun:06:00',
-            snapshotRetentionLimit: 0, // No backups needed for pub/sub
-            tags: [
-                {
-                    key: 'Purpose',
-                    value: 'PubSub-Only'
-                },
-                {
-                    key: 'Note',
-                    value: 'Not used for storage - DynamoDB handles all session state'
-                }
-            ],
-        });
-
         // Allow Lambda to access ECS tasks (CDP proxy)
         ecsSecurityGroup.addIngressRule(
             lambdaSecurityGroup,
@@ -268,7 +215,6 @@ export class WallcrawlerStack extends cdk.Stack {
             ],
             environment: {
                 DYNAMODB_TABLE_NAME: sessionsTable.tableName,
-                REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:${redisCluster.attrRedisEndpointPort}`,
                 ECS_CLUSTER: ecsCluster.clusterName,
                 // Use task definition family name instead of ARN to avoid circular reference
                 ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
@@ -337,7 +283,6 @@ export class WallcrawlerStack extends cdk.Stack {
         // Common Lambda environment variables
         const commonLambdaEnvironment = {
             DYNAMODB_TABLE_NAME: sessionsTable.tableName,
-            REDIS_ADDR: `${redisCluster.attrRedisEndpointAddress}:${redisCluster.attrRedisEndpointPort}`,
             ECS_CLUSTER: ecsCluster.clusterName,
             // Use task definition family name instead of ARN to avoid circular reference
             ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
@@ -370,11 +315,11 @@ export class WallcrawlerStack extends cdk.Stack {
         // =================================================================
 
         // --- SDK Handlers (Browserbase-compatible) ---
-        const sdkSessionsCreateLambda = createLambdaFunction(
-            'SDKSessionsCreateLambda',
-            'sdk/sessions-create',
-            'SDK: Create basic browser sessions (synchronous provisioning)',
-            5 // 5 minute timeout for synchronous ECS provisioning
+        const sdkSessionsCreateSfnLambda = createLambdaFunction(
+            'SDKSessionsCreateSfnLambda',
+            'sdk/sessions-create-sfn',
+            'SDK: Create sessions for Step Functions workflow',
+            1 // 1 minute timeout - just creates task and returns
         );
 
         const sdkSessionsListLambda = createLambdaFunction(
@@ -444,6 +389,47 @@ export class WallcrawlerStack extends cdk.Stack {
 
         sessionEventRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
         ecsTaskStateRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
+
+        // Grant Step Functions permissions to Lambda
+        lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'states:SendTaskSuccess',
+                'states:SendTaskFailure',
+                'states:SendTaskHeartbeat',
+            ],
+            resources: ['*'], // Task tokens are dynamic, so we need * here
+        }));
+
+        // Create Step Functions Express Workflow for session creation
+        const createSessionTask = new tasks.LambdaInvoke(this, 'CreateSessionTask', {
+            lambdaFunction: sdkSessionsCreateSfnLambda,
+            integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
+            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.seconds(300)),
+            taskTimeout: sfn.Timeout.duration(cdk.Duration.seconds(300)),
+            payload: sfn.TaskInput.fromObject({
+                taskToken: sfn.JsonPath.taskToken,
+                projectId: sfn.JsonPath.stringAt('$.projectId'),
+                browserSettings: sfn.JsonPath.objectAt('$.browserSettings'),
+                keepAlive: sfn.JsonPath.stringAt('$.keepAlive'),
+                timeout: sfn.JsonPath.numberAt('$.timeout'),
+                region: sfn.JsonPath.stringAt('$.region'),
+                userMetadata: sfn.JsonPath.objectAt('$.userMetadata'),
+            }),
+        });
+
+        const sessionCreationWorkflow = new sfn.StateMachine(this, 'SessionCreationWorkflow', {
+            stateMachineName: 'wallcrawler-session-creation',
+            stateMachineType: sfn.StateMachineType.STANDARD,
+            definition: createSessionTask,
+            tracingEnabled: true,
+            logs: {
+                destination: new logs.LogGroup(this, 'SessionCreationWorkflowLogs', {
+                    retention: logs.RetentionDays.ONE_WEEK,
+                }),
+                level: sfn.LogLevel.ERROR,
+            },
+        });
 
         // API Gateway for REST endpoints
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
@@ -532,12 +518,73 @@ export class WallcrawlerStack extends cdk.Stack {
         // --- Sessions Resource (/v1/sessions) ---
         const v1SessionsResource = v1Resource.addResource('sessions');
 
-        // POST /v1/sessions - Create session
+        // POST /v1/sessions - Create session (via Step Functions)
+        // Create IAM role for API Gateway to invoke Step Functions
+        const apiGatewayStepFunctionsRole = new iam.Role(this, 'ApiGatewayStepFunctionsRole', {
+            assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+            inlinePolicies: {
+                StepFunctionsExecutionPolicy: new iam.PolicyDocument({
+                    statements: [
+                        new iam.PolicyStatement({
+                            effect: iam.Effect.ALLOW,
+                            actions: ['states:StartSyncExecution'],
+                            resources: [sessionCreationWorkflow.stateMachineArn],
+                        }),
+                    ],
+                }),
+            },
+        });
+
+        // Create Step Functions integration
         v1SessionsResource.addMethod('POST',
-            new apigateway.LambdaIntegration(sdkSessionsCreateLambda, { proxy: true }),
+            new apigateway.AwsIntegration({
+                service: 'states',
+                action: 'StartSyncExecution',
+                integrationHttpMethod: 'POST',
+                options: {
+                    credentialsRole: apiGatewayStepFunctionsRole,
+                    requestTemplates: {
+                        'application/json': JSON.stringify({
+                            stateMachineArn: sessionCreationWorkflow.stateMachineArn,
+                            input: "$util.escapeJavaScript($input.json('$'))"
+                        }),
+                    },
+                    integrationResponses: [
+                        {
+                            statusCode: '200',
+                            responseTemplates: {
+                                'application/json': "$input.path('$.output')",
+                            },
+                        },
+                        {
+                            statusCode: '400',
+                            selectionPattern: '4\\d{2}',
+                            responseTemplates: {
+                                'application/json': JSON.stringify({
+                                    error: "$input.path('$.error')",
+                                }),
+                            },
+                        },
+                        {
+                            statusCode: '500',
+                            selectionPattern: '5\\d{2}',
+                            responseTemplates: {
+                                'application/json': JSON.stringify({
+                                    error: "$input.path('$.error')",
+                                }),
+                            },
+                        },
+                    ],
+                },
+            }),
             {
                 apiKeyRequired: true,
                 requestValidator,
+                methodResponses: [
+                    { statusCode: '200' },
+                    { statusCode: '400' },
+                    { statusCode: '500' },
+                ],
             }
         );
 
@@ -963,11 +1010,6 @@ export class WallcrawlerStack extends cdk.Stack {
         new cdk.CfnOutput(this, 'DynamoDBTableName', {
             description: 'DynamoDB table name for sessions',
             value: sessionsTable.tableName,
-        });
-
-        new cdk.CfnOutput(this, 'RedisEndpoint', {
-            description: 'Redis endpoint for pub/sub events',
-            value: `${redisCluster.attrRedisEndpointAddress}:${redisCluster.attrRedisEndpointPort}`,
         });
 
         new cdk.CfnOutput(this, 'ECSClusterName', {

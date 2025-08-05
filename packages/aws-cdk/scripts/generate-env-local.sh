@@ -11,7 +11,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Default values
-STACK_NAME="WallcrawlerStack"
+ENVIRONMENT="${CDK_CONTEXT_ENVIRONMENT:-dev}"
+# Capitalize first letter of environment for stack name
+STAGE_NAME="$(echo ${ENVIRONMENT:0:1} | tr '[:lower:]' '[:upper:]')${ENVIRONMENT:1}"
+STACK_NAME="WallcrawlerStack${STAGE_NAME}"
 OUTPUT_FILE="wallcrawler-config.txt"
 REGION="us-east-1"
 
