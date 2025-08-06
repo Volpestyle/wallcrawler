@@ -69,6 +69,8 @@ get_output() {
 
 # Get all output values
 API_GATEWAY_URL=$(get_output "APIGatewayURL")
+INTERNAL_API_URL=$(get_output "InternalAPIGatewayURL")
+PUBLIC_API_URL=$(get_output "PublicAPIGatewayURL")
 API_KEY_ID=$(get_output "ApiKeyId")
 DYNAMODB_TABLE=$(get_output "DynamoDBTableName")
 REDIS_ENDPOINT=$(get_output "RedisEndpoint")
@@ -109,9 +111,17 @@ cat > "$OUTPUT_FILE" << EOF
 # Stack: $STACK_NAME
 # Region: $REGION
 
-# API Access
-WALLCRAWLER_API_URL=$API_GATEWAY_URL
-WALLCRAWLER_AWS_API_KEY=$API_KEY_VALUE
+# API Access - Choose ONE based on your authentication method:
+
+# Option 1: Public API (Recommended) - Only requires Wallcrawler API key
+WALLCRAWLER_API_URL=$PUBLIC_API_URL
+WALLCRAWLER_API_KEY=<YOUR_WALLCRAWLER_API_KEY>
+
+# Option 2: Internal API - Requires AWS API key
+# WALLCRAWLER_API_URL=$INTERNAL_API_URL
+# WALLCRAWLER_AWS_API_KEY=$API_KEY_VALUE
+
+# Common settings
 WALLCRAWLER_PROJECT_ID=default
 
 # AWS Resources (for internal use)
@@ -120,6 +130,8 @@ WALLCRAWLER_REDIS_ENDPOINT=$REDIS_ENDPOINT
 WALLCRAWLER_ECS_CLUSTER=$ECS_CLUSTER
 WALLCRAWLER_VPC_ID=$VPC_ID
 WALLCRAWLER_TASK_DEFINITION_ARN=$TASK_DEFINITION_ARN
+WALLCRAWLER_INTERNAL_API_URL=$INTERNAL_API_URL
+WALLCRAWLER_PUBLIC_API_URL=$PUBLIC_API_URL
 
 # JWT Authentication (for Direct Mode)
 WALLCRAWLER_JWT_SECRET_ARN=$JWT_SECRET_ARN
@@ -134,8 +146,9 @@ echo ""
 echo -e "${GREEN}✅ Successfully generated $OUTPUT_FILE${NC}"
 echo ""
 echo -e "${YELLOW}Summary:${NC}"
-echo "  API URL: $API_GATEWAY_URL"
-echo "  API Key: ${API_KEY_VALUE:0:10}..."
+echo "  Public API URL: $PUBLIC_API_URL"
+echo "  Internal API URL: $INTERNAL_API_URL"
+echo "  AWS API Key: ${API_KEY_VALUE:0:10}..."
 echo "  DynamoDB Table: $DYNAMODB_TABLE"
 echo "  Redis Endpoint: $REDIS_ENDPOINT"
 echo "  ECS Cluster: $ECS_CLUSTER"
@@ -143,12 +156,17 @@ echo "  JWT Secret ARN: $JWT_SECRET_ARN"
 echo ""
 echo -e "${YELLOW}Usage Instructions:${NC}"
 echo ""
-echo "1. For Wallcrawler SDK users:"
-echo "   - Set WALLCRAWLER_API_URL and WALLCRAWLER_AWS_API_KEY in your application"
-echo "   - Use WALLCRAWLER_PROJECT_ID=default (or your custom project ID)"
+echo "1. For Public API access (RECOMMENDED):"
+echo "   - Use Public API URL: $PUBLIC_API_URL"
+echo "   - Set x-wc-api-key header with your Wallcrawler API key"
+echo "   - No AWS API key needed!"
 echo ""
-echo "2. For Direct Mode (CDP) access:"
+echo "2. For Internal API access (advanced users):"
+echo "   - Use Internal API URL: $INTERNAL_API_URL"
+echo "   - Set x-api-key header with AWS API key: ${API_KEY_VALUE:0:10}..."
+echo ""
+echo "3. For Direct Mode (CDP) access:"
 echo "   - Use WALLCRAWLER_JWT_SIGNING_KEY for authentication"
 echo "   - Connect to sessions via the connectUrl returned by the API"
 echo ""
-echo "3. Copy the relevant variables from $OUTPUT_FILE to your application's .env file"
+echo "4. Copy the relevant variables from $OUTPUT_FILE to your application's .env file"

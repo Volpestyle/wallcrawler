@@ -14,6 +14,10 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 
 export class WallcrawlerStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -129,6 +133,7 @@ export class WallcrawlerStack extends cdk.Stack {
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             timeToLiveAttribute: 'expiresAt', // TTL field for automatic cleanup
             pointInTimeRecovery: true,
+            stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES, // Enable streams for session state changes
             removalPolicy: cdk.RemovalPolicy.DESTROY, // For dev/test environments
         });
 
@@ -146,6 +151,12 @@ export class WallcrawlerStack extends cdk.Stack {
             partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
             sortKey: { name: 'expiresAt', type: dynamodb.AttributeType.NUMBER },
             projectionType: dynamodb.ProjectionType.KEYS_ONLY
+        });
+
+        // SNS Topic for session ready notifications
+        const sessionReadyTopic = new sns.Topic(this, 'SessionReadyTopic', {
+            topicName: 'wallcrawler-session-ready',
+            displayName: 'Wallcrawler Session Ready Notifications',
         });
 
         // Allow Lambda to access ECS tasks (CDP proxy)
@@ -315,12 +326,15 @@ export class WallcrawlerStack extends cdk.Stack {
         // =================================================================
 
         // --- SDK Handlers (Browserbase-compatible) ---
-        const sdkSessionsCreateSfnLambda = createLambdaFunction(
-            'SDKSessionsCreateSfnLambda',
-            'sdk/sessions-create-sfn',
-            'SDK: Create sessions for Step Functions workflow',
-            1 // 1 minute timeout - just creates task and returns
+        const sdkSessionsCreateLambda = createLambdaFunction(
+            'SDKSessionsCreateLambda',
+            'sdk/sessions-create',
+            'SDK: Create sessions synchronously',
+            60 // 60 second timeout - waits for container to be ready
         );
+
+        // Subscribe to SNS topic for session ready notifications
+        sessionReadyTopic.addSubscription(new snsSubscriptions.LambdaSubscription(sdkSessionsCreateLambda));
 
         const sdkSessionsListLambda = createLambdaFunction(
             'SDKSessionsListLambda',
@@ -390,46 +404,41 @@ export class WallcrawlerStack extends cdk.Stack {
         sessionEventRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
         ecsTaskStateRule.addTarget(new targets.LambdaFunction(ecsTaskProcessorLambda));
 
-        // Grant Step Functions permissions to Lambda
+        // DynamoDB Stream processor for session ready notifications
+        const sessionsStreamProcessorLambda = createLambdaFunction(
+            'SessionsStreamProcessorLambda',
+            'sessions-stream-processor',
+            'Process DynamoDB stream events for session state changes'
+        );
+
+        // Grant SNS publish permissions
         lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: [
-                'states:SendTaskSuccess',
-                'states:SendTaskFailure',
-                'states:SendTaskHeartbeat',
-            ],
-            resources: ['*'], // Task tokens are dynamic, so we need * here
+            actions: ['sns:Publish'],
+            resources: [sessionReadyTopic.topicArn],
         }));
 
-        // Create Step Functions Express Workflow for session creation
-        const createSessionTask = new tasks.LambdaInvoke(this, 'CreateSessionTask', {
-            lambdaFunction: sdkSessionsCreateSfnLambda,
-            integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
-            heartbeatTimeout: sfn.Timeout.duration(cdk.Duration.seconds(300)),
-            taskTimeout: sfn.Timeout.duration(cdk.Duration.seconds(300)),
-            payload: sfn.TaskInput.fromObject({
-                taskToken: sfn.JsonPath.taskToken,
-                projectId: sfn.JsonPath.stringAt('$.projectId'),
-                browserSettings: sfn.JsonPath.objectAt('$.browserSettings'),
-                keepAlive: sfn.JsonPath.stringAt('$.keepAlive'),
-                timeout: sfn.JsonPath.numberAt('$.timeout'),
-                region: sfn.JsonPath.stringAt('$.region'),
-                userMetadata: sfn.JsonPath.objectAt('$.userMetadata'),
-            }),
+        // Set the topic ARN as environment variable
+        sessionsStreamProcessorLambda.addEnvironment('SESSION_READY_TOPIC_ARN', sessionReadyTopic.topicArn);
+
+        // Add DynamoDB Stream event source
+        sessionsStreamProcessorLambda.addEventSourceMapping('SessionsStreamEventSource', {
+            eventSourceArn: sessionsTable.tableStreamArn!,
+            startingPosition: lambda.StartingPosition.LATEST,
+            batchSize: 10,
+            maxBatchingWindow: cdk.Duration.seconds(1),
         });
 
-        const sessionCreationWorkflow = new sfn.StateMachine(this, 'SessionCreationWorkflow', {
-            stateMachineName: 'wallcrawler-session-creation',
-            stateMachineType: sfn.StateMachineType.STANDARD,
-            definition: createSessionTask,
-            tracingEnabled: true,
-            logs: {
-                destination: new logs.LogGroup(this, 'SessionCreationWorkflowLogs', {
-                    retention: logs.RetentionDays.ONE_WEEK,
-                }),
-                level: sfn.LogLevel.ERROR,
-            },
-        });
+        // Create Lambda Authorizer
+        const authorizerLambda = createLambdaFunction(
+            'AuthorizerLambda',
+            'authorizer',
+            'Validate Wallcrawler API keys and inject AWS API key',
+            1 // 1 minute timeout
+        );
+
+        // Pass the AWS API key to the authorizer (will be set later)
+        authorizerLambda.addEnvironment('AWS_API_KEY', 'PLACEHOLDER');
 
         // API Gateway for REST endpoints
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
@@ -459,12 +468,25 @@ export class WallcrawlerStack extends cdk.Stack {
             },
         });
 
-        // API Key for authentication
-        const apiKey = api.addApiKey('WallcrawlerApiKey', {
-            apiKeyName: 'wallcrawler-api-key',
-            description: 'API key for Wallcrawler access',
+        // Create the Lambda Authorizer
+        const authorizer = new apigateway.RequestAuthorizer(this, 'WallcrawlerAuthorizer', {
+            handler: authorizerLambda,
+            identitySources: [
+                apigateway.IdentitySource.header('x-wc-api-key'),
+                apigateway.IdentitySource.header('x-wc-project-id') // Optional header for Stagehand
+            ],
+            resultsCacheTtl: cdk.Duration.minutes(5), // Cache auth results for 5 minutes
+            authorizerName: 'WallcrawlerApiKeyAuthorizer',
         });
 
+        // Configure API Gateway to pass the AWS API key from authorizer to backend
+        // This is done at the integration level for each method
+
+        // API Key for internal authentication (passed to Lambda Authorizer)
+        const apiKey = api.addApiKey('WallcrawlerInternalApiKey', {
+            apiKeyName: 'wallcrawler-internal-api-key',
+            description: 'Internal API key for AWS API Gateway access',
+        });
 
         const usagePlan = api.addUsagePlan('WallcrawlerUsagePlan', {
             name: 'Wallcrawler Usage Plan',
@@ -482,6 +504,62 @@ export class WallcrawlerStack extends cdk.Stack {
         usagePlan.addApiStage({
             stage: api.deploymentStage
         });
+
+        // Update the authorizer Lambda with the API key
+        const apiKeyRetriever = new cr.AwsCustomResource(this, 'AuthorizerApiKeyRetriever', {
+            onCreate: {
+                service: 'APIGateway',
+                action: 'getApiKey',
+                parameters: {
+                    apiKey: apiKey.keyId,
+                    includeValue: true,
+                },
+                physicalResourceId: cr.PhysicalResourceId.of(apiKey.keyId),
+            },
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new iam.PolicyStatement({
+                    actions: ['apigateway:GET'],
+                    resources: ['*'],
+                }),
+            ]),
+        });
+
+        const authorizerApiKeyUpdater = new cr.AwsCustomResource(this, 'AuthorizerApiKeyUpdater', {
+            onCreate: {
+                service: 'Lambda',
+                action: 'updateFunctionConfiguration',
+                parameters: {
+                    FunctionName: authorizerLambda.functionName,
+                    Environment: {
+                        Variables: {
+                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
+                        },
+                    },
+                },
+                physicalResourceId: cr.PhysicalResourceId.of(`${authorizerLambda.functionName}-api-key-update`),
+            },
+            onUpdate: {
+                service: 'Lambda',
+                action: 'updateFunctionConfiguration',
+                parameters: {
+                    FunctionName: authorizerLambda.functionName,
+                    Environment: {
+                        Variables: {
+                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
+                        },
+                    },
+                },
+            },
+            policy: cr.AwsCustomResourcePolicy.fromStatements([
+                new iam.PolicyStatement({
+                    actions: ['lambda:UpdateFunctionConfiguration'],
+                    resources: [authorizerLambda.functionArn],
+                }),
+            ]),
+        });
+
+        authorizerApiKeyUpdater.node.addDependency(apiKey);
+        authorizerApiKeyUpdater.node.addDependency(apiKeyRetriever);
 
         // Request validator for API
         const requestValidator = new apigateway.RequestValidator(this, 'RequestValidator', {
@@ -508,6 +586,16 @@ export class WallcrawlerStack extends cdk.Stack {
             });
         };
 
+        // Helper function to create Lambda integration with AWS API key injection
+        const createAuthenticatedIntegration = (lambdaFunction: lambda.Function) => {
+            return new apigateway.LambdaIntegration(lambdaFunction, {
+                proxy: true,
+                requestParameters: {
+                    'integration.request.header.X-Api-Key': 'context.authorizer.awsApiKey'
+                }
+            });
+        };
+
         // =================================================================
         // GROUP 1: SDK-COMPATIBLE ENDPOINTS (Browserbase-style API)
         // All endpoints under /v1/ that match the SDK expectations
@@ -518,67 +606,13 @@ export class WallcrawlerStack extends cdk.Stack {
         // --- Sessions Resource (/v1/sessions) ---
         const v1SessionsResource = v1Resource.addResource('sessions');
 
-        // POST /v1/sessions - Create session (via Step Functions)
-        // Create IAM role for API Gateway to invoke Step Functions
-        const apiGatewayStepFunctionsRole = new iam.Role(this, 'ApiGatewayStepFunctionsRole', {
-            assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
-            inlinePolicies: {
-                StepFunctionsExecutionPolicy: new iam.PolicyDocument({
-                    statements: [
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: ['states:StartSyncExecution'],
-                            resources: [sessionCreationWorkflow.stateMachineArn],
-                        }),
-                    ],
-                }),
-            },
-        });
+        // Step Functions role removed - using direct Lambda integration
 
-        // Create Step Functions integration
+        // POST /v1/sessions - Create session (direct Lambda integration)
         v1SessionsResource.addMethod('POST',
-            new apigateway.AwsIntegration({
-                service: 'states',
-                action: 'StartSyncExecution',
-                integrationHttpMethod: 'POST',
-                options: {
-                    credentialsRole: apiGatewayStepFunctionsRole,
-                    requestTemplates: {
-                        'application/json': JSON.stringify({
-                            stateMachineArn: sessionCreationWorkflow.stateMachineArn,
-                            input: "$util.escapeJavaScript($input.json('$'))"
-                        }),
-                    },
-                    integrationResponses: [
-                        {
-                            statusCode: '200',
-                            responseTemplates: {
-                                'application/json': "$input.path('$.output')",
-                            },
-                        },
-                        {
-                            statusCode: '400',
-                            selectionPattern: '4\\d{2}',
-                            responseTemplates: {
-                                'application/json': JSON.stringify({
-                                    error: "$input.path('$.error')",
-                                }),
-                            },
-                        },
-                        {
-                            statusCode: '500',
-                            selectionPattern: '5\\d{2}',
-                            responseTemplates: {
-                                'application/json': JSON.stringify({
-                                    error: "$input.path('$.error')",
-                                }),
-                            },
-                        },
-                    ],
-                },
-            }),
+            createAuthenticatedIntegration(sdkSessionsCreateLambda),
             {
-                apiKeyRequired: true,
+                authorizer,
                 requestValidator,
                 methodResponses: [
                     { statusCode: '200' },
@@ -590,8 +624,8 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/sessions - List sessions
         v1SessionsResource.addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsListLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsListLambda),
+            { authorizer }
         );
 
         // Session-specific SDK endpoints (/v1/sessions/{id})
@@ -599,45 +633,45 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/sessions/{id} - Retrieve session
         v1SessionResource.addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // POST /v1/sessions/{id} - Update session  
         v1SessionResource.addMethod('POST',
-            new apigateway.LambdaIntegration(sdkSessionsUpdateLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsUpdateLambda),
+            { authorizer }
         );
 
         // GET /v1/sessions/{id}/debug - Debug/live URLs
         v1SessionResource.addResource('debug').addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsDebugLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsDebugLambda),
+            { authorizer }
         );
 
         // GET /v1/sessions/{id}/downloads - Downloads
         v1SessionResource.addResource('downloads').addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // GET /v1/sessions/{id}/logs - Logs
         v1SessionResource.addResource('logs').addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // GET /v1/sessions/{id}/recording - Recording
         v1SessionResource.addResource('recording').addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // POST /v1/sessions/{id}/uploads - Uploads
         v1SessionResource.addResource('uploads').addMethod('POST',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
             {
-                apiKeyRequired: true,
+                authorizer,
                 requestValidator,
             }
         );
@@ -647,9 +681,9 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // POST /v1/contexts - Create context
         v1ContextsResource.addMethod('POST',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
             {
-                apiKeyRequired: true,
+                authorizer,
                 requestValidator,
             }
         );
@@ -659,15 +693,15 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/contexts/{id} - Retrieve context
         v1ContextResource.addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // PUT /v1/contexts/{id} - Update context
         v1ContextResource.addMethod('PUT',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
             {
-                apiKeyRequired: true,
+                authorizer,
                 requestValidator,
             }
         );
@@ -677,9 +711,9 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // POST /v1/extensions - Create extension
         v1ExtensionsResource.addMethod('POST',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
             {
-                apiKeyRequired: true,
+                authorizer,
                 requestValidator,
             }
         );
@@ -689,14 +723,14 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/extensions/{id} - Retrieve extension
         v1ExtensionResource.addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // DELETE /v1/extensions/{id} - Delete extension
         v1ExtensionResource.addMethod('DELETE',
-            new apigateway.LambdaIntegration(sdkSessionsUpdateLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsUpdateLambda),
+            { authorizer }
         );
 
         // --- Projects Resource (/v1/projects) ---
@@ -704,8 +738,8 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/projects - List projects
         v1ProjectsResource.addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // Project-specific endpoints (/v1/projects/{id})
@@ -713,14 +747,14 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/projects/{id} - Retrieve project
         v1ProjectResource.addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // GET /v1/projects/{id}/usage - Project usage
         v1ProjectResource.addResource('usage').addMethod('GET',
-            new apigateway.LambdaIntegration(sdkSessionsRetrieveLambda, { proxy: true }),
-            { apiKeyRequired: true }
+            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            { authorizer }
         );
 
         // =================================================================
@@ -733,9 +767,9 @@ export class WallcrawlerStack extends cdk.Stack {
         // POST /sessions/start - Stagehand-compatible AI session creation
         const startResource = sessionsResource.addResource('start');
         startResource.addMethod('POST',
-            new apigateway.LambdaIntegration(apiSessionsStartLambda, { proxy: true }),
+            createAuthenticatedIntegration(apiSessionsStartLambda),
             {
-                apiKeyRequired: true,
+                authorizer,
                 requestValidator,
             }
         );
@@ -868,133 +902,72 @@ export class WallcrawlerStack extends cdk.Stack {
         }));
 
         // =================================================================
-        // PUBLIC PROXY API - No AWS API Key Required
-        // This is the public-facing API that only requires Wallcrawler API key
+        // CLOUDFRONT DISTRIBUTION - DDoS Protection & Caching
+        // Public-facing CDN that routes to API Gateway with Lambda Authorizer
         // =================================================================
 
-        // Proxy Lambda function
-        const proxyLambda = createLambdaFunction(
-            'ProxyLambda',
-            'proxy',
-            'Public API proxy that adds AWS API key server-side',
-            1 // 1 minute timeout should be enough for most requests
-        );
-
-        // Pass the internal API URL to the proxy
-        proxyLambda.addEnvironment('INTERNAL_API_URL', api.url);
-        
-        // Create a custom resource to retrieve and set the API key
-        const apiKeyRetriever = new cr.AwsCustomResource(this, 'ApiKeyRetriever', {
-            onCreate: {
-                service: 'APIGateway',
-                action: 'getApiKey',
-                parameters: {
-                    apiKey: apiKey.keyId,
-                    includeValue: true,
-                },
-                physicalResourceId: cr.PhysicalResourceId.of(apiKey.keyId),
-            },
-            policy: cr.AwsCustomResourcePolicy.fromStatements([
-                new iam.PolicyStatement({
-                    actions: ['apigateway:GET'],
-                    resources: ['*'],
-                }),
-            ]),
-        });
-
-        // Update the proxy Lambda with the API key
-        const apiKeyUpdater = new cr.AwsCustomResource(this, 'ProxyApiKeyUpdater', {
-            onCreate: {
-                service: 'Lambda',
-                action: 'updateFunctionConfiguration',
-                parameters: {
-                    FunctionName: proxyLambda.functionName,
-                    Environment: {
-                        Variables: {
-                            INTERNAL_API_URL: api.url,
-                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
-                        },
+        // Create CloudFront distribution
+        const distribution = new cloudfront.Distribution(this, 'WallcrawlerDistribution', {
+            comment: 'Wallcrawler API CloudFront Distribution',
+            defaultBehavior: {
+                origin: new origins.RestApiOrigin(api, {
+                    customHeaders: {
+                        // CloudFront will pass these headers to API Gateway
                     },
-                },
-                physicalResourceId: cr.PhysicalResourceId.of(`${proxyLambda.functionName}-api-key-update`),
-            },
-            onUpdate: {
-                service: 'Lambda',
-                action: 'updateFunctionConfiguration',
-                parameters: {
-                    FunctionName: proxyLambda.functionName,
-                    Environment: {
-                        Variables: {
-                            INTERNAL_API_URL: api.url,
-                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
-                        },
-                    },
-                },
-            },
-            policy: cr.AwsCustomResourcePolicy.fromStatements([
-                new iam.PolicyStatement({
-                    actions: ['lambda:UpdateFunctionConfiguration'],
-                    resources: [proxyLambda.functionArn],
                 }),
-            ]),
-        });
-
-        // Ensure the update happens after the API key is created
-        apiKeyUpdater.node.addDependency(apiKey);
-        apiKeyUpdater.node.addDependency(apiKeyRetriever);
-
-        // Create PUBLIC API Gateway (no AWS key required)
-        const publicApi = new apigateway.RestApi(this, 'WallcrawlerPublicAPI', {
-            restApiName: 'Wallcrawler Public API',
-            description: 'Public API that only requires Wallcrawler API key',
-            deployOptions: {
-                stageName: environment,
-                description: `${environment} stage - Public API`,
+                allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+                cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+                cachePolicy: new cloudfront.CachePolicy(this, 'WallcrawlerCachePolicy', {
+                    cachePolicyName: `WallcrawlerAPICache-${environment}`,
+                    comment: 'Cache policy for Wallcrawler API',
+                    defaultTtl: cdk.Duration.seconds(0), // Don't cache API responses by default
+                    minTtl: cdk.Duration.seconds(0),
+                    maxTtl: cdk.Duration.seconds(0),
+                    headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
+                        'x-wc-api-key',
+                        'x-wc-project-id',
+                        'x-wc-session-id',
+                        'Content-Type',
+                        'Authorization'
+                    ),
+                    queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
+                    enableAcceptEncodingGzip: true,
+                    enableAcceptEncodingBrotli: true,
+                }),
+                viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             },
-            defaultCorsPreflightOptions: {
-                allowOrigins: apigateway.Cors.ALL_ORIGINS,
-                allowMethods: apigateway.Cors.ALL_METHODS,
-                allowHeaders: [
-                    'Content-Type',
-                    'x-wc-api-key',
-                    'x-wc-project-id', 
-                    'x-wc-session-id',
-                    'x-model-api-key',
-                    'x-stream-response',
-                    'x-sent-at',
-                    'x-language',
-                    'x-sdk-version',
-                ],
-            },
-        });
-
-        // Proxy ALL requests to the Lambda
-        const proxyIntegration = new apigateway.LambdaIntegration(proxyLambda, {
-            proxy: true,
-        });
-
-        // Add proxy for root and all paths
-        publicApi.root.addProxy({
-            defaultIntegration: proxyIntegration,
-            anyMethod: true,
+            // Cache 401/403 responses to prevent DDoS
+            errorResponses: [
+                {
+                    httpStatus: 401,
+                    ttl: cdk.Duration.minutes(5), // Cache unauthorized for 5 minutes
+                },
+                {
+                    httpStatus: 403,
+                    ttl: cdk.Duration.minutes(5), // Cache forbidden for 5 minutes
+                },
+            ],
+            // Enable AWS Shield Standard (free)
+            enableIpv6: true,
+            priceClass: cloudfront.PriceClass.PRICE_CLASS_100, // Use only North America and Europe edge locations for cost savings
         });
 
         // CloudFormation outputs
-        new cdk.CfnOutput(this, 'PublicAPIGatewayURL', {
-            description: 'Public API Gateway URL (only requires Wallcrawler API key)',
-            value: publicApi.url,
-            exportName: 'WallcrawlerPublicAPIURL',
+        new cdk.CfnOutput(this, 'CloudFrontURL', {
+            description: 'CloudFront distribution URL for Wallcrawler API',
+            value: `https://${distribution.distributionDomainName}`,
+            exportName: 'WallcrawlerCloudFrontURL',
         });
 
         new cdk.CfnOutput(this, 'InternalAPIGatewayURL', {
-            description: 'Internal API Gateway URL (requires AWS API key)',
+            description: 'Internal API Gateway URL (for debugging only)',
             value: api.url,
         });
 
-        // Keep the original output name but point to public API
+        // Keep the original output name but point to CloudFront
         new cdk.CfnOutput(this, 'APIGatewayURL', {
-            description: 'API Gateway endpoint URL (Public API)',
-            value: publicApi.url,
+            description: 'API endpoint URL (via CloudFront)',
+            value: `https://${distribution.distributionDomainName}`,
         });
 
         new cdk.CfnOutput(this, 'ApiKeyId', {

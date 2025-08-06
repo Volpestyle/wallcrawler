@@ -13,7 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecs v1.41.7
 	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.31.0
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.35.8
-	github.com/aws/aws-sdk-go-v2/service/sfn v1.37.0
+	github.com/aws/aws-sdk-go-v2/service/sns v1.36.0
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
 	github.com/chromedp/chromedp v0.14.0
 	github.com/golang-jwt/jwt/v5 v5.2.1

@@ -1,4 +1,4 @@
-package proxy
+package utils
 
 import (
 	"log"
@@ -47,14 +47,6 @@ func ValidateWallcrawlerAPIKey(apiKey string) bool {
 	return true
 }
 
-// ExtractProjectID extracts the project ID from a Wallcrawler API key
-// This is a placeholder for future implementation
-func ExtractProjectID(apiKey string) string {
-	// TODO: In production, look up the project ID from the API key
-	// For now, return a default
-	return "default-project"
-}
-
 // GetAPIKeyMetadata returns metadata about an API key
 // This is a placeholder for future implementation
 type APIKeyMetadata struct {
@@ -69,20 +61,4 @@ type RateLimitConfig struct {
 	RequestsPerMinute int
 	RequestsPerHour   int
 	RequestsPerDay    int
-}
-
-func GetAPIKeyMetadata(apiKey string) (*APIKeyMetadata, error) {
-	// TODO: Implement database lookup
-	// For now, return mock data
-	return &APIKeyMetadata{
-		ProjectID:   ExtractProjectID(apiKey),
-		UserID:      "user-123",
-		Permissions: []string{"sessions.create", "sessions.list", "sessions.retrieve"},
-		RateLimits: RateLimitConfig{
-			RequestsPerMinute: 60,
-			RequestsPerHour:   1000,
-			RequestsPerDay:    10000,
-		},
-		Active: true,
-	}, nil
 }
