@@ -1,139 +1,83 @@
-# Wallcrawler
+### Wallcrawler Monorepo
 
-> **Serverless Browser Automation Platform using AWS and Stagehand**
+Self‑hosted, AWS‑backed remote browser platform with Stagehand LLM browsing, compatible with Browserbase APIs. This monorepo contains the infrastructure, backend services, SDK, and UI components to run Wallcrawler in your own AWS account.
 
-Wallcrawler is a serverless browser automation platform that integrates Stagehand for LLM-driven automation. Similar to Browserbase or Browserless.io, but designed as an in-house solution leveraging AWS infrastructure for scalable browser sessions.
+### Quick links
 
-## 📖 Overview
+- **Architecture**: [docs/infra/ARCHITECTURE.md](docs/infra/ARCHITECTURE.md)
+- **Event Systems**: [docs/infra/EVENT_SYSTEMS_ARCHITECTURE.md](docs/infra/EVENT_SYSTEMS_ARCHITECTURE.md)
+- **DynamoDB Schema**: [docs/infra/DYNAMODB_SCHEMA.md](docs/infra/DYNAMODB_SCHEMA.md)
+- **Multi‑Arch Docker**: [docs/infra/MULTI_ARCH_DOCKER_SOLUTION.md](docs/infra/MULTI_ARCH_DOCKER_SOLUTION.md)
+- **Deployment Guide**: [docs/deploy/DEPLOYMENT_GUIDE.md](docs/deploy/DEPLOYMENT_GUIDE.md)
+- **API Endpoints Reference**: [docs/api/api-endpoints-reference.md](docs/api/api-endpoints-reference.md)
+- **SDK Integration Guide**: [docs/api/sdk-integration-guide.md](docs/api/sdk-integration-guide.md)
+- **Sessions**:
+  - JWT Signing Key Flow: [docs/api/sessions/jwt-signing-key-flow.md](docs/api/sessions/jwt-signing-key-flow.md)
+  - Container Lifecycle: [docs/api/sessions/wallcrawler-container-lifecycle.md](docs/api/sessions/wallcrawler-container-lifecycle.md)
+  - CloudWatch Logging Best Practices: [docs/api/sessions/cloudwatch-logging-best-practices.md](docs/api/sessions/cloudwatch-logging-best-practices.md)
 
-Wallcrawler provides:
+### Packages
 
-- **Remote Browser Sessions**: AWS ECS-based browser instances with WebSocket streaming
-- **LLM Integration**: Powered by Stagehand for intelligent browser automation
-- **Serverless Architecture**: Lambda functions with API Gateway and EventBridge coordination
-- **WebSocket Streaming**: Real-time browser viewport streaming and interaction
-- **SDK & Components**: Client libraries and React components for easy integration
+- `@wallcrawler/aws-cdk` — AWS CDK app defining all infrastructure (API Gateway, Lambda, ECS/Fargate, EventBridge, DynamoDB, Redis, etc.)
+  - Source: [packages/aws-cdk/](packages/aws-cdk/)
+  - See: [docs/infra/ARCHITECTURE.md](docs/infra/ARCHITECTURE.md) and [docs/deploy/DEPLOYMENT_GUIDE.md](docs/deploy/DEPLOYMENT_GUIDE.md)
 
-## 🏗️ Architecture
+- `@wallcrawler/backend-go` — Go Lambda handlers and services for SDK‑compatible endpoints and orchestration
+  - Source: [packages/backend-go/](packages/backend-go/)
+  - README: [packages/backend-go/README.md](packages/backend-go/README.md)
 
-For detailed architecture documentation, see [docs/wallcrawler-design-doc.md](./docs/wallcrawler-design-doc.md).
+- `@wallcrawler/sdk-node` — TypeScript/Node client for Wallcrawler’s REST API (Browserbase‑compatible)
+  - Source: [packages/sdk-node/](packages/sdk-node/)
+  - README: [packages/sdk-node/README.md](packages/sdk-node/README.md)
+  - API: [packages/sdk-node/api.md](packages/sdk-node/api.md)
 
-Key components:
+- `@wallcrawler/stagehand` — Stagehand fork used by Wallcrawler for LLM‑powered browsing
+  - Source: [packages/stagehand/](packages/stagehand/)
+  - README: [packages/stagehand/README.md](packages/stagehand/README.md)
 
-- **API Gateway** → Lambda handlers for session management
-- **ECS Tasks** → Browser instances with Stagehand integration
-- **Redis** → Session state and metadata storage
-- **EventBridge** → Session lifecycle coordination
-- **WebSocket API** → Real-time browser streaming
-
-## 📦 Packages
-
-This monorepo contains the following packages:
-
-| Package           | Description                              | Language         |
-| ----------------- | ---------------------------------------- | ---------------- |
-| `util-ts`         | Shared TypeScript types and utilities    | TypeScript       |
-| `util-go`         | Shared Go utilities and modules          | Go               |
-| `wallcrawler-sdk` | Client-side SDK (like Browserbase SDK)   | TypeScript       |
-| `components`      | React components for browser viewing     | TypeScript/React |
-| `aws-cdk`         | AWS Infrastructure as Code               | TypeScript       |
-| `backend-go`      | Lambda handlers and ECS controller       | Go               |
-| `stagehand`       | Forked Stagehand library (git submodule) | TypeScript       |
-
-## 🚀 Quick Start
+- `@wallcrawler/components` — UI components (e.g., `BrowserViewport`) for embedding live sessions
+  - Source: [packages/components/](packages/components/)
 
 ### Prerequisites
 
-- Node.js >= 18.0.0
-- pnpm >= 8.0.0
-- Go >= 1.21
-- AWS CLI configured
-- Docker (for local development)
+- Node.js >= 18 and pnpm >= 8
+- Go >= 1.21 (for backend)
+- AWS CLI configured for your target account
+- Docker (for local builds and multi‑arch images)
 
-### Installation
+### Getting started
 
-1. **Clone the repository**:
+```bash
+# 1) Initialize submodules (if any)
+pnpm install:submodules
 
-   ```bash
-   git clone <repository-url>
-   cd wallcrawler
-   ```
+# 2) Install dependencies
+pnpm install
 
-2. **Initialize submodules**:
+# 3) Build everything
+pnpm build
 
-   ```bash
-   git submodule update --init --recursive
-   # or
-   pnpm run install:submodules
-   ```
+# 4) Generate local env (CDK helpers)
+pnpm generate-env
 
-3. **Install dependencies**:
-
-   ```bash
-   pnpm install
-   ```
-
-4. **Build all packages**:
-   ```bash
-   pnpm run build
-   ```
-
-### Development
-
-- **Start development servers**: `pnpm run dev`
-- **Run tests**: `pnpm run test`
-- **Lint code**: `pnpm run lint`
-- **Clean build artifacts**: `pnpm run clean`
-
-## 📋 Project Structure
-
-```
-wallcrawler/
-├── packages/
-│   ├── util-ts/          # Shared TypeScript utilities
-│   ├── util-go/          # Shared Go utilities
-│   ├── wallcrawler-sdk/  # Client SDK
-│   ├── components/       # React components
-│   ├── aws-cdk/          # Infrastructure code
-│   ├── backend-go/       # Go Lambda handlers
-│   └── stagehand/        # Stagehand library (submodule)
-├── docs/                 # Documentation
-└── [config files]       # Workspace configuration
+# 5) Deploy (see Deployment Guide for environments/config)
+pnpm deploy
 ```
 
-## 🔧 Configuration
+Additional scripts:
 
-### Workspace Configuration
+- Lint: `pnpm lint`
+- Tests: `pnpm test`
+- Dev (package‑scoped): `pnpm -r dev`
+- CDK Toolkit: `pnpm cdk`
 
-The monorepo is configured with:
+### API compatibility
 
-- **pnpm workspaces** for package management
-- **Prettier** for code formatting
-- **ESLint** for linting (relaxed rules with warnings)
-- **TypeScript** for type checking
+Wallcrawler provides Browserbase‑compatible APIs and Stagehand endpoints. For exact routes, request/response shapes, and streaming behavior, see:
 
-### Environment Setup
+- docs/api/api-endpoints-reference.md
+- docs/api/sdk-integration-guide.md
 
-Each package may require specific environment variables. See individual package README files for details.
+### Architecture overview
 
-## 📚 Documentation
-
-- **[Design Document](./docs/wallcrawler-design-doc.md)** - Complete system architecture and specifications
-- **[Architecture Diagrams](./docs/)** - Visual representations of system flows
-- **[Development Prompts](./docs/prompts.md)** - Step-by-step development guidance
-
-## 🤝 Contributing
-
-1. Follow the naming conventions in the design document
-2. Use pnpm for package management
-3. Favor proper TypeScript typing over `any` or `unknown`
-4. Store reusable logic in `util-ts` and `util-go` packages
-5. Build packages to verify soundness before committing
-
-## 📄 License
-
-MIT License - see individual packages for specific licensing information.
-
----
-
-**Note**: This project uses pnpm workspaces and git submodules. Make sure to run `pnpm run install:submodules` after cloning.
+High‑level design, event flows, and data models are covered in the docs referenced above. For a visual, see [docs/infra/wallcrawler-aws-architecture.png](docs/infra/wallcrawler-aws-architecture.png).
