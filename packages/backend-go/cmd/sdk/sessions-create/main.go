@@ -99,6 +99,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	// Update expiration based on timeout
 	expiresAt := time.Now().Add(time.Duration(req.Timeout) * time.Second)
 	sessionState.ExpiresAt = expiresAt.Format(time.RFC3339)
+	sessionState.ExpiresAtUnix = expiresAt.Unix()
 
 	// Store SDK-specific metadata
 	if sessionState.UserMetadata == nil {
@@ -254,16 +255,21 @@ func SNSHandler(ctx context.Context, snsEvent events.SNSEvent) error {
 func main() {
 	// This Lambda handles both API Gateway requests and SNS notifications
 	lambda.Start(func(ctx context.Context, event interface{}) (interface{}, error) {
-		// Try to parse as API Gateway request
-		if apiReq, ok := event.(events.APIGatewayProxyRequest); ok {
+		// Parse the event using the utility function
+		parsedEvent, eventType, err := utils.ParseLambdaEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		
+		switch eventType {
+		case utils.EventTypeAPIGateway:
+			apiReq := parsedEvent.(events.APIGatewayProxyRequest)
 			return Handler(ctx, apiReq)
-		}
-		
-		// Try to parse as SNS event
-		if snsEvent, ok := event.(events.SNSEvent); ok {
+		case utils.EventTypeSNS:
+			snsEvent := parsedEvent.(events.SNSEvent)
 			return nil, SNSHandler(ctx, snsEvent)
+		default:
+			return nil, fmt.Errorf("unexpected event type")
 		}
-		
-		return nil, fmt.Errorf("unsupported event type: %T", event)
 	})
 }

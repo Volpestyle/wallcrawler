@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -41,5 +42,18 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 }
 
 func main() {
-	lambda.Start(Handler)
+	lambda.Start(func(ctx context.Context, event interface{}) (interface{}, error) {
+		// Parse the event using the utility function
+		parsedEvent, eventType, err := utils.ParseLambdaEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		
+		if eventType != utils.EventTypeAPIGateway {
+			return nil, fmt.Errorf("expected API Gateway event, got %v", eventType)
+		}
+		
+		apiReq := parsedEvent.(events.APIGatewayProxyRequest)
+		return Handler(ctx, apiReq)
+	})
 }

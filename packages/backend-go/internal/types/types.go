@@ -182,6 +182,7 @@ type SessionState struct {
 	ID           string                 `json:"id"`
 	CreatedAt    string                 `json:"createdAt"`
 	ExpiresAt    string                 `json:"expiresAt"`
+	ExpiresAtUnix int64                 `json:"-" dynamodbav:"expiresAt"` // Numeric timestamp for DynamoDB GSI
 	KeepAlive    bool                   `json:"keepAlive"`
 	ProjectID    string                 `json:"projectId"`
 	ProxyBytes   int                    `json:"proxyBytes"`

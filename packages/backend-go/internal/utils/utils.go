@@ -31,6 +31,60 @@ var (
 	ConnectURL        = os.Getenv("CONNECT_URL_BASE")
 )
 
+// EventType represents the type of Lambda event
+type EventType int
+
+const (
+	EventTypeUnknown EventType = iota
+	EventTypeAPIGateway
+	EventTypeSNS
+)
+
+// ParseLambdaEvent converts raw Lambda events to their proper types
+// This handles the case where API Gateway with custom authorizers sends events as map[string]interface{}
+func ParseLambdaEvent(event interface{}) (interface{}, EventType, error) {
+	// Try direct type assertion for API Gateway request
+	if apiReq, ok := event.(events.APIGatewayProxyRequest); ok {
+		return apiReq, EventTypeAPIGateway, nil
+	}
+	
+	// Try direct type assertion for SNS event
+	if snsEvent, ok := event.(events.SNSEvent); ok {
+		return snsEvent, EventTypeSNS, nil
+	}
+	
+	// Handle raw map from API Gateway (happens with custom authorizers)
+	if rawEvent, ok := event.(map[string]interface{}); ok {
+		// Marshal to JSON to properly convert the map
+		eventJSON, err := json.Marshal(rawEvent)
+		if err != nil {
+			return nil, EventTypeUnknown, fmt.Errorf("failed to marshal raw event: %v", err)
+		}
+		
+		// Try to parse as API Gateway request first (most common)
+		var apiReq events.APIGatewayProxyRequest
+		if err := json.Unmarshal(eventJSON, &apiReq); err == nil {
+			// Check if it has required fields to be an API Gateway request
+			if apiReq.HTTPMethod != "" && apiReq.Path != "" {
+				return apiReq, EventTypeAPIGateway, nil
+			}
+		}
+		
+		// Try to parse as SNS event
+		var snsEvent events.SNSEvent
+		if err := json.Unmarshal(eventJSON, &snsEvent); err == nil {
+			// Check if it has SNS records
+			if len(snsEvent.Records) > 0 {
+				return snsEvent, EventTypeSNS, nil
+			}
+		}
+		
+		return nil, EventTypeUnknown, fmt.Errorf("unable to determine event type from raw map")
+	}
+	
+	return nil, EventTypeUnknown, fmt.Errorf("unsupported event type: %T", event)
+}
+
 // GetDynamoDBClient returns a configured DynamoDB client
 func GetDynamoDBClient(ctx context.Context) (*dynamodb.Client, error) {
 	cfg, err := GetAWSConfig()
@@ -164,7 +218,12 @@ func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID strin
 	// Convert DynamoDB item to SessionState
 	var sessionState types.SessionState
 	err = attributevalue.UnmarshalMap(result.Item, &sessionState)
-	if err != nil {
+	if err == nil {
+		// Automatic unmarshal succeeded - ensure ExpiresAt string is populated from Unix timestamp
+		if sessionState.ExpiresAtUnix > 0 && sessionState.ExpiresAt == "" {
+			sessionState.ExpiresAt = time.Unix(sessionState.ExpiresAtUnix, 0).Format(time.RFC3339)
+		}
+	} else {
 		// Try manual unmarshaling for better control
 		sessionState.ID = getStringValue(result.Item["sessionId"])
 		sessionState.Status = getStringValue(result.Item["status"])
@@ -172,7 +231,14 @@ func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID strin
 		sessionState.KeepAlive = getBoolValue(result.Item["keepAlive"])
 		sessionState.Region = getStringValue(result.Item["region"])
 		sessionState.StartedAt = getStringValue(result.Item["startedAt"])
-		sessionState.ExpiresAt = getStringValue(result.Item["expiresAt"])
+		// Handle expiresAt - it's stored as a number in DynamoDB but needs to be a string in the API
+		if expiresAtUnix := getNumberValue(result.Item["expiresAt"]); expiresAtUnix > 0 {
+			sessionState.ExpiresAtUnix = expiresAtUnix
+			sessionState.ExpiresAt = time.Unix(expiresAtUnix, 0).Format(time.RFC3339)
+		} else {
+			// Fallback for old format (string)
+			sessionState.ExpiresAt = getStringValue(result.Item["expiresAt"])
+		}
 		sessionState.ProxyBytes = int(getNumberValue(result.Item["proxyBytes"]))
 		sessionState.PublicIP = getStringValue(result.Item["publicIP"])
 		sessionState.ECSTaskARN = getStringValue(result.Item["ecsTaskArn"])
@@ -698,7 +764,9 @@ func AddSessionEvent(ctx context.Context, ddbClient *dynamodb.Client, sessionID,
 func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.ModelConfig) *types.SessionState {
 	now := time.Now()
 	nowStr := now.Format(time.RFC3339)
-	expiresAt := now.Add(24 * time.Hour).Format(time.RFC3339)
+	expiresAtTime := now.Add(24 * time.Hour)
+	expiresAt := expiresAtTime.Format(time.RFC3339)
+	expiresAtUnix := expiresAtTime.Unix()
 
 	// Default resource limits
 	defaultLimits := &types.ResourceLimits{
@@ -725,6 +793,7 @@ func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.M
 		StartedAt:      nowStr,
 		UpdatedAt:      nowStr,
 		ExpiresAt:      expiresAt,
+		ExpiresAtUnix:  expiresAtUnix,
 		KeepAlive:      false,
 		Region:         "us-east-1",
 		ProxyBytes:     0,

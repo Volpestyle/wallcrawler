@@ -330,7 +330,7 @@ export class WallcrawlerStack extends cdk.Stack {
             'SDKSessionsCreateLambda',
             'sdk/sessions-create',
             'SDK: Create sessions synchronously',
-            60 // 60 second timeout - waits for container to be ready
+            1 // 1 minute timeout - waits for container to be ready
         );
 
         // Subscribe to SNS topic for session ready notifications
@@ -472,8 +472,8 @@ export class WallcrawlerStack extends cdk.Stack {
         const authorizer = new apigateway.RequestAuthorizer(this, 'WallcrawlerAuthorizer', {
             handler: authorizerLambda,
             identitySources: [
-                apigateway.IdentitySource.header('x-wc-api-key'),
-                apigateway.IdentitySource.header('x-wc-project-id') // Optional header for Stagehand
+                apigateway.IdentitySource.header('x-wc-api-key')
+                // x-wc-project-id is optional - it can be read from headers in the Lambda but not required by API Gateway
             ],
             resultsCacheTtl: cdk.Duration.minutes(5), // Cache auth results for 5 minutes
             authorizerName: 'WallcrawlerApiKeyAuthorizer',
@@ -892,6 +892,20 @@ export class WallcrawlerStack extends cdk.Stack {
             ],
         }));
 
+        // Add DynamoDB Streams permissions for the stream processor Lambda
+        lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                'dynamodb:GetRecords',
+                'dynamodb:GetShardIterator',
+                'dynamodb:DescribeStream',
+                'dynamodb:ListStreams',
+            ],
+            resources: [
+                `${sessionsTable.tableArn}/stream/*`,
+            ],
+        }));
+
         // Add DynamoDB permissions to ECS task role for status updates
         browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -917,31 +931,30 @@ export class WallcrawlerStack extends cdk.Stack {
                 }),
                 allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
                 cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+                // Custom cache policy with minimal caching (1 second) to forward Authorization header
+                // This is required because CloudFront doesn't allow header configuration with TTL=0
                 cachePolicy: new cloudfront.CachePolicy(this, 'WallcrawlerCachePolicy', {
                     cachePolicyName: `WallcrawlerAPICache-${environment}`,
-                    comment: 'Cache policy for Wallcrawler API',
-                    defaultTtl: cdk.Duration.seconds(0), // Don't cache API responses by default
-                    minTtl: cdk.Duration.seconds(0),
-                    maxTtl: cdk.Duration.seconds(0),
+                    comment: 'Minimal cache policy for Wallcrawler API with Authorization header',
+                    defaultTtl: cdk.Duration.seconds(1), // Minimum TTL to allow header configuration
+                    minTtl: cdk.Duration.seconds(1),
+                    maxTtl: cdk.Duration.seconds(1),
                     headerBehavior: cloudfront.CacheHeaderBehavior.allowList(
+                        'Authorization',
                         'x-wc-api-key',
                         'x-wc-project-id',
                         'x-wc-session-id',
-                        'Content-Type',
-                        'Authorization'
+                        'Content-Type'
                     ),
                     queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
+                    cookieBehavior: cloudfront.CacheCookieBehavior.none(),
                     enableAcceptEncodingGzip: true,
                     enableAcceptEncodingBrotli: true,
                 }),
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             },
-            // Cache 401/403 responses to prevent DDoS
+            // Cache 403 responses to prevent DDoS (401 is not supported by CloudFront)
             errorResponses: [
-                {
-                    httpStatus: 401,
-                    ttl: cdk.Duration.minutes(5), // Cache unauthorized for 5 minutes
-                },
                 {
                     httpStatus: 403,
                     ttl: cdk.Duration.minutes(5), // Cache forbidden for 5 minutes

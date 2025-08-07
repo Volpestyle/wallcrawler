@@ -32,11 +32,35 @@ npm run deploy:prod
 
 ## Environment Configurations
 
-| Environment | API Endpoint | Features | Cost Optimizations |
-|------------|--------------|----------|-------------------|
-| **dev** | `https://xxx.execute-api.{region}.amazonaws.com/dev` | - No NAT Gateway<br>- DynamoDB on-demand<br>- Minimal Redis (t3.micro) | ~$10/month |
-| **staging** | `https://xxx.execute-api.{region}.amazonaws.com/staging` | - Same as dev<br>- For integration testing | ~$10/month |
-| **prod** | `https://xxx.execute-api.{region}.amazonaws.com/prod` | - NAT Gateway enabled<br>- Production security<br>- Optional custom domain | ~$60/month + usage |
+| Environment | API Endpoint | Features | Idle Cost |
+|------------|--------------|----------|-----------|
+| **dev** | `https://xxx.execute-api.{region}.amazonaws.com/dev` | - No NAT Gateway<br>- DynamoDB on-demand<br>- Pay-per-use services | ~$1/month |
+| **staging** | `https://xxx.execute-api.{region}.amazonaws.com/staging` | - Same as dev<br>- For integration testing | ~$1/month |
+| **prod** | `https://xxx.execute-api.{region}.amazonaws.com/prod` | - NAT Gateway enabled<br>- Production security<br>- Optional custom domain | ~$46/month |
+
+## Cost Breakdown (Idle Infrastructure)
+
+### Resources with Ongoing Costs
+
+| Resource | Dev/Staging | Production | Notes |
+|----------|-------------|------------|-------|
+| **NAT Gateway** | $0 | ~$45/month | Only in production for high availability |
+| **Secrets Manager** | ~$0.40/month | ~$0.40/month | JWT signing key storage |
+| **CloudWatch Logs** | ~$0.50/month | ~$0.50/month | Minimal storage when not in use |
+| **Total Idle Cost** | **~$1/month** | **~$46/month** | |
+
+### Zero-Cost When Idle (Pay-Per-Use)
+
+| Resource | Billing Model | Cost When Used |
+|----------|---------------|----------------|
+| **API Gateway** | Per request | $3.50 per million requests |
+| **Lambda Functions** (9x) | Per invocation | $0.20 per million requests |
+| **DynamoDB** | On-demand | $0.25 per million reads/writes |
+| **ECS Fargate** | Per task hour | ~$0.04/hour when browser runs |
+| **CloudFront CDN** | Per request/GB | $0.085 per GB transferred |
+| **VPC** | No charge | Only NAT Gateway costs |
+
+The architecture is designed to minimize idle costs by using serverless and pay-per-use services wherever possible.
 
 ## Generated Configuration File
 

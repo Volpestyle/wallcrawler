@@ -79,9 +79,10 @@ func Handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	response := events.APIGatewayCustomAuthorizerResponse{
 		PrincipalID:    principalID,
 		PolicyDocument: policy,
+		// The AWS API key is passed via context to backend services
 		Context:        authContext,
-		// For future: map Wallcrawler key to AWS usage plan key
-		// UsageIdentifierKey: mappedAwsKey,
+		// Use the Wallcrawler API key for per-client usage tracking
+		UsageIdentifierKey: wcAPIKey,
 	}
 
 	log.Printf("Authorization successful for principal: %s", principalID)
