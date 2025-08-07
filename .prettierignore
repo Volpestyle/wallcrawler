@@ -26,3 +26,7 @@ packages/*/node_modules/
 *.log
 # Dependency directories
 .pnpm-store/
+
+# Packages with their own prettier config
+packages/sdk-node/
+packages/stagehand/

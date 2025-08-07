@@ -1,0 +1,52 @@
+{
+    "name": "@wallcrawler/aws-cdk",
+    "version": "0.1.0",
+    "private": true,
+    "description": "AWS CDK infrastructure for Wallcrawler remote browser automation",
+    "main": "dist/lib/index.js",
+    "types": "dist/lib/index.d.ts",
+    "scripts": {
+        "clean": "rm -rf dist",
+        "build": "npm run clean && tsc",
+        "build:watch": "npm run clean && tsc -w",
+        "test": "jest",
+        "cdk": "cdk",
+        "pre-deploy": "./scripts/pre-deploy-check.sh",
+        "deploy": "npm run pre-deploy && npm run build && cdk deploy --require-approval never && npm run post-deploy",
+        "deploy:ci": "npm run build && cdk deploy --require-approval never",
+        "deploy:dev": "CDK_CONTEXT_ENVIRONMENT=dev npm run pre-deploy && npm run build && cdk deploy --require-approval never --context environment=dev && npm run post-deploy",
+        "deploy:staging": "CDK_CONTEXT_ENVIRONMENT=staging npm run pre-deploy && npm run build && cdk deploy --require-approval never --context environment=staging && npm run post-deploy",
+        "deploy:prod": "CDK_CONTEXT_ENVIRONMENT=prod npm run pre-deploy && npm run build && cdk deploy --require-approval never --context environment=prod && npm run post-deploy",
+        "destroy": "cdk destroy",
+        "destroy:dev": "cdk destroy --all --context environment=dev",
+        "destroy:staging": "cdk destroy --all --context environment=staging",
+        "destroy:prod": "echo 'WARNING: About to destroy PRODUCTION! Use: cdk destroy --all --context environment=prod'",
+        "generate-config": "./scripts/generate-env-local.sh",
+        "post-deploy": "npm run generate-config",
+        "synth": "npm run build && cdk synth --all",
+        "diff": "npm run build && cdk diff --all",
+        "bootstrap": "cdk bootstrap"
+    },
+    "devDependencies": {
+        "@types/jest": "^29.5.5",
+        "@types/node": "20.6.2",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.1.1",
+        "typescript": "~5.2.2",
+        "aws-cdk": "2.120.0",
+        "ts-node": "^10.9.1"
+    },
+    "dependencies": {
+        "aws-cdk-lib": "2.120.0",
+        "constructs": "^10.0.0",
+        "source-map-support": "^0.5.21"
+    },
+    "keywords": [
+        "aws",
+        "cdk",
+        "infrastructure",
+        "browser",
+        "automation",
+        "wallcrawler"
+    ]
+}

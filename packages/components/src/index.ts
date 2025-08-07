@@ -1,1 +1,1 @@
-export { BrowserStream, type BrowserStreamProps } from './BrowserStream'; 
+export { BrowserViewport } from './BrowserViewport'; 

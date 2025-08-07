@@ -1,0 +1,54 @@
+# Build artifacts
+build/
+build-dev/
+*.zip
+
+# Go artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go binaries - prevent accidentally built binaries
+# Any executable file in cmd directories
+cmd/**/bootstrap
+cmd/**/main
+# Common binary names that might be built at root level
+/main
+/sessions-*
+/ecs-controller
+/ecs-task-processor
+/session-*
+/act
+/debug
+/end
+/screencast
+/retrieve
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.local 

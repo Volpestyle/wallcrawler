@@ -1,55 +1,17 @@
 {
     "name": "@wallcrawler/components",
     "version": "1.0.0",
-    "description": "Shared UI components for Wallcrawler applications",
-    "type": "module",
-    "main": "./dist/index.js",
-    "module": "./dist/index.js",
-    "types": "./dist/index.d.ts",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
     "scripts": {
-        "build": "tsc",
-        "dev": "tsc --watch",
-        "clean": "rm -rf dist",
-        "typecheck": "tsc --noEmit",
-        "lint": "eslint .",
-        "lint:fix": "eslint . --fix"
+        "build": "tsc"
     },
-    "files": [
-        "dist/**/*",
-        "src/**/*"
-    ],
-    "keywords": [
-        "wallcrawler",
-        "components",
-        "react",
-        "ui",
-        "browser-streaming"
-    ],
-    "author": "WallCrawler Team",
-    "license": "MIT",
     "dependencies": {
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-        "ws": "^8.18.0",
-        "lucide-react": "^0.263.1",
-        "clsx": "^2.1.0"
+        "react": "^18.2.0",
+        "@wallcrawler/sdk": "workspace:*"
     },
     "devDependencies": {
-        "@types/node": "^24.0.14",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "@types/ws": "^8.5.13",
-        "@wallcrawler/eslint-config": "workspace:*",
-        "eslint": "^9.31.0",
-        "typescript": "^5.8.3"
-    },
-    "peerDependencies": {
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0"
-    },
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/wallcrawler/wallcrawler.git",
-        "directory": "packages/components"
+        "typescript": "^5.0.0",
+        "@types/react": "^18.2.0"
     }
 }

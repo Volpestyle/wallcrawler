@@ -1,72 +1,38 @@
 {
-  "name": "wallcrawler-monorepo",
-  "version": "0.1.0",
-  "private": true,
-  "description": "AI-Powered Browser Automation Framework - Monorepo",
-  "scripts": {
-    "build": "pnpm build:sequential",
-    "build:sequential": "pnpm --filter @wallcrawler/infra-common run build && pnpm --filter @wallcrawler/stagehand run build && pnpm --filter @wallcrawler/infra-aws run build && pnpm --filter @wallcrawler/infra-local run build && pnpm --filter @wallcrawler/components run build && pnpm --filter @wallcrawler/aws-cdk run build",
-    "build:deps": "pnpm --filter @wallcrawler/infra-common run build && pnpm --filter @wallcrawler/stagehand run build",
-    "setup": "pnpm install && pnpm build:sequential",
-    "dev": "pnpm -r --parallel run dev",
-    "test": "pnpm -r run test",
-    "lint": "eslint . && pnpm --filter @wallcrawler/stagehand run lint",
-    "lint:fix": "eslint . --fix && pnpm --filter @wallcrawler/stagehand run lint",
-    "lint:packages": "pnpm -r --parallel run lint",
-    "lint:stagehand": "pnpm --filter @wallcrawler/stagehand run lint",
-    "typecheck": "pnpm -r run typecheck",
-    "clean": "pnpm -r exec rm -rf dist node_modules",
-    "format": "pnpm format:js && pnpm format:go",
-    "format:js": "prettier --write \"packages/**/*.{ts,tsx,js,jsx,json,md}\" \"*.{ts,tsx,js,jsx,json,md}\" \"!packages/stagehand/**\"",
-    "format:go": "find packages -name '*.go' -not -path '*/node_modules/*' | xargs gofmt -w",
-    "format:go:lambda": "cd packages/infra/lambda && make format",
-    "format:check": "pnpm format:check:js && pnpm format:check:go",
-    "format:check:js": "prettier --check \"packages/**/*.{ts,tsx,js,jsx,json,md}\" \"*.{ts,tsx,js,jsx,json,md}\" \"!packages/stagehand/**\"",
-    "format:check:go": "find packages -name '*.go' -not -path '*/node_modules/*' | xargs gofmt -l",
-    "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release": "pnpm build && changeset publish",
-    "yalc:publish": "pnpm build && pnpm yalc:publish-packages",
-    "yalc:publish-packages": "cd packages/stagehand && yalc publish && cd ../infra/common && yalc publish && cd ../aws && yalc publish && cd ../local && yalc publish && cd ../../deploy/aws-cdk && yalc publish && cd ../components && yalc publish",
-    "yalc:push": "cd packages/stagehand && yalc push && cd ../infra/common && yalc push && cd ../aws && yalc push && cd ../local && yalc push && cd ../../deploy/aws-cdk && yalc push && cd ../components && yalc push"
-  },
-  "packageManager": "pnpm@10.11.0",
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Volpestyle/wallcrawler.git"
-  },
-  "keywords": [
-    "browser-automation",
-    "playwright",
-    "ai",
-    "llm",
-    "vercel",
-    "web-scraping",
-    "automation"
-  ],
-  "author": "James Volpe",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/Volpestyle/wallcrawler/issues"
-  },
-  "homepage": "https://github.com/Volpestyle/wallcrawler#readme",
-  "devDependencies": {
-    "@changesets/cli": "^2.29.5",
-    "@eslint/js": "^9.31.0",
-    "@types/jest": "^30.0.0",
-    "@types/node": "^24.0.14",
-    "@wallcrawler/eslint-config": "workspace:*",
-    "eslint": "^9.31.0",
-    "globals": "^16.3.0",
-    "jest": "^30.0.4",
-    "prettier": "^3.6.2",
-    "ts-jest": "^29.4.0",
-    "tsup": "^8.5.0",
-    "tsx": "^4.20.3",
-    "typescript": "^5.8.3",
-    "typescript-eslint": "^8.37.0"
-  }
+    "name": "wallcrawler",
+    "version": "0.1.0",
+    "description": "Serverless browser automation platform using AWS and Stagehand",
+    "private": true,
+    "scripts": {
+        "build": "pnpm -r build",
+        "test": "pnpm -r test",
+        "dev": "pnpm -r dev",
+        "lint": "pnpm -r lint",
+        "clean": "pnpm -r clean",
+        "install:submodules": "git submodule update --init --recursive",
+        "deploy": "pnpm --filter @wallcrawler/aws-cdk deploy",
+        "deploy:ci": "pnpm --filter @wallcrawler/aws-cdk deploy:ci",
+        "cdk": "pnpm --filter @wallcrawler/aws-cdk cdk",
+        "generate-env": "pnpm --filter @wallcrawler/aws-cdk generate-env"
+    },
+    "keywords": [
+        "browser-automation",
+        "serverless",
+        "aws",
+        "stagehand",
+        "monorepo"
+    ],
+    "author": "Wallcrawler Team",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "eslint": "^8.0.0",
+        "prettier": "^3.0.0",
+        "typescript": "^5.0.0"
+    },
+    "engines": {
+        "node": ">=18.0.0",
+        "pnpm": ">=8.0.0"
+    },
+    "packageManager": "pnpm@10.13.1"
 }
