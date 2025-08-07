@@ -134,7 +134,7 @@ func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState 
 		"keepAlive":  &dynamotypes.AttributeValueMemberBOOL{Value: sessionState.KeepAlive},
 		"region":     &dynamotypes.AttributeValueMemberS{Value: sessionState.Region},
 		"startedAt":  &dynamotypes.AttributeValueMemberS{Value: sessionState.StartedAt},
-		"expiresAt":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ExpiresAt},
+		"expiresAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.ExpiresAtUnix, 10)},
 		"proxyBytes": &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(sessionState.ProxyBytes)},
 		"publicIP":   &dynamotypes.AttributeValueMemberS{Value: sessionState.PublicIP},
 		"ecsTaskArn": &dynamotypes.AttributeValueMemberS{Value: sessionState.ECSTaskARN},
@@ -169,7 +169,7 @@ func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState 
 	}
 
 	// Add optional fields
-	if sessionState.UserMetadata != nil && len(sessionState.UserMetadata) > 0 {
+	if len(sessionState.UserMetadata) > 0 {
 		metadataAV, err := attributevalue.Marshal(sessionState.UserMetadata)
 		if err == nil {
 			item["userMetadata"] = metadataAV
