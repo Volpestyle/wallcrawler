@@ -200,9 +200,25 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 
 	log.Printf("Successfully obtained task IP %s for session %s", taskIP, sessionID)
 
-	// Update session with task information
+	// Update status to READY in DynamoDB
+	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusReady); err != nil {
+		log.Printf("Error updating session status to READY: %v", err)
+	}
+
+	// Refresh session state to capture latest lifecycle fields
+	refreshedState, err := utils.GetSession(ctx, ddbClient, sessionID)
+	if err != nil {
+		log.Printf("Error refreshing session state after status update: %v", err)
+	} else {
+		sessionState = refreshedState
+	}
+
+	// Update session with task information and connection endpoints
 	sessionState.PublicIP = taskIP
 	sessionState.ECSTaskARN = taskArn
+	sessionState.UpdatedAt = time.Now().Format(time.RFC3339)
+	sessionState.InternalStatus = types.SessionStatusReady
+	sessionState.Status = utils.MapStatusToSDK(types.SessionStatusReady)
 
 	// Generate connect URL if we have a signing key
 	if sessionState.SigningKey != nil && *sessionState.SigningKey != "" {
@@ -213,14 +229,7 @@ func handleECSTaskStateChange(ctx context.Context, event EventBridgeEvent) error
 		log.Printf("No signing key available for session %s", sessionID)
 	}
 
-	sessionState.UpdatedAt = time.Now().Format(time.RFC3339)
-
-	// Update status to READY in DynamoDB
-	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusReady); err != nil {
-		log.Printf("Error updating session status to READY: %v", err)
-	}
-
-	// Store updated session in DynamoDB
+	// Persist connection details
 	if err := utils.StoreSession(ctx, ddbClient, sessionState); err != nil {
 		log.Printf("Error storing updated session: %v", err)
 		return err
@@ -267,7 +276,6 @@ func handleSessionTimedOut(ctx context.Context, event EventBridgeEvent) error {
 	log.Printf("Session %s timed out automatically", sessionID)
 	return nil
 }
-
 
 func main() {
 	lambda.Start(Handler)

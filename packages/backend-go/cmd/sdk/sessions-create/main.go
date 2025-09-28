@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/wallcrawler/backend-go/internal/types"
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
 
@@ -23,6 +25,15 @@ type SessionCreateRequest struct {
 	Region          string                 `json:"region,omitempty"`
 	Timeout         int                    `json:"timeout,omitempty"`
 	UserMetadata    map[string]interface{} `json:"userMetadata,omitempty"`
+}
+
+type browserSettingsContext struct {
+	ID      string `json:"id"`
+	Persist bool   `json:"persist"`
+}
+
+type browserSettings struct {
+	Context *browserSettingsContext `json:"context,omitempty"`
 }
 
 // SessionReadyNotification represents the message from SNS
@@ -68,6 +79,20 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Invalid request body"))
 	}
 
+	authorizedProjectID := utils.GetAuthorizedProjectID(request.RequestContext.Authorizer)
+	if authorizedProjectID == "" {
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Unauthorized project access"))
+	}
+
+	if req.ProjectID == "" {
+		req.ProjectID = authorizedProjectID
+	}
+
+	if !strings.EqualFold(req.ProjectID, authorizedProjectID) {
+		log.Printf("Project mismatch: request %s vs authorized %s", req.ProjectID, authorizedProjectID)
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Project ID does not match API key"))
+	}
+
 	log.Printf("Processing session creation request for project %s", req.ProjectID)
 
 	// Validate required fields
@@ -75,13 +100,18 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing required field: projectId"))
 	}
 
+	var parsedSettings browserSettings
+	if req.BrowserSettings != nil {
+		if raw, err := json.Marshal(req.BrowserSettings); err == nil {
+			_ = json.Unmarshal(raw, &parsedSettings)
+		}
+	}
+
 	// Generate session ID
 	sessionID := utils.GenerateSessionID()
 
 	// Set default timeout if not provided (24 hours)
-	if req.Timeout == 0 {
-		req.Timeout = 86400 // 24 hours in seconds
-	}
+	req.Timeout = utils.NormalizeSessionTimeout(req.Timeout)
 
 	// Set default region if not provided
 	region := req.Region
@@ -89,8 +119,12 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		region = "us-east-1"
 	}
 
+	var resolvedContextID *string
+	var contextStorageKey *string
+	var contextPersist bool
+
 	// Convert to internal session format
-	sessionState := utils.CreateSessionWithDefaults(sessionID, req.ProjectID, nil)
+	sessionState := utils.CreateSessionWithDefaults(sessionID, req.ProjectID, nil, req.Timeout)
 
 	// Update fields from request
 	sessionState.KeepAlive = req.KeepAlive
@@ -116,6 +150,13 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
+	if resolvedContextID != nil {
+		sessionState.ContextID = resolvedContextID
+		sessionState.ContextPersist = contextPersist
+		sessionState.ContextStorageKey = contextStorageKey
+		sessionState.UserMetadata["contextPersist"] = contextPersist
+	}
+
 	// Create a channel to wait for session ready notification
 	readyChan := make(chan SessionReadyNotification, 1)
 	sessionReadyChannels.Store(sessionID, readyChan)
@@ -133,6 +174,18 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if err != nil {
 		log.Printf("Error getting DynamoDB client: %v", err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
+	}
+
+	if parsedSettings.Context != nil && parsedSettings.Context.ID != "" {
+		record, err := utils.GetContextForProject(ctx, ddbClient, req.ProjectID, parsedSettings.Context.ID)
+		if err != nil {
+			return utils.CreateAPIResponse(404, utils.ErrorResponse("Context not found for project"))
+		}
+		id := record.ID
+		resolvedContextID = &id
+		key := record.StorageKey
+		contextStorageKey = &key
+		contextPersist = parsedSettings.Context.Persist
 	}
 
 	// Store session in DynamoDB with initial CREATING status
@@ -171,17 +224,19 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Update status to PROVISIONING
-	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, "PROVISIONING"); err != nil {
+	if err := utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusProvisioning); err != nil {
 		log.Printf("Error updating session status to provisioning: %v", err)
 		utils.DeleteSession(ctx, ddbClient, sessionID)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to update session status"))
 	}
+	sessionState.InternalStatus = types.SessionStatusProvisioning
+	sessionState.Status = utils.MapStatusToSDK(types.SessionStatusProvisioning)
 
 	// Create ECS task
 	taskARN, err := utils.CreateECSTask(ctx, sessionID, sessionState)
 	if err != nil {
 		log.Printf("Error creating ECS task for session %s: %v", sessionID, err)
-		utils.UpdateSessionStatus(ctx, ddbClient, sessionID, "FAILED")
+		utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusFailed)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to provision browser container"))
 	}
 
@@ -200,7 +255,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	case notification := <-readyChan:
 		// Session is ready, return the complete details
 		log.Printf("Session %s is ready with connect URL: %s", sessionID, notification.ConnectURL)
-		
+
 		response := SessionCreateResponse{
 			ID:                sessionID,
 			Status:            "RUNNING",
@@ -214,14 +269,14 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 			Region:            region,
 			SigningKey:        jwtToken,
 		}
-		
+
 		return utils.CreateAPIResponse(200, response)
-		
+
 	case <-time.After(timeout):
 		// Timeout waiting for session to be ready
 		log.Printf("Timeout waiting for session %s to be ready", sessionID)
 		utils.StopECSTask(ctx, taskARN)
-		utils.UpdateSessionStatus(ctx, ddbClient, sessionID, "TIMED_OUT")
+		utils.UpdateSessionStatus(ctx, ddbClient, sessionID, types.SessionStatusTimedOut)
 		return utils.CreateAPIResponse(504, utils.ErrorResponse("Timeout waiting for browser container to be ready"))
 	}
 }
@@ -235,7 +290,7 @@ func SNSHandler(ctx context.Context, snsEvent events.SNSEvent) error {
 			log.Printf("Error unmarshaling SNS message: %v", err)
 			continue
 		}
-		
+
 		// Check if we have a channel waiting for this session
 		if ch, ok := sessionReadyChannels.Load(notification.SessionID); ok {
 			if readyChan, ok := ch.(chan SessionReadyNotification); ok {
@@ -260,7 +315,7 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		switch eventType {
 		case utils.EventTypeAPIGateway:
 			apiReq := parsedEvent.(events.APIGatewayProxyRequest)

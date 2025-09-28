@@ -4,15 +4,25 @@
 
 ### ✅ Production Ready - SDK Endpoints (`/v1/*`)
 
-| Method | Endpoint                      | Purpose                    | Handler                 | Status             |
-| ------ | ----------------------------- | -------------------------- | ----------------------- | ------------------ |
-| `POST` | `/v1/sessions`                | Create browser session     | `sdk/sessions-create`   | ✅ **Implemented** |
-| `GET`  | `/v1/sessions`                | List user sessions         | `sdk/sessions-list`     | ✅ **Implemented** |
-| `GET`  | `/v1/sessions/{id}`           | Get session details        | `sdk/sessions-retrieve` | ✅ **Implemented** |
-| `POST` | `/v1/sessions/{id}`           | Update session (terminate) | `sdk/sessions-update`   | ✅ **Implemented** |
-| `GET`  | `/v1/sessions/{id}/debug`     | Get debug/live URLs        | `sdk/sessions-retrieve` | ✅ **Implemented** |
-| `GET`  | `/v1/sessions/{id}/logs`      | Get session logs           | `sdk/sessions-retrieve` | ✅ **Implemented** |
-| `GET`  | `/v1/sessions/{id}/recording` | Get session recording      | `sdk/sessions-retrieve` | ✅ **Implemented** |
+| Method | Endpoint                      | Purpose                           | Handler                      | Status                  |
+| ------ | ----------------------------- | --------------------------------- | ---------------------------- | ----------------------- |
+| `POST` | `/v1/sessions`                | Create browser session            | `sdk/sessions-create`        | ✅ **Implemented**      |
+| `GET`  | `/v1/sessions`                | List user sessions                | `sdk/sessions-list`          | ✅ **Implemented**      |
+| `GET`  | `/v1/sessions/{id}`           | Get session details               | `sdk/sessions-retrieve`      | ✅ **Implemented**      |
+| `POST` | `/v1/sessions/{id}`           | Update session (terminate)        | `sdk/sessions-update`        | ✅ **Implemented**      |
+| `GET`  | `/v1/sessions/{id}/debug`     | Get debug/live URLs               | `sdk/sessions-debug`         | ✅ **Implemented**      |
+| `GET`  | `/v1/sessions/{id}/logs`      | Session logs                      | `common/not-implemented`     | 🚫 **Not implemented**  |
+| `GET`  | `/v1/sessions/{id}/recording` | Session recording                 | `common/not-implemented`     | 🚫 **Not implemented**  |
+| `POST` | `/v1/sessions/{id}/uploads`   | Asset uploads                     | `common/not-implemented`     | 🚫 **Not implemented**  |
+| `POST` | `/v1/contexts`                | Create reusable browser context   | `sdk/contexts-create`        | ✅ **Implemented**      |
+| `GET`  | `/v1/contexts/{id}`           | Retrieve context metadata         | `sdk/contexts-retrieve`      | ✅ **Implemented**      |
+| `PUT`  | `/v1/contexts/{id}`           | Refresh context upload URL        | `sdk/contexts-update`        | ✅ **Implemented**      |
+| `GET`  | `/v1/projects`                | List accessible projects          | `sdk/projects-list`          | ✅ **Implemented**      |
+| `GET`  | `/v1/projects/{id}`           | Retrieve project details          | `sdk/projects-retrieve`      | ✅ **Implemented**      |
+| `GET`  | `/v1/projects/{id}/usage`     | Aggregate usage metrics by project| `sdk/projects-usage`         | ✅ **Implemented**      |
+| `POST` | `/v1/extensions`              | Upload extension                  | `common/not-implemented`     | 🚫 **Not implemented**  |
+| `GET`  | `/v1/extensions/{id}`         | Retrieve extension                | `common/not-implemented`     | 🚫 **Not implemented**  |
+| `DELETE` | `/v1/extensions/{id}`       | Delete extension                  | `common/not-implemented`     | 🚫 **Not implemented**  |
 
 ### 🔄 Stubbed - API Mode Endpoints (`/sessions/*`)
 
@@ -113,6 +123,73 @@
   }
 }
 ```
+
+> ⚠️ `GET /v1/sessions/{id}/logs`, `GET /v1/sessions/{id}/recording`, and `POST /v1/sessions/{id}/uploads` currently return `501 Not Implemented` while the capture pipeline is finalized.
+
+#### `POST /v1/contexts` - Create Context
+
+**Purpose**: Create a reusable browser context container and obtain a pre-signed S3 upload URL for the initial profile archive.  
+**Handler**: `packages/backend-go/cmd/sdk/contexts-create/`
+
+```typescript
+{
+  "success": true,
+  "data": {
+    "id": "ctx_ab12cd34",
+    "cipherAlgorithm": "NONE",
+    "initializationVectorSize": 0,
+    "publicKey": "",
+    "uploadUrl": "https://s3.amazonaws.com/..."
+  }
+}
+```
+
+Upload the compressed Chrome profile (tar.gz) to the provided URL within 15 minutes. The archive is stored under `projectId/contextId/profile.tar.gz` in the contexts bucket.
+
+#### `GET /v1/contexts/{id}` - Retrieve Context
+
+Returns the context metadata (project, created/updated timestamps) for the authorized project.  
+**Handler**: `packages/backend-go/cmd/sdk/contexts-retrieve/`
+
+#### `PUT /v1/contexts/{id}` - Refresh Context Upload URL
+
+Generates a new pre-signed upload URL so a client can persist the latest browser state.  
+**Handler**: `packages/backend-go/cmd/sdk/contexts-update/`
+
+#### `GET /v1/projects` - List Projects
+
+Returns all projects associated with the caller's API key. When a key spans multiple projects the response contains one entry per project.  
+**Handler**: `packages/backend-go/cmd/sdk/projects-list/`
+
+```typescript
+{
+  "success": true,
+  "data": [
+    {
+      "id": "project_default",
+      "name": "Default Project",
+      "defaultTimeout": 3600,
+      "concurrency": 5
+    },
+    {
+      "id": "project_beta",
+      "name": "Beta Project",
+      "defaultTimeout": 1800,
+      "concurrency": 2
+    }
+  ]
+}
+```
+
+#### `GET /v1/projects/{id}` - Retrieve Project
+
+Fetches metadata (name, concurrency limit, default timeout) for the specified project. The ID must be one of the projects allowed for the API key; when the key has multiple projects, set `x-wc-project-id` to the project you want to retrieve.  
+**Handler**: `packages/backend-go/cmd/sdk/projects-retrieve/`
+
+#### `GET /v1/projects/{id}/usage` - Project Usage
+
+Aggregates session durations (in minutes) and proxy byte consumption for the project using the sessions table. The `{id}` must be an allowed project and can be selected with the `x-wc-project-id` header.  
+**Handler**: `packages/backend-go/cmd/sdk/projects-usage/`
 
 ### API Mode Endpoints (`/sessions/*`) - Stubbed
 

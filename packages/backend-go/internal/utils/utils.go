@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -25,11 +26,40 @@ import (
 )
 
 var (
-	DynamoDBTableName = os.Getenv("DYNAMODB_TABLE_NAME")
-	ECSCluster        = os.Getenv("ECS_CLUSTER")
-	ECSTaskDefFamily  = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
-	ConnectURL        = os.Getenv("CONNECT_URL_BASE")
+	SessionsTableName  = os.Getenv("SESSIONS_TABLE_NAME")
+	ProjectsTableName  = os.Getenv("PROJECTS_TABLE_NAME")
+	APIKeysTableName   = os.Getenv("API_KEYS_TABLE_NAME")
+	ContextsTableName  = os.Getenv("CONTEXTS_TABLE_NAME")
+	ContextsBucketName = os.Getenv("CONTEXTS_BUCKET_NAME")
+	ECSCluster         = os.Getenv("ECS_CLUSTER")
+	ECSTaskDefFamily   = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
+	ConnectURL         = os.Getenv("CONNECT_URL_BASE")
+	maxSessionTimeout  = getMaxSessionTimeout()
 )
+
+const (
+	defaultSessionTimeoutSeconds = 3600 // 1 hour
+)
+
+func getMaxSessionTimeout() int {
+	if raw := os.Getenv("WALLCRAWLER_MAX_SESSION_TIMEOUT"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			return v
+		}
+	}
+	return defaultSessionTimeoutSeconds
+}
+
+// NormalizeSessionTimeout enforces configured bounds for session duration.
+func NormalizeSessionTimeout(requested int) int {
+	if requested <= 0 {
+		return defaultSessionTimeoutSeconds
+	}
+	if requested > maxSessionTimeout {
+		return maxSessionTimeout
+	}
+	return requested
+}
 
 // EventType represents the type of Lambda event
 type EventType int
@@ -47,12 +77,12 @@ func ParseLambdaEvent(event interface{}) (interface{}, EventType, error) {
 	if apiReq, ok := event.(events.APIGatewayProxyRequest); ok {
 		return apiReq, EventTypeAPIGateway, nil
 	}
-	
+
 	// Try direct type assertion for SNS event
 	if snsEvent, ok := event.(events.SNSEvent); ok {
 		return snsEvent, EventTypeSNS, nil
 	}
-	
+
 	// Handle raw map from API Gateway (happens with custom authorizers)
 	if rawEvent, ok := event.(map[string]interface{}); ok {
 		// Marshal to JSON to properly convert the map
@@ -60,7 +90,7 @@ func ParseLambdaEvent(event interface{}) (interface{}, EventType, error) {
 		if err != nil {
 			return nil, EventTypeUnknown, fmt.Errorf("failed to marshal raw event: %v", err)
 		}
-		
+
 		// Try to parse as API Gateway request first (most common)
 		var apiReq events.APIGatewayProxyRequest
 		if err := json.Unmarshal(eventJSON, &apiReq); err == nil {
@@ -69,7 +99,7 @@ func ParseLambdaEvent(event interface{}) (interface{}, EventType, error) {
 				return apiReq, EventTypeAPIGateway, nil
 			}
 		}
-		
+
 		// Try to parse as SNS event
 		var snsEvent events.SNSEvent
 		if err := json.Unmarshal(eventJSON, &snsEvent); err == nil {
@@ -78,10 +108,10 @@ func ParseLambdaEvent(event interface{}) (interface{}, EventType, error) {
 				return snsEvent, EventTypeSNS, nil
 			}
 		}
-		
+
 		return nil, EventTypeUnknown, fmt.Errorf("unable to determine event type from raw map")
 	}
-	
+
 	return nil, EventTypeUnknown, fmt.Errorf("unsupported event type: %T", event)
 }
 
@@ -123,22 +153,24 @@ func ErrorResponse(message string) types.ErrorResponse {
 
 // StoreSession stores session state in DynamoDB with TTL
 func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState *types.SessionState) error {
-	// Set TTL to 1 hour from now
-	expiresAt := time.Now().Add(1 * time.Hour).Unix()
+	// Ensure the TTL aligns with the computed session expiration
+	if sessionState.ExpiresAtUnix == 0 {
+		return fmt.Errorf("session %s missing expiration timestamp", sessionState.ID)
+	}
 
 	// Convert session state to DynamoDB attributes
 	item := map[string]dynamotypes.AttributeValue{
-		"sessionId":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ID},
-		"status":     &dynamotypes.AttributeValueMemberS{Value: sessionState.Status},
-		"projectId":  &dynamotypes.AttributeValueMemberS{Value: sessionState.ProjectID},
-		"keepAlive":  &dynamotypes.AttributeValueMemberBOOL{Value: sessionState.KeepAlive},
-		"region":     &dynamotypes.AttributeValueMemberS{Value: sessionState.Region},
-		"startedAt":  &dynamotypes.AttributeValueMemberS{Value: sessionState.StartedAt},
-		"expiresAt":  &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.ExpiresAtUnix, 10)},
-		"proxyBytes": &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(sessionState.ProxyBytes)},
-		"publicIP":   &dynamotypes.AttributeValueMemberS{Value: sessionState.PublicIP},
-		"ecsTaskArn": &dynamotypes.AttributeValueMemberS{Value: sessionState.ECSTaskARN},
-		"ttl":        &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(expiresAt, 10)}, // TTL for DynamoDB expiration
+		"sessionId":      &dynamotypes.AttributeValueMemberS{Value: sessionState.ID},
+		"status":         &dynamotypes.AttributeValueMemberS{Value: sessionState.Status},
+		"internalStatus": &dynamotypes.AttributeValueMemberS{Value: sessionState.InternalStatus},
+		"projectId":      &dynamotypes.AttributeValueMemberS{Value: sessionState.ProjectID},
+		"keepAlive":      &dynamotypes.AttributeValueMemberBOOL{Value: sessionState.KeepAlive},
+		"region":         &dynamotypes.AttributeValueMemberS{Value: sessionState.Region},
+		"startedAt":      &dynamotypes.AttributeValueMemberS{Value: sessionState.StartedAt},
+		"expiresAt":      &dynamotypes.AttributeValueMemberN{Value: strconv.FormatInt(sessionState.ExpiresAtUnix, 10)},
+		"proxyBytes":     &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(sessionState.ProxyBytes)},
+		"publicIP":       &dynamotypes.AttributeValueMemberS{Value: sessionState.PublicIP},
+		"ecsTaskArn":     &dynamotypes.AttributeValueMemberS{Value: sessionState.ECSTaskARN},
 	}
 
 	// Add timestamp fields (store as strings for SDK compatibility)
@@ -161,11 +193,17 @@ func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState 
 	if sessionState.ContextID != nil {
 		item["contextId"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.ContextID}
 	}
+	if sessionState.ContextPersist {
+		item["contextPersist"] = &dynamotypes.AttributeValueMemberBOOL{Value: true}
+	}
 	if sessionState.EndedAt != nil {
 		item["endedAt"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.EndedAt}
 	}
 	if sessionState.MemoryUsage != nil {
 		item["memoryUsage"] = &dynamotypes.AttributeValueMemberN{Value: strconv.Itoa(*sessionState.MemoryUsage)}
+	}
+	if sessionState.ContextStorageKey != nil && *sessionState.ContextStorageKey != "" {
+		item["contextStorageKey"] = &dynamotypes.AttributeValueMemberS{Value: *sessionState.ContextStorageKey}
 	}
 
 	// Add optional fields
@@ -185,7 +223,7 @@ func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState 
 
 	// Store in DynamoDB
 	_, err := ddbClient.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(DynamoDBTableName),
+		TableName: aws.String(SessionsTableName),
 		Item:      item,
 	})
 
@@ -194,14 +232,14 @@ func StoreSession(ctx context.Context, ddbClient *dynamodb.Client, sessionState 
 		return err
 	}
 
-	log.Printf("Stored session %s in DynamoDB with TTL %d", sessionState.ID, expiresAt)
+	log.Printf("Stored session %s in DynamoDB with TTL %d", sessionState.ID, sessionState.ExpiresAtUnix)
 	return nil
 }
 
 // GetSession retrieves session state from DynamoDB
 func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID string) (*types.SessionState, error) {
 	result, err := ddbClient.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(DynamoDBTableName),
+		TableName: aws.String(SessionsTableName),
 		Key: map[string]dynamotypes.AttributeValue{
 			"sessionId": &dynamotypes.AttributeValueMemberS{Value: sessionID},
 		},
@@ -252,11 +290,17 @@ func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID strin
 		if signingKey := getStringValue(result.Item["signingKey"]); signingKey != "" {
 			sessionState.SigningKey = &signingKey
 		}
+		if internalStatus := getStringValue(result.Item["internalStatus"]); internalStatus != "" {
+			sessionState.InternalStatus = internalStatus
+		}
 		if seleniumURL := getStringValue(result.Item["seleniumRemoteUrl"]); seleniumURL != "" {
 			sessionState.SeleniumRemoteURL = &seleniumURL
 		}
 		if contextID := getStringValue(result.Item["contextId"]); contextID != "" {
 			sessionState.ContextID = &contextID
+		}
+		if persistAttr, ok := result.Item["contextPersist"].(*dynamotypes.AttributeValueMemberBOOL); ok {
+			sessionState.ContextPersist = persistAttr.Value
 		}
 		if endedAt := getStringValue(result.Item["endedAt"]); endedAt != "" {
 			sessionState.EndedAt = &endedAt
@@ -269,6 +313,9 @@ func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID strin
 			mem := int(memUsage)
 			sessionState.MemoryUsage = &mem
 		}
+		if storageKey := getStringValue(result.Item["contextStorageKey"]); storageKey != "" {
+			sessionState.ContextStorageKey = &storageKey
+		}
 
 		// Parse optional fields
 		if metadata, ok := result.Item["userMetadata"]; ok {
@@ -276,6 +323,9 @@ func GetSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID strin
 		}
 		if config, ok := result.Item["modelConfig"]; ok {
 			attributevalue.Unmarshal(config, &sessionState.ModelConfig)
+		}
+		if internalStatus := getStringValue(result.Item["internalStatus"]); internalStatus != "" {
+			sessionState.InternalStatus = internalStatus
 		}
 		return &sessionState, nil
 	}
@@ -316,6 +366,7 @@ func UpdateSessionStatus(ctx context.Context, ddbClient *dynamodb.Client, sessio
 	// Update status with proper lifecycle timing
 	previousStatus := sessionState.Status
 	sessionState.Status = MapStatusToSDK(status) // Map internal status to SDK status
+	sessionState.InternalStatus = status
 	now := time.Now()
 	nowStr := now.Format(time.RFC3339)
 	sessionState.UpdatedAt = nowStr
@@ -356,7 +407,7 @@ func UpdateSessionStatus(ctx context.Context, ddbClient *dynamodb.Client, sessio
 // DeleteSession removes session from DynamoDB
 func DeleteSession(ctx context.Context, ddbClient *dynamodb.Client, sessionID string) error {
 	_, err := ddbClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(DynamoDBTableName),
+		TableName: aws.String(SessionsTableName),
 		Key: map[string]dynamotypes.AttributeValue{
 			"sessionId": &dynamotypes.AttributeValueMemberS{Value: sessionID},
 		},
@@ -376,8 +427,18 @@ func CreateECSTask(ctx context.Context, sessionID string, sessionState *types.Se
 	// Environment variables for the task
 	env := []ecstypes.KeyValuePair{
 		{Name: aws.String("SESSION_ID"), Value: aws.String(sessionID)},
-		{Name: aws.String("DYNAMODB_TABLE_NAME"), Value: aws.String(DynamoDBTableName)},
+		{Name: aws.String("SESSIONS_TABLE_NAME"), Value: aws.String(SessionsTableName)},
 		{Name: aws.String("PROJECT_ID"), Value: aws.String(sessionState.ProjectID)},
+	}
+
+	if sessionState.ContextID != nil && *sessionState.ContextID != "" &&
+		sessionState.ContextStorageKey != nil && *sessionState.ContextStorageKey != "" && ContextsBucketName != "" {
+		env = append(env,
+			ecstypes.KeyValuePair{Name: aws.String("CONTEXT_ID"), Value: aws.String(*sessionState.ContextID)},
+			ecstypes.KeyValuePair{Name: aws.String("CONTEXT_S3_KEY"), Value: aws.String(*sessionState.ContextStorageKey)},
+			ecstypes.KeyValuePair{Name: aws.String("CONTEXTS_BUCKET_NAME"), Value: aws.String(ContextsBucketName)},
+			ecstypes.KeyValuePair{Name: aws.String("CONTEXT_PERSIST"), Value: aws.String(strconv.FormatBool(sessionState.ContextPersist))},
+		)
 	}
 
 	// Add model config if available
@@ -536,7 +597,6 @@ func CreateAPIResponse(statusCode int, body interface{}) (events.APIGatewayProxy
 	}, nil
 }
 
-
 // GetAllSessions retrieves all sessions from DynamoDB using Scan
 func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.SessionState, error) {
 	var sessions []*types.SessionState
@@ -545,7 +605,7 @@ func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.S
 	for {
 		// Scan the table
 		scanInput := &dynamodb.ScanInput{
-			TableName: aws.String(DynamoDBTableName),
+			TableName: aws.String(SessionsTableName),
 			Limit:     aws.Int32(100),
 		}
 		if lastEvaluatedKey != nil {
@@ -565,6 +625,7 @@ func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.S
 				// Try manual unmarshaling
 				sessionState.ID = getStringValue(item["sessionId"])
 				sessionState.Status = getStringValue(item["status"])
+				sessionState.InternalStatus = getStringValue(item["internalStatus"])
 				sessionState.ProjectID = getStringValue(item["projectId"])
 				sessionState.PublicIP = getStringValue(item["publicIP"])
 				sessionState.ECSTaskARN = getStringValue(item["ecsTaskArn"])
@@ -573,8 +634,20 @@ func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.S
 				if connectURL := getStringValue(item["connectUrl"]); connectURL != "" {
 					sessionState.ConnectURL = &connectURL
 				}
+				if persistAttr, ok := item["contextPersist"].(*dynamotypes.AttributeValueMemberBOOL); ok {
+					sessionState.ContextPersist = persistAttr.Value
+				}
+				if storageKey := getStringValue(item["contextStorageKey"]); storageKey != "" {
+					sessionState.ContextStorageKey = &storageKey
+				}
 				if signingKey := getStringValue(item["signingKey"]); signingKey != "" {
 					sessionState.SigningKey = &signingKey
+				}
+				if persistAttr, ok := item["contextPersist"].(*dynamotypes.AttributeValueMemberBOOL); ok {
+					sessionState.ContextPersist = persistAttr.Value
+				}
+				if storageKey := getStringValue(item["contextStorageKey"]); storageKey != "" {
+					sessionState.ContextStorageKey = &storageKey
 				}
 
 				// Parse timestamps
@@ -761,10 +834,16 @@ func AddSessionEvent(ctx context.Context, ddbClient *dynamodb.Client, sessionID,
 }
 
 // CreateSessionWithDefaults creates a new session with default resource limits and billing info
-func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.ModelConfig) *types.SessionState {
+func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.ModelConfig, timeoutSeconds int) *types.SessionState {
 	now := time.Now()
 	nowStr := now.Format(time.RFC3339)
-	expiresAtTime := now.Add(24 * time.Hour)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = defaultSessionTimeoutSeconds
+	}
+	if timeoutSeconds > maxSessionTimeout {
+		timeoutSeconds = maxSessionTimeout
+	}
+	expiresAtTime := now.Add(time.Duration(timeoutSeconds) * time.Second)
 	expiresAt := expiresAtTime.Format(time.RFC3339)
 	expiresAtUnix := expiresAtTime.Unix()
 
@@ -787,6 +866,7 @@ func CreateSessionWithDefaults(sessionID, projectID string, modelConfig *types.M
 	return &types.SessionState{
 		ID:             sessionID,
 		Status:         types.SessionStatusRunning, // SDK status - session is being prepared
+		InternalStatus: types.SessionStatusCreating,
 		ProjectID:      projectID,
 		ModelConfig:    modelConfig,
 		CreatedAt:      nowStr,
@@ -844,8 +924,27 @@ func MapStatusToSDK(internalStatus string) string {
 		return "COMPLETED" // Session completed successfully
 	case types.SessionStatusFailed:
 		return "ERROR" // Session failed to start or encountered error
+	case types.SessionStatusTimedOut:
+		return "TIMED_OUT"
 	default:
 		return "ERROR" // Unknown status, default to error
+	}
+}
+
+// MapSDKToInternal provides a best-effort reverse mapping for legacy records that only
+// stored SDK-level statuses.
+func MapSDKToInternal(sdkStatus string) string {
+	switch strings.ToUpper(sdkStatus) {
+	case "RUNNING":
+		return types.SessionStatusActive
+	case "COMPLETED":
+		return types.SessionStatusStopped
+	case "TIMED_OUT":
+		return types.SessionStatusTimedOut
+	case "ERROR":
+		return types.SessionStatusFailed
+	default:
+		return types.SessionStatusActive
 	}
 }
 
@@ -857,7 +956,7 @@ func GetSessionsByProjectID(ctx context.Context, ddbClient *dynamodb.Client, pro
 	for {
 		// Query using GSI
 		queryInput := &dynamodb.QueryInput{
-			TableName:              aws.String(DynamoDBTableName),
+			TableName:              aws.String(SessionsTableName),
 			IndexName:              aws.String("projectId-createdAt-index"),
 			KeyConditionExpression: aws.String("projectId = :projectId"),
 			ExpressionAttributeValues: map[string]dynamotypes.AttributeValue{

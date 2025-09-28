@@ -1,353 +1,181 @@
-# Wallcrawler Backend Architecture
+# Wallcrawler Architecture
 
-## Overview
-
-Wallcrawler is a distributed, serverless browser automation platform that provides remote browser access through Chrome DevTools Protocol (CDP). The system supports both SDK-based session management (compatible with Browserbase) and AI-powered automation (Stagehand AI).
-
-## High-Level Architecture
+## AWS Infrastructure
 
 ```mermaid
-graph TB
-    subgraph "Client Layer"
-        Client[Client Application]
-        Stagehand[Stagehand Instance]
-        SDK[SDK-Node]
+graph TD
+    subgraph Clients
+        SDK[SDK Clients]
+        Stagehand[Stagehand Agents]
+        Admin[Internal Tools]
     end
-    
-    subgraph "Edge Layer"
-        CloudFront[CloudFront CDN<br/>DDoS Protection<br/>Response Caching]
+
+    subgraph Edge
+        CF[Amazon CloudFront]
+        WAF[AWS WAF]
     end
-    
-    subgraph "API Layer"
-        APIGateway[API Gateway<br/>REST API]
-        Authorizer[Lambda Authorizer<br/>Validates Wallcrawler API Key<br/>Injects AWS API Key]
+
+    subgraph API
+        APIGW[Amazon API Gateway]
+        Authorizer[Lambda Authorizer]
     end
-    
-    subgraph "Compute Layer"
-        subgraph "Lambda Functions"
-            SDKHandlers[SDK Handlers<br/>sessions-create/list/retrieve/debug/update]
-            APIHandlers[API Handlers<br/>sessions-start]
-            EventHandlers[Event Processors<br/>ecs-task/stream-processor]
-        end
-        
-        subgraph "ECS Fargate"
-            Browser[Browser Container<br/>Chrome + CDP Proxy<br/>Port 9223]
-        end
+
+    subgraph Compute
+        SessionsLambdas["Sessions Lambdas<br/>create/list/read/update/debug"]
+        ProjectsLambdas["Projects Lambdas<br/>list/retrieve/usage"]
+        ContextsLambdas["Contexts Lambdas<br/>create/retrieve/update"]
+        StreamLambdas["Event Lambdas<br/>stream to SNS, ECS task"]
+        ECS[Amazon ECS Fargate]
     end
-    
-    subgraph "Storage Layer"
-        DynamoDB[(DynamoDB<br/>Session State)]
-        Secrets[Secrets Manager<br/>JWT Keys]
+
+    subgraph Data
+        SessionsTable["DynamoDB<br/>wallcrawler-sessions"]
+        ProjectsTable["DynamoDB<br/>wallcrawler-projects"]
+        ApiKeysTable["DynamoDB<br/>wallcrawler-api-keys"]
+        ContextsTable["DynamoDB<br/>wallcrawler-contexts"]
+        ContextBucket["S3<br/>wallcrawler-contexts-*"]
+        ReadyTopic["SNS<br/>wallcrawler-session-ready"]
     end
-    
-    subgraph "Messaging Layer"
-        EventBridge[EventBridge<br/>Task Events]
-        SNS[SNS<br/>Session Ready]
-        DynamoStreams[DynamoDB Streams]
-    end
-    
-    Client --> Stagehand
-    Stagehand --> SDK
-    SDK --> CloudFront
-    CloudFront --> APIGateway
-    APIGateway --> Authorizer
-    Authorizer -.->|Validates & Returns Policy| APIGateway
-    APIGateway --> SDKHandlers
-    APIGateway --> APIHandlers
-    
-    SDKHandlers --> DynamoDB
-    SDKHandlers --> Browser
-    Browser --> DynamoDB
-    
-    EventBridge --> EventHandlers
-    DynamoStreams --> EventHandlers
-    EventHandlers --> SNS
-    SNS --> SDKHandlers
-    
-    Browser -.-> Secrets
-    SDKHandlers -.-> Secrets
-    
-    %% Direct CDP Connection after session creation
-    SDKHandlers -.->|Returns connectUrl| SDK
-    SDK -.->|connectUrl with JWT| Stagehand
-    Stagehand ===>|WebSocket CDP<br/>Direct Connection<br/>Port 9223| Browser
-```
 
-## AWS Infrastructure Diagram
+    Clients --> CF --> WAF --> APIGW
+    APIGW --> Authorizer
+    Authorizer --> APIGW
 
-![Wallcrawler AWS Architecture](./wallcrawler-aws-architecture.png)
+    APIGW --> SessionsLambdas
+    APIGW --> ProjectsLambdas
+    APIGW --> ContextsLambdas
 
-## Component Details
+    SessionsLambdas --> SessionsTable
+    SessionsLambdas --> ContextsTable
+    SessionsLambdas --> ContextBucket
+    SessionsLambdas --> ECS
 
-### API Architecture
+    ProjectsLambdas --> ProjectsTable
+    ProjectsLambdas --> SessionsTable
 
-```
-CloudFront CDN (d1234abcd.cloudfront.net)
-└── API Gateway (with Lambda Authorizer)
-    ├── /v1/                    # SDK-Compatible Endpoints
-    │   ├── /sessions
-    │   │   ├── POST           # Create session
-    │   │   ├── GET            # List sessions
-    │   │   └── /{id}
-    │   │       ├── GET        # Get session
-    │   │       ├── POST       # Update session
-    │   │       ├── /debug     # Debug URLs
-    │   │       ├── /downloads # Downloads
-    │   │       ├── /logs      # Logs
-    │   │       └── /recording # Recording
-    │   ├── /contexts          # Context management
-    │   ├── /extensions        # Extension management
-    │   └── /projects          # Project management
-    └── /sessions/             # Stagehand AI Endpoints
-        └── /start             # AI-powered session creation
-```
+    ContextsLambdas --> ContextsTable
+    ContextsLambdas --> ContextBucket
 
-**Authentication Flow:**
-1. Client sends request with `x-wc-api-key` header
-2. Lambda Authorizer validates Wallcrawler API key
-3. Authorizer injects AWS API key into request context
-4. API Gateway forwards request to backend Lambda with AWS key
+    StreamLambdas --> SessionsTable
+    StreamLambdas --> ReadyTopic
+    ReadyTopic --> SessionsLambdas
+    StreamLambdas --> ContextBucket
 
-### Lambda Functions
-
-| Function | Handler | Purpose |
-|----------|---------|---------|
-| **Authentication** | | |
-| AuthorizerLambda | `authorizer` | Validate Wallcrawler API keys, inject AWS key |
-| **SDK Handlers** | | |
-| SDKSessionsCreate | `sdk/sessions-create` | Synchronous session creation |
-| SDKSessionsList | `sdk/sessions-list` | List sessions with filters |
-| SDKSessionsRetrieve | `sdk/sessions-retrieve` | Get session details |
-| SDKSessionsDebug | `sdk/sessions-debug` | Generate debug URLs |
-| SDKSessionsUpdate | `sdk/sessions-update` | Terminate sessions |
-| **API Handlers** | | |
-| APISessionsStart | `api/sessions-start` | AI-powered sessions (stubbed) |
-| **Event Processors** | | |
-| ECSTaskProcessor | `ecs-task-processor` | Handle ECS state changes |
-| StreamProcessor | `sessions-stream-processor` | Process DynamoDB streams |
-
-### ECS Container Architecture
-
-```mermaid
-graph LR
-    subgraph "ECS Fargate Task"
-        subgraph "Go Controller Process"
-            Main[Main Process]
-            CDP[CDP Proxy<br/>:9223]
-            Health[Health Monitor]
-        end
-        
-        subgraph "Chrome Process"
-            Chrome[Headless Chrome<br/>:9222 localhost]
-        end
-        
-        Main --> Chrome
-        CDP --> Chrome
-        Health --> Chrome
-    end
-    
-    Client[External Client] -->|JWT Auth| CDP
-    Lambda[Lambda] -->|JWT Auth| CDP
+    ECS --> ContextBucket
+    ECS --> SessionsTable
 ```
 
 ## Sequence Diagrams
 
-### Session Creation Flow
+### Session Creation (with context reuse)
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant S as Stagehand
-    participant SDK as SDK-Node
+    participant Client
     participant API as API Gateway
-    participant L as Lambda
-    participant DB as DynamoDB
-    participant ECS as ECS
-    participant EB as EventBridge
-    participant SNS as SNS
-    
-    C->>S: Create browser instance
-    S->>SDK: Initialize session
-    SDK->>API: POST /v1/sessions
-    API->>L: Invoke sessions-create
-    
-    L->>DB: Create session (CREATING)
-    L->>L: Generate JWT token
-    L->>ECS: RunTask with session env
-    L->>SNS: Subscribe to session topic
-    
-    ECS->>ECS: Start Chrome + CDP Proxy
-    ECS->>EB: Task RUNNING event
-    
-    EB->>L: Trigger ecs-task-processor
-    L->>DB: Update session (READY)
-    
-    DB->>L: Stream event
-    L->>SNS: Publish session ready
-    
-    SNS->>L: Notify sessions-create
-    L->>API: Return session + connectUrl
-    API->>SDK: Session details
-    SDK->>S: Browser ready
-    S->>C: Ready to use
+    participant Auth as Lambda Authorizer
+    participant Create as sessions-create
+    participant Contexts as DynamoDB (contexts)
+    participant Sessions as DynamoDB (sessions)
+    participant ECS as ECS Fargate
+    participant SNS as SNS (session-ready)
+    participant Stream as sessions-stream-processor
+
+    Client->>API: POST /v1/sessions { browserSettings.context.id }
+    API->>Auth: Authorize request
+    Auth->>DynamoDB: Lookup API key -> allowed projects
+    Auth->>API: Return allow policy and projectId
+    API->>Create: Invoke Lambda
+    Create->>Contexts: Validate context belongs to project
+    Create->>Sessions: Put session (CREATING)
+    Create->>Sessions: Update session (PROVISIONING, JWT)
+    Create->>ECS: RunTask (env includes context + project)
+    Create-->>Client: Wait on SNS notification
+
+    ECS-->>Sessions: Controller updates session to READY (connect URL, IP)
+    Sessions-->>Stream: DynamoDB stream event
+    Stream->>SNS: Publish READY notification
+    SNS->>Create: Notify waiting lambda
+    Create->>Client: 200 { connectUrl, signingKey, ... }
 ```
 
-### CDP Authentication Flow
+### Context Lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant P as CDP Proxy (:9223)
-    participant SM as Secrets Manager
-    participant CH as Chrome (:9222)
-    
-    C->>P: WebSocket connect + JWT
-    P->>P: Validate JWT claims
-    P->>SM: Get signing key (cached)
-    SM->>P: Return key
-    P->>P: Verify signature
-    
-    alt Valid JWT
-        P->>CH: Proxy connection
-        CH->>P: CDP response
-        P->>C: Forward response
-    else Invalid JWT
-        P->>C: 401 Unauthorized
-    end
-    
-    loop Health Check
-        P->>CH: Check connection
-        alt No connections for timeout
-            P->>P: Terminate container
-        end
-    end
+    participant Client
+    participant API as API Gateway
+    participant Auth as Lambda Authorizer
+    participant CCreate as contexts-create
+    participant CRetrieve as contexts-retrieve
+    participant CUpdate as contexts-update
+    participant Contexts as DynamoDB (contexts)
+    participant Bucket as S3 (contexts bucket)
+
+    Client->>API: POST /v1/contexts
+    API->>Auth: Authorize
+    API->>CCreate: Invoke
+    CCreate->>Contexts: Put context metadata
+    CCreate->>Client: Upload URL (pre-signed S3 PUT)
+    Client->>Bucket: Upload profile archive
+
+    Client->>API: GET /v1/contexts/{id}
+    API->>Auth: Authorize
+    API->>CRetrieve: Invoke
+    CRetrieve->>Contexts: Get context
+    CRetrieve->>Client: Metadata
+
+    Client->>API: PUT /v1/contexts/{id}
+    API->>Auth: Authorize
+    API->>CUpdate: Invoke
+    CUpdate->>Contexts: Update timestamp
+    CUpdate->>Client: New upload URL
 ```
 
-### Event Processing Flow
+### Session Ready Notification
 
 ```mermaid
 sequenceDiagram
-    participant ECS as ECS Task
-    participant EB as EventBridge
-    participant L1 as Task Processor
-    participant DB as DynamoDB
-    participant DS as DynamoDB Streams
-    participant L2 as Stream Processor
-    participant SNS as SNS
-    participant L3 as Waiting Lambda
-    
-    ECS->>EB: Task state change
-    EB->>L1: Process event
-    
-    alt Task RUNNING
-        L1->>DB: Update session READY
-    else Task STOPPED
-        L1->>DB: Update session TERMINATED
-    end
-    
-    DB->>DS: Stream record
-    DS->>L2: Process stream
-    
-    alt Session READY
-        L2->>SNS: Publish ready event
-        SNS->>L3: Notify subscribers
-    end
+    participant Controller as ECS Controller
+    participant Sessions as DynamoDB (sessions)
+    participant Stream as DynamoDB Stream
+    participant Processor as sessions-stream-processor
+    participant SNS as SNS Topic
+    participant Create as sessions-create
+
+    Controller->>Sessions: Update session (READY, connectUrl)
+    Sessions-->>Stream: Emit stream record
+    Stream->>Processor: Invoke Lambda
+    Processor->>SNS: Publish READY notification
+    SNS->>Create: Deliver message
+    Create->>Client: Return session response
 ```
 
-## Security Architecture
-
-### Authentication Layers
-
-1. **API Layer**: Wallcrawler API key (`x-wc-api-key` header)
-2. **CDP Layer**: JWT tokens with session-specific claims
-3. **AWS Layer**: IAM roles and policies
-
-### Network Security
+### Multi-Project Authorization
 
 ```mermaid
-graph TB
-    subgraph "External Access"
-        Internet[Internet]
-    end
-    
-    subgraph "Security Groups"
-        SGECS[ECS Security Group<br/>Ingress: 9223 from Any<br/>Egress: All]
-        SGLambda[Lambda Security Group<br/>Egress: All]
-    end
-    
-    subgraph "Port Access"
-        Port9222[Port 9222<br/>Chrome CDP<br/>localhost only]
-        Port9223[Port 9223<br/>CDP Proxy<br/>JWT Required]
-    end
-    
-    Internet -->|Public IP| SGECS
-    SGECS --> Port9223
-    SGLambda --> SGECS
-    Port9223 -->|Internal| Port9222
+sequenceDiagram
+    participant Client
+    participant API as API Gateway
+    participant Auth as Lambda Authorizer
+    participant Keys as DynamoDB (api-keys)
+    participant Projects as DynamoDB (projects)
+    participant Handler as SDK Lambda
+
+    Client->>API: Request with x-wc-api-key (+ optional x-wc-project-id)
+    API->>Auth: Authorize
+    Auth->>Keys: Fetch API key metadata (projectIds)
+    Auth->>Projects: Load selected project
+    Auth->>API: Allow policy + context { projectId, projectIds[*] }
+    API->>Handler: Invoke Lambda
+    Handler->>Handler: utils.GetAuthorizedProjectID / IDs
+    Handler->>Service: Perform project-scoped action
+    Handler->>Client: Response
 ```
 
-## Data Storage
+## Notes
 
-### DynamoDB Schema
-
-**Table: wallcrawler-sessions**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| sessionId (PK) | String | Unique session identifier |
-| status | String | CREATING, READY, TERMINATED |
-| projectId | String | Project identifier |
-| createdAt | Number | Unix timestamp |
-| expiresAt | Number | TTL for automatic cleanup |
-| taskArn | String | ECS task identifier |
-| connectUrl | String | WebSocket CDP URL |
-| publicIp | String | Container public IP |
-
-**Global Secondary Indexes:**
-- `projectId-createdAt-index`: Query sessions by project
-- `status-expiresAt-index`: Find active/expired sessions
-
-## Deployment Modes
-
-### Development Mode
-- No NAT Gateway (saves $45/month)
-- Lambdas run outside VPC
-- DynamoDB on-demand billing
-- Single public subnet
-
-### Production Mode
-- NAT Gateway for private subnet egress
-- Lambdas in private subnet
-- WAF protection enabled
-- Multi-AZ deployment
-
-## Architectural Benefits
-
-### CloudFront + Lambda Authorizer Design
-1. **43% Cost Reduction**: Eliminated proxy Lambda and public API Gateway
-2. **Free DDoS Protection**: AWS Shield Standard included with CloudFront
-3. **Better Performance**: Edge caching for 401/403 responses
-4. **Simpler Architecture**: Single API Gateway with authorizer pattern
-5. **Result Caching**: 5-minute authorizer cache reduces Lambda invocations
-
-### Cost Optimization
-1. **Self-terminating containers**: ECS tasks monitor CDP connections and terminate when idle
-2. **Serverless architecture**: Pay-per-use Lambda and DynamoDB
-3. **Development mode**: Reduced infrastructure for non-production
-4. **TTL cleanup**: Automatic session expiration in DynamoDB
-5. **Edge caching**: CloudFront reduces backend load
-
-## Monitoring & Observability
-
-- **CloudWatch Logs**: All Lambda and ECS container logs
-- **Container Insights**: ECS cluster metrics
-- **EventBridge**: Audit trail for all session events
-- **DynamoDB Streams**: Real-time session state changes
-
-## Future Enhancements
-
-1. **AI Mode Implementation**: Complete Stagehand AI endpoints (act, extract, observe)
-2. **Multi-region Support**: Global browser deployment
-3. **Session Recording**: Video capture of browser sessions
-4. **Advanced Analytics**: Usage metrics and performance monitoring
-5. **WebRTC Support**: Real-time browser streaming
+- Contexts, sessions, projects, and API keys are isolated per project. Multi-project keys are allowed; the authorizer enforces project membership on every request.
+- Context archives are stored in S3 and hydrated by the ECS controller. When `persist` is true, the controller re-uploads the profile on shutdown.
+- End-user isolation (per `ownerId`) should be implemented in the consumer application by tagging contexts and filtering before calling the Wallcrawler API.
+```

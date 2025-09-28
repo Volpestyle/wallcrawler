@@ -26,21 +26,67 @@ func init() {
 func Handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
 	log.Printf("Authorizer invoked with methodArn: %s", event.MethodArn)
 	log.Printf("Request type: REQUEST authorizer")
-	
-	// Extract API key and project ID from headers
+
+	// Extract API key and optional project hint from headers
 	wcAPIKey := event.Headers["x-wc-api-key"]
-	projectID := event.Headers["x-wc-project-id"]
-	
+	requestedProjectID := event.Headers["x-wc-project-id"]
+
 	if wcAPIKey == "" {
 		log.Printf("Missing x-wc-api-key header")
 		return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("Unauthorized")
 	}
-	
-	log.Printf("Found API key: wc_**** and project ID: %s", projectID)
+
+	log.Printf("Found API key: wc_**** and requested project ID: %s", requestedProjectID)
 
 	// Validate the Wallcrawler API key
-	if !utils.ValidateWallcrawlerAPIKey(wcAPIKey) {
-		log.Printf("Invalid Wallcrawler API key")
+	ddbClient, err := utils.GetDynamoDBClient(ctx)
+	if err != nil {
+		log.Printf("Error creating DynamoDB client: %v", err)
+		return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("Unauthorized")
+	}
+
+	apiKeyMetadata, err := utils.ValidateWallcrawlerAPIKey(ctx, ddbClient, wcAPIKey)
+	if err != nil {
+		log.Printf("API key validation failed: %v", err)
+		return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("Unauthorized")
+	}
+
+	allowedProjects := make([]string, 0, len(apiKeyMetadata.ProjectIDs))
+	for _, id := range apiKeyMetadata.ProjectIDs {
+		project := strings.TrimSpace(id)
+		if project != "" {
+			allowedProjects = append(allowedProjects, project)
+		}
+	}
+
+	if len(allowedProjects) == 0 {
+		log.Printf("API key %s has no associated projects", wcAPIKey)
+		return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("Unauthorized")
+	}
+
+	projectID := allowedProjects[0]
+	if requestedProjectID != "" {
+		matchFound := false
+		for _, candidate := range allowedProjects {
+			if strings.EqualFold(candidate, requestedProjectID) {
+				projectID = candidate
+				matchFound = true
+				break
+			}
+		}
+		if !matchFound {
+			log.Printf("Requested project %s not permitted for key", requestedProjectID)
+			return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("Unauthorized")
+		}
+	} else if len(allowedProjects) > 1 {
+		log.Printf("Multiple projects available (%v); defaulting to %s", allowedProjects, projectID)
+	}
+
+	log.Printf("Authorized projects for key: %v (selected %s)", allowedProjects, projectID)
+
+	projectMetadata, err := utils.GetProjectMetadata(ctx, ddbClient, projectID)
+	if err != nil {
+		log.Printf("Project validation failed: %v", err)
 		return events.APIGatewayCustomAuthorizerResponse{}, fmt.Errorf("Unauthorized")
 	}
 
@@ -69,18 +115,24 @@ func Handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	authContext := map[string]interface{}{
 		"awsApiKey": awsAPIKey,
 		"apiKey":    wcAPIKey, // Pass through for logging/metrics
+		"projectId": projectID,
 	}
-	
-	// Only include projectId if it's available
-	if projectID != "" {
-		authContext["projectId"] = projectID
+
+	if len(allowedProjects) > 0 {
+		authContext["projectIds"] = strings.Join(allowedProjects, ",")
+	}
+
+	if projectMetadata != nil {
+		authContext["projectName"] = projectMetadata.Name
+		authContext["projectDefaultTimeout"] = projectMetadata.DefaultTimeout
+		authContext["projectConcurrency"] = projectMetadata.Concurrency
 	}
 
 	response := events.APIGatewayCustomAuthorizerResponse{
 		PrincipalID:    principalID,
 		PolicyDocument: policy,
 		// The AWS API key is passed via context to backend services
-		Context:        authContext,
+		Context: authContext,
 		// Use the Wallcrawler API key for per-client usage tracking
 		UsageIdentifierKey: wcAPIKey,
 	}

@@ -71,6 +71,27 @@ Additional scripts:
 - Dev (package‑scoped): `pnpm -r dev`
 - CDK Toolkit: `pnpm cdk`
 
+### Configuration
+
+The backend reads several environment variables at runtime:
+
+- `WALLCRAWLER_MAX_SESSION_TIMEOUT` — Maximum allowed session duration in seconds (defaults to 3600).
+- `PROJECTS_TABLE_NAME`, `API_KEYS_TABLE_NAME`, `CONTEXTS_TABLE_NAME` — Automatically injected by the CDK stack for the Lambda functions.
+- `CONTEXTS_BUCKET_NAME` — S3 bucket that stores browser context archives for persisted sessions.
+- `SESSIONS_TABLE_NAME` — Sessions table (`wallcrawler-sessions` by default).
+- Contexts (browser profiles) remain project-scoped. If you expose contexts to end users, ensure your application filters by both `projectId` and your own user identifier before forwarding requests to Wallcrawler.
+- API keys can be associated with multiple projects. When a key has more than one project, include `x-wc-project-id` on each request to select the target project; the authorizer denies access if the requested project is not in the key's allowlist.
+
+### Data Stores
+
+- **DynamoDB**
+  - `wallcrawler-sessions` — Session metadata, lifecycle history, and connection info.
+  - `wallcrawler-projects` — Project configuration (default timeout, concurrency limits, billing tier).
+  - `wallcrawler-api-keys` — SHA-256 hashed API keys mapped to one or more projects (`projectIds` attribute) with status flags.
+  - `wallcrawler-contexts` — Browser context metadata and S3 object keys. Add per-user ownership metadata in your app if you need user-level isolation.
+- **S3**
+  - `wallcrawler-contexts-*` — Stores compressed Chrome user data directories for persisted contexts.
+
 ### API compatibility
 
 Wallcrawler provides Browserbase‑compatible APIs and Stagehand endpoints. For exact routes, request/response shapes, and streaming behavior, see:

@@ -18,6 +18,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export class WallcrawlerStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -141,7 +142,7 @@ export class WallcrawlerStack extends cdk.Stack {
         sessionsTable.addGlobalSecondaryIndex({
             indexName: 'projectId-createdAt-index',
             partitionKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
-            sortKey: { name: 'createdAt', type: dynamodb.AttributeType.NUMBER },
+            sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
             projectionType: dynamodb.ProjectionType.ALL
         });
 
@@ -151,6 +152,47 @@ export class WallcrawlerStack extends cdk.Stack {
             partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
             sortKey: { name: 'expiresAt', type: dynamodb.AttributeType.NUMBER },
             projectionType: dynamodb.ProjectionType.KEYS_ONLY
+        });
+
+        // Projects metadata table (tenancy & configuration)
+        const projectsTable = new dynamodb.Table(this, 'ProjectsTable', {
+            tableName: 'wallcrawler-projects',
+            partitionKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        // API keys table keyed by hashed API key value
+        const apiKeysTable = new dynamodb.Table(this, 'ApiKeysTable', {
+            tableName: 'wallcrawler-api-keys',
+            partitionKey: { name: 'apiKeyHash', type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        apiKeysTable.addGlobalSecondaryIndex({
+            indexName: 'projectId-index',
+            partitionKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
+            projectionType: dynamodb.ProjectionType.ALL,
+        });
+
+        const contextsTable = new dynamodb.Table(this, 'ContextsTable', {
+            tableName: 'wallcrawler-contexts',
+            partitionKey: { name: 'contextId', type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        const contextsBucket = new s3.Bucket(this, 'ContextsBucket', {
+            encryption: s3.BucketEncryption.S3_MANAGED,
+            blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+            enforceSSL: true,
+            versioned: false,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            autoDeleteObjects: true,
         });
 
         // SNS Topic for session ready notifications
@@ -225,7 +267,7 @@ export class WallcrawlerStack extends cdk.Stack {
                 },
             ],
             environment: {
-                DYNAMODB_TABLE_NAME: sessionsTable.tableName,
+                SESSIONS_TABLE_NAME: sessionsTable.tableName,
                 ECS_CLUSTER: ecsCluster.clusterName,
                 // Use task definition family name instead of ARN to avoid circular reference
                 ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
@@ -293,7 +335,11 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // Common Lambda environment variables
         const commonLambdaEnvironment = {
-            DYNAMODB_TABLE_NAME: sessionsTable.tableName,
+            SESSIONS_TABLE_NAME: sessionsTable.tableName,
+            PROJECTS_TABLE_NAME: projectsTable.tableName,
+            API_KEYS_TABLE_NAME: apiKeysTable.tableName,
+            CONTEXTS_TABLE_NAME: contextsTable.tableName,
+            CONTEXTS_BUCKET_NAME: contextsBucket.bucketName,
             ECS_CLUSTER: ecsCluster.clusterName,
             // Use task definition family name instead of ARN to avoid circular reference
             ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
@@ -358,6 +404,48 @@ export class WallcrawlerStack extends cdk.Stack {
             'SDKSessionsUpdateLambda',
             'sdk/sessions-update',
             'SDK: Update session (REQUEST_RELEASE)'
+        );
+
+        const sdkProjectsListLambda = createLambdaFunction(
+            'SDKProjectsListLambda',
+            'sdk/projects-list',
+            'SDK: List projects'
+        );
+
+        const sdkProjectsRetrieveLambda = createLambdaFunction(
+            'SDKProjectsRetrieveLambda',
+            'sdk/projects-retrieve',
+            'SDK: Retrieve project'
+        );
+
+        const sdkProjectsUsageLambda = createLambdaFunction(
+            'SDKProjectsUsageLambda',
+            'sdk/projects-usage',
+            'SDK: Project usage metrics'
+        );
+
+        const sdkContextsCreateLambda = createLambdaFunction(
+            'SDKContextsCreateLambda',
+            'sdk/contexts-create',
+            'SDK: Create context'
+        );
+
+        const sdkContextsRetrieveLambda = createLambdaFunction(
+            'SDKContextsRetrieveLambda',
+            'sdk/contexts-retrieve',
+            'SDK: Retrieve context'
+        );
+
+        const sdkContextsUpdateLambda = createLambdaFunction(
+            'SDKContextsUpdateLambda',
+            'sdk/contexts-update',
+            'SDK: Update context'
+        );
+
+        const sdkNotImplementedLambda = createLambdaFunction(
+            'SDKNotImplementedLambda',
+            'common/not-implemented',
+            'SDK: Not implemented stub'
         );
 
         // --- API Mode Handlers (Stagehand AI) ---
@@ -651,25 +739,25 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/sessions/{id}/downloads - Downloads
         v1SessionResource.addResource('downloads').addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             { authorizer }
         );
 
         // GET /v1/sessions/{id}/logs - Logs
         v1SessionResource.addResource('logs').addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             { authorizer }
         );
 
         // GET /v1/sessions/{id}/recording - Recording
         v1SessionResource.addResource('recording').addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             { authorizer }
         );
 
         // POST /v1/sessions/{id}/uploads - Uploads
         v1SessionResource.addResource('uploads').addMethod('POST',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             {
                 authorizer,
                 requestValidator,
@@ -681,7 +769,7 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // POST /v1/contexts - Create context
         v1ContextsResource.addMethod('POST',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkContextsCreateLambda),
             {
                 authorizer,
                 requestValidator,
@@ -693,13 +781,13 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/contexts/{id} - Retrieve context
         v1ContextResource.addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkContextsRetrieveLambda),
             { authorizer }
         );
 
         // PUT /v1/contexts/{id} - Update context
         v1ContextResource.addMethod('PUT',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkContextsUpdateLambda),
             {
                 authorizer,
                 requestValidator,
@@ -711,7 +799,7 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // POST /v1/extensions - Create extension
         v1ExtensionsResource.addMethod('POST',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             {
                 authorizer,
                 requestValidator,
@@ -723,13 +811,13 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/extensions/{id} - Retrieve extension
         v1ExtensionResource.addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             { authorizer }
         );
 
         // DELETE /v1/extensions/{id} - Delete extension
         v1ExtensionResource.addMethod('DELETE',
-            createAuthenticatedIntegration(sdkSessionsUpdateLambda),
+            createAuthenticatedIntegration(sdkNotImplementedLambda),
             { authorizer }
         );
 
@@ -738,7 +826,7 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/projects - List projects
         v1ProjectsResource.addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkProjectsListLambda),
             { authorizer }
         );
 
@@ -747,13 +835,13 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/projects/{id} - Retrieve project
         v1ProjectResource.addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkProjectsRetrieveLambda),
             { authorizer }
         );
 
         // GET /v1/projects/{id}/usage - Project usage
         v1ProjectResource.addResource('usage').addMethod('GET',
-            createAuthenticatedIntegration(sdkSessionsRetrieveLambda),
+            createAuthenticatedIntegration(sdkProjectsUsageLambda),
             { authorizer }
         );
 
@@ -889,6 +977,10 @@ export class WallcrawlerStack extends cdk.Stack {
             resources: [
                 sessionsTable.tableArn,
                 `${sessionsTable.tableArn}/index/*`,
+                projectsTable.tableArn,
+                apiKeysTable.tableArn,
+                `${apiKeysTable.tableArn}/index/*`,
+                contextsTable.tableArn,
             ],
         }));
 
@@ -906,6 +998,20 @@ export class WallcrawlerStack extends cdk.Stack {
             ],
         }));
 
+        lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                's3:GetObject',
+                's3:PutObject',
+                's3:DeleteObject',
+                's3:ListBucket',
+            ],
+            resources: [
+                contextsBucket.bucketArn,
+                `${contextsBucket.bucketArn}/*`,
+            ],
+        }));
+
         // Add DynamoDB permissions to ECS task role for status updates
         browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -913,6 +1019,15 @@ export class WallcrawlerStack extends cdk.Stack {
                 'dynamodb:UpdateItem',
             ],
             resources: [sessionsTable.tableArn],
+        }));
+
+        browserTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                's3:GetObject',
+                's3:PutObject',
+            ],
+            resources: [`${contextsBucket.bucketArn}/*`],
         }));
 
         // =================================================================

@@ -26,9 +26,9 @@ type SessionListParams struct {
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Processing sessions list request")
 
-	// Validate API key header only
-	if request.Headers["x-wc-api-key"] == "" {
-		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
+	projectID := utils.GetAuthorizedProjectID(request.RequestContext.Authorizer)
+	if projectID == "" {
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Unauthorized project access"))
 	}
 
 	// Parse query parameters into SessionListParams
@@ -44,9 +44,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
 	}
 
-	// Get all sessions - we'll need to implement a scan or get project ID from API key
-	// For now, let's implement a scan to get all sessions
-	allSessions, err := utils.GetAllSessions(ctx, ddbClient)
+	projectSessions, err := utils.GetSessionsByProjectID(ctx, ddbClient, projectID)
 	if err != nil {
 		log.Printf("Error getting sessions: %v", err)
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to retrieve sessions"))
@@ -56,9 +54,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	filteredSessions := make([]*types.SessionState, 0)
 
 	// Filter sessions
-	for _, sessionState := range allSessions {
-		// Project ID already filtered by GSI query
-
+	for _, sessionState := range projectSessions {
 		// Filter by status if provided
 		if params.Status != "" && !matchesStatus(sessionState.Status, params.Status) {
 			continue
@@ -73,7 +69,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		filteredSessions = append(filteredSessions, sessionState)
 	}
 
-	log.Printf("Listed %d sessions (filtered from %d total)", len(filteredSessions), len(allSessions))
+	log.Printf("Listed %d sessions for project %s (filtered from %d total)", len(filteredSessions), projectID, len(projectSessions))
 	return utils.CreateAPIResponse(200, utils.SuccessResponse(filteredSessions))
 }
 
@@ -153,11 +149,11 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		if eventType != utils.EventTypeAPIGateway {
 			return nil, fmt.Errorf("expected API Gateway event, got %v", eventType)
 		}
-		
+
 		apiReq := parsedEvent.(events.APIGatewayProxyRequest)
 		return Handler(ctx, apiReq)
 	})
