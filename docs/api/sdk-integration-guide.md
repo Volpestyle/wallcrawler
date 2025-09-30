@@ -5,7 +5,7 @@ This document outlines how the Wallcrawler SDK-node integrates with the Go backe
 ## Architecture Overview
 
 ```
-Jobseek App → SDK-node → Public Proxy → API Gateway → Go Lambda Handlers → DynamoDB/ECS
+Jobseek App → SDK-node → CloudFront → API Gateway + Authorizer → Go Lambda Handlers → DynamoDB/SNS/ECS
 ```
 
 ## Endpoint Mapping
@@ -20,7 +20,7 @@ Jobseek App → SDK-node → Public Proxy → API Gateway → Go Lambda Handlers
 
 ## Authentication
 
-The SDK requires only the Wallcrawler API key:
+The SDK requires the Wallcrawler API key. When a key can access multiple projects, provide the `projectId` in the request (the SDK forwards it as `x-wc-project-id`).
 
 ```typescript
 {
@@ -33,7 +33,7 @@ The SDK requires only the Wallcrawler API key:
 ### Environment Variables
 ```bash
 WALLCRAWLER_API_KEY=your-api-key
-WALLCRAWLER_API_URL=https://api.wallcrawler.dev
+WALLCRAWLER_API_URL=https://<cloudfront-domain>
 ```
 
 ### SDK Initialization
@@ -92,13 +92,16 @@ const sessions = await wallcrawler.sessions.list({
 ```typescript
 {
   id: string,
-  connectUrl: string,
-  seleniumRemoteUrl: string,
-  signingKey: string,
   status: 'RUNNING',
+  connectUrl: string,            // ws://<public-ip>:9223?signingKey=...
+  seleniumRemoteUrl: string,     // http://<public-ip>:4444/wd/hub
+  publicIp: string,
+  signingKey: string,
   createdAt: string,
   expiresAt: string,
-  // ... other session fields
+  projectId: string,
+  region: string,
+  keepAlive: boolean
 }
 ```
 
@@ -150,5 +153,5 @@ try {
 
 1. **Always handle errors** - The SDK throws on non-2xx responses
 2. **Use metadata filtering** - Query sessions efficiently with the `q` parameter
-3. **Set appropriate timeouts** - Default is 24 hours, adjust based on your needs
+3. **Set appropriate timeouts** - Default is 1 hour (3600 seconds); increase only when necessary
 4. **Clean up sessions** - Use `sessions.update()` with `status: 'REQUEST_RELEASE'` when done

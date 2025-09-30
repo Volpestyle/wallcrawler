@@ -59,15 +59,16 @@ sequenceDiagram
     participant Client
     participant Lambda as sessions-create Lambda
     participant Secrets as AWS Secrets Manager
-    participant Redis
-    participant ECS
-    
+    participant Sessions as DynamoDB (wallcrawler-sessions)
+    participant ECS as ECS Fargate
+
     Client->>Lambda: POST /v1/sessions
     Lambda->>Secrets: Get JWT signing key
     Secrets-->>Lambda: Return secret key
     Lambda->>Lambda: Generate JWT token
-    Lambda->>Redis: Store session with JWT
-    Lambda->>ECS: Create task
+    Lambda->>Sessions: Store session (CREATING) with signingKey
+    Lambda->>ECS: Launch browser task
+    Note over Lambda,ECS: Lambda waits for the SNS "ready" notification before responding
     Lambda-->>Client: Return signingKey & connectUrl
 ```
 
@@ -76,12 +77,13 @@ sequenceDiagram
 3. **Token Generation**: Lambda creates a JWT token with:
    - Session ID (format: `sess_[uuid]`)
    - Project ID
-   - Expiration time (default: 10 minutes, configurable via timeout parameter)
+   - Expiration time (defaults to the session timeout — 1 hour unless overridden)
    - Cryptographically secure random nonce
-4. **Storage**: JWT token is stored in Redis with the session state
-5. **Response**: Client receives:
-   - `signingKey`: The JWT token
-   - `connectUrl`: Pre-constructed WebSocket URL with embedded signing key
+4. **Storage**: The session record (including the JWT) is written to DynamoDB (`wallcrawler-sessions`).
+5. **Provisioning**: The Lambda launches the ECS task and waits for the `sessions-stream-processor` SNS notification that signals the browser is ready.
+6. **Response**: The client receives:
+   - `signingKey`: The JWT token (expires with the session)
+   - `connectUrl`: Pre-constructed WebSocket URL with the signing key
 
 ### 2. Connection Authentication
 
@@ -240,7 +242,7 @@ export default function BadComponent() {
 ## Security Features
 
 ### 1. Time-Limited Access
-- Tokens expire after configurable duration (default: 10 minutes)
+- Tokens expire after a configurable duration (default matches the session timeout, 1 hour)
 - Expiration is enforced at validation time
 - No token refresh mechanism - clients must create new sessions
 
@@ -296,7 +298,7 @@ export default function BadComponent() {
   "connectUrl": "ws://1.2.3.4:9223?signingKey=eyJhbGc...",
   "seleniumRemoteUrl": "http://1.2.3.4:4444/wd/hub",
   "signingKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "status": "READY",
+  "status": "RUNNING",
   // ... other fields
 }
 ```

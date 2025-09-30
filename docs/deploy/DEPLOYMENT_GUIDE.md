@@ -32,33 +32,33 @@ npm run deploy:prod
 
 ## Environment Configurations
 
-| Environment | API Endpoint | Features | Idle Cost |
-|------------|--------------|----------|-----------|
-| **dev** | `https://xxx.execute-api.{region}.amazonaws.com/dev` | - No NAT Gateway<br>- DynamoDB on-demand<br>- Pay-per-use services | ~$1/month |
-| **staging** | `https://xxx.execute-api.{region}.amazonaws.com/staging` | - Same as dev<br>- For integration testing | ~$1/month |
-| **prod** | `https://xxx.execute-api.{region}.amazonaws.com/prod` | - NAT Gateway enabled<br>- Production security<br>- Optional custom domain | ~$46/month |
+| Environment | API Endpoint | Key Differences | Idle Cost |
+|------------|--------------|-----------------|-----------|
+| **dev** | CloudFront distribution (auto, stage `dev`) | - Lambdas run outside the VPC<br>- NAT gateway and WAF disabled<br>- Pay-per-use services only | <$2/month |
+| **staging** | CloudFront distribution (auto, stage `staging`) | - Lambdas run inside private subnets<br>- NAT gateway + WAF enabled<br>- Identical runtime config to prod | ~$50/month |
+| **prod** | CloudFront distribution or custom domain | - Lambdas in private subnets<br>- NAT gateway + WAF enabled<br>- Optional Secrets Manager rotation | ~$50/month (+ custom domain fees) |
 
 ## Cost Breakdown (Idle Infrastructure)
 
 ### Resources with Ongoing Costs
 
-| Resource | Dev/Staging | Production | Notes |
-|----------|-------------|------------|-------|
-| **NAT Gateway** | $0 | ~$45/month | Only in production for high availability |
-| **Secrets Manager** | ~$0.40/month | ~$0.40/month | JWT signing key storage |
-| **CloudWatch Logs** | ~$0.50/month | ~$0.50/month | Minimal storage when not in use |
-| **Total Idle Cost** | **~$1/month** | **~$46/month** | |
+| Resource | dev | staging/prod | Notes |
+|----------|-----|--------------|-------|
+| **NAT Gateway** | $0 | ~$45/month | Created when `environment` is not `dev` |
+| **AWS WAF (regional)** | $0 | ~$7/month | Base fee + managed rule set |
+| **Secrets Manager** | ~$0.40/month | ~$0.40/month | Stores the JWT signing key |
+| **CloudWatch Logs** | ~$0.50/month | ~$0.50/month | Assuming 7-day retention per log group |
+| **Total Idle Cost** | **< $2/month** | **≈ $52/month** | Before usage-based services |
 
 ### Zero-Cost When Idle (Pay-Per-Use)
 
-| Resource | Billing Model | Cost When Used |
-|----------|---------------|----------------|
-| **API Gateway** | Per request | $3.50 per million requests |
-| **Lambda Functions** (9x) | Per invocation | $0.20 per million requests |
-| **DynamoDB** | On-demand | $0.25 per million reads/writes |
-| **ECS Fargate** | Per task hour | ~$0.04/hour when browser runs |
-| **CloudFront CDN** | Per request/GB | $0.085 per GB transferred |
-| **VPC** | No charge | Only NAT Gateway costs |
+| Resource | Billing Model | Notes |
+|----------|---------------|--------|
+| **API Gateway + CloudFront** | Per request / data transfer | CloudFront fronts API Gateway in every environment |
+| **Lambda Functions** (16x) | Per invocation | All handlers are serverless |
+| **DynamoDB Tables** | On-demand | Sessions, projects, API keys, contexts |
+| **SNS & EventBridge** | Per request/event | Drive the synchronous session workflow |
+| **ECS Fargate** | Per task hour | Billed only while browser containers run |
 
 The architecture is designed to minimize idle costs by using serverless and pay-per-use services wherever possible.
 
@@ -67,7 +67,7 @@ The architecture is designed to minimize idle costs by using serverless and pay-
 ### `wallcrawler-config.txt`
 ```bash
 # API Access
-WALLCRAWLER_API_URL=https://xxx.execute-api.us-east-1.amazonaws.com/dev
+WALLCRAWLER_API_URL=<CLOUDFRONT_DOMAIN_FROM_APIGATEWAYURL_OUTPUT>
 WALLCRAWLER_AWS_API_KEY=7j9km0WaXj...
 WALLCRAWLER_PROJECT_ID=default
 
@@ -79,7 +79,7 @@ WALLCRAWLER_DYNAMODB_TABLE=wallcrawler-sessions
 # ... other AWS resources
 ```
 
-Copy the variables you need to your application's `.env` file.
+If the generated file leaves `WALLCRAWLER_API_URL` (or `WALLCRAWLER_PUBLIC_API_URL`) blank, copy the `APIGatewayURL` stack output—the CloudFront domain—and fill it in manually. Copy the variables you need to your application's `.env` file.
 
 ## Post-deployment Initialization
 
@@ -205,8 +205,8 @@ npm run deploy:prod
 
 ## Cost Breakdown
 
-- **Dev/Staging**: ~$10/month (no NAT Gateway, minimal resources)
-- **Production**: ~$60/month base + usage costs
-  - NAT Gateway: $45/month
-  - Redis: $15/month
-  - Lambda/ECS: Pay per use
+- **dev**: <$2/month (Secrets Manager + CloudWatch logs)
+- **staging/prod**: ≈$52/month base before traffic
+  - NAT Gateway: ~$45/month
+  - AWS WAF managed rule set: ~$7/month
+  - Lambda, API Gateway, CloudFront, DynamoDB, SNS, EventBridge, ECS: pay per use

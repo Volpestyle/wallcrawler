@@ -4,7 +4,7 @@ This document outlines logging strategies for session visibility now that termin
 
 ## Overview
 
-With session data in Redis expiring 15 minutes after termination, CloudWatch Logs becomes the primary source for debugging, auditing, and monitoring session lifecycle.
+With session data stored in DynamoDB and automatically removed via TTL (`expiresAt`), CloudWatch Logs become the primary source for debugging, auditing, and monitoring session lifecycles beyond the session timeout window.
 
 ## Structured Logging Format
 
@@ -154,10 +154,13 @@ fields @timestamp, event_type, status, error, metadata
 ## Log Retention Strategy
 
 1. **CloudWatch Log Groups**:
-   - `/aws/lambda/sessions-create` - 30 days
-   - `/aws/lambda/session-cleanup` - 7 days
-   - `/aws/ecs/wallcrawler-controller` - 30 days
+   - `/aws/lambda/sessions-create` - 30 days (high-volume, synchronous entrypoint)
+   - `/aws/lambda/sessions-list` & `/sessions-retrieve` - 14 days
+   - `/aws/lambda/sessions-update` & `/sessions-debug` - 14 days
+   - `/aws/lambda/sessions-stream-processor` - 14 days
    - `/aws/lambda/ecs-task-processor` - 14 days
+   - `/aws/lambda/authorizer` - 14 days
+   - `/aws/ecs/wallcrawler-controller` - 30 days
 
 2. **Archive to S3**:
    - Export terminated session logs to S3 after 30 days
@@ -257,7 +260,7 @@ func PublishSessionMetrics(sessionID string, duration time.Duration) {
 
 ## Benefits
 
-1. **Permanent Audit Trail**: Session history preserved beyond Redis TTL
+1. **Permanent Audit Trail**: Session history preserved beyond the DynamoDB TTL window
 2. **Advanced Analytics**: CloudWatch Insights for complex queries
 3. **Cost Tracking**: Detailed usage metrics per project
 4. **Debugging**: Full session lifecycle visibility
