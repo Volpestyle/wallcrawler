@@ -35,11 +35,9 @@
 | `POST` | `/sessions/{id}/navigate`     | AI navigation             | -                    | 🔄 **Stubbed** |
 | `POST` | `/sessions/{id}/agentExecute` | AI agent workflows        | -                    | 🔄 **Stubbed** |
 
-### ✅ Custom - Wallcrawler Specific Endpoints
+### ✅ Direct Mode Support
 
-| Method | Endpoint                 | Purpose                  | Handler   | Status             |
-| ------ | ------------------------ | ------------------------ | --------- | ------------------ |
-| `POST` | `/sessions/{id}/cdp-url` | Generate signed CDP URLs | `cdp-url` | ✅ **Implemented** |
+`POST /v1/sessions` returns `connectUrl`, `signingKey`, and `seleniumRemoteUrl` once the browser is ready. Subsequent `GET /v1/sessions/{id}` requests re-hydrate the same values for reconnects, so no standalone `/sessions/{id}/cdp-url` endpoint is required.
 
 ## Detailed Endpoint Documentation
 
@@ -56,8 +54,10 @@
 {
   "projectId": "project_123",
   "browserSettings": {
-    "viewport": { "width": 1280, "height": 720 }
+    "viewport": { "width": 1280, "height": 720 },
+    "context": { "id": "ctx_ab12cd34", "persist": true }
   },
+  "keepAlive": false,
   "timeout": 3600,
   "userMetadata": { "environment": "test" }
 }
@@ -67,11 +67,17 @@
 
 ```typescript
 {
-  "success": true,
-  "data": {
-    "id": "sess_abc123",
-    "connectUrl": "wss://api.wallcrawler.dev/sessions/sess_abc123/connect"
-  }
+  "id": "sess_abc123",
+  "status": "RUNNING",
+  "connectUrl": "ws://203.0.113.10:9223?signingKey=eyJhbGci...",
+  "publicIp": "203.0.113.10",
+  "seleniumRemoteUrl": "http://203.0.113.10:4444/wd/hub",
+  "createdAt": "2024-01-15T10:30:00Z",
+  "expiresAt": "2024-01-15T11:30:00Z",
+  "projectId": "project_123",
+  "keepAlive": false,
+  "region": "us-east-1",
+  "signingKey": "eyJhbGciOi..."
 }
 ```
 
@@ -116,9 +122,15 @@
     "id": "sess_abc123",
     "status": "RUNNING",
     "projectId": "project_123",
-    "connectUrl": "wss://api.wallcrawler.dev/sessions/sess_abc123/connect",
+    "connectUrl": "ws://203.0.113.10:9223?signingKey=eyJhbGci...",
+    "seleniumRemoteUrl": "http://203.0.113.10:4444/wd/hub",
+    "publicIP": "203.0.113.10",
     "createdAt": "2024-01-15T10:30:00Z",
-    "updatedAt": "2024-01-15T10:30:30Z",
+    "updatedAt": "2024-01-15T10:30:45Z",
+    "expiresAt": "2024-01-15T11:30:00Z",
+    "keepAlive": false,
+    "region": "us-east-1",
+    "signingKey": "eyJhbGciOi...",
     "userMetadata": { "environment": "test" }
   }
 }

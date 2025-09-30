@@ -1,282 +1,141 @@
-# Wallcrawler DynamoDB Schema
-
-## Table: wallcrawler-sessions
-
-### Overview
-
-The `wallcrawler-sessions` table is the single source of truth for all browser session data in the Wallcrawler platform.
-
-### Table Configuration
-
-```
-Table Name: wallcrawler-sessions
-Billing Mode: PAY_PER_REQUEST (On-Demand)
-Time to Live: Enabled on 'expiresAt' attribute
-Point-in-Time Recovery: Enabled
-```
-
-### Primary Key
-
-- **Partition Key**: `sessionId` (String)
-  - Format: `sess_[8-character-uuid]`
-  - Example: `sess_a1b2c3d4`
-
-### Attributes
-
-| Attribute               | Type   | Required | Description                                                                                  |
-| ----------------------- | ------ | -------- | -------------------------------------------------------------------------------------------- |
-| `sessionId`             | String | Yes      | Unique session identifier                                                                    |
-| `status`                | String | Yes      | Session state: CREATING, PROVISIONING, STARTING, READY, ACTIVE, TERMINATING, STOPPED, FAILED |
-| `projectId`             | String | Yes      | Project identifier for multi-tenancy (e.g., "jobseek", "research")                           |
-| `connectUrl`            | String | No       | Authenticated WebSocket URL for CDP connection                                               |
-| `publicIP`              | String | No       | ECS task public IP address                                                                   |
-| `signingKey`            | String | No       | JWT signing key for CDP authentication                                                       |
-| `ecsTaskArn`            | String | No       | ECS task ARN for container management                                                        |
-| `userMetadata`          | Map    | No       | Client-defined metadata including userId                                                     |
-| `modelConfig`           | Map    | No       | LLM configuration if using API mode                                                          |
-| `createdAt`             | Number | Yes      | Unix timestamp of session creation                                                           |
-| `updatedAt`             | Number | Yes      | Unix timestamp of last update                                                                |
-| `expiresAt`             | Number | Yes      | TTL timestamp (1 hour from creation)                                                         |
-| `provisioningStartedAt` | Number | No       | Unix timestamp when provisioning started                                                     |
-| `readyAt`               | Number | No       | Unix timestamp when session became ready                                                     |
-| `lastActiveAt`          | Number | No       | Unix timestamp of last activity                                                              |
-| `terminatedAt`          | Number | No       | Unix timestamp when session was terminated                                                   |
-| `eventHistory`          | List   | No       | Array of session events for audit trail                                                      |
-| `resourceLimits`        | Map    | No       | Resource constraints for the session                                                         |
-| `billingInfo`           | Map    | No       | Usage tracking for cost allocation                                                           |
-
-### Global Secondary Indexes
-
-#### GSI1: projectId-createdAt-index
-
-- **Purpose**: Efficiently query all sessions for a specific project
-- **Partition Key**: `projectId` (String)
-- **Sort Key**: `createdAt` (Number)
-- **Projection**: ALL_ATTRIBUTES
-- **Use Cases**:
-  - List all sessions for a project
-  - Filter sessions by date range
-  - Multi-tenant session isolation
-
-#### GSI2: status-expiresAt-index
-
-- **Purpose**: Find active sessions nearing expiration
-- **Partition Key**: `status` (String)
-- **Sort Key**: `expiresAt` (Number)
-- **Projection**: KEYS_ONLY
-- **Use Cases**:
-  - Safety net queries for orphaned sessions
-  - Monitoring active session counts
-  - Debugging stuck sessions
-
-### Data Types
-
-#### userMetadata (Map)
-
-```json
-{
-  "userId": "user123",
-  "email": "user@example.com",
-  "organizationId": "org456",
-  "customField": "value"
-}
-```
-
-#### modelConfig (Map)
-
-```json
-{
-  "modelName": "gpt-4",
-  "modelAPIKey": "encrypted-key",
-  "domSettleTimeoutMs": 30000,
-  "verbose": 2,
-  "debugDom": true
-}
-```
-
-#### eventHistory (List of Maps)
-
-```json
-[
-  {
-    "eventType": "StatusChanged",
-    "timestamp": 1704067200,
-    "source": "wallcrawler.utils",
-    "detail": {
-      "previousStatus": "CREATING",
-      "newStatus": "READY",
-      "sessionId": "sess_a1b2c3d4"
-    }
-  }
-]
-```
-
-#### resourceLimits (Map)
-
-```json
-{
-  "maxCPU": 1024,
-  "maxMemory": 2048,
-  "maxDuration": 3600,
-  "maxActions": 1000
-}
-```
+# DynamoDB Schema
+
+## Overview
+
+Wallcrawler uses four DynamoDB tables to manage multi-tenant browser sessions and configuration:
+
+| Table | Purpose | Primary Key | Notes |
+|-------|---------|-------------|-------|
+| `wallcrawler-sessions` | Session lifecycle state, connection metadata, audit history | `sessionId` (string) | TTL on `expiresAt`, streams enabled |
+| `wallcrawler-projects` | Project configuration (quotas, defaults) | `projectId` (string) | No secondary indexes |
+| `wallcrawler-api-keys` | Wallcrawler API keys (hashed) | `apiKeyHash` (string) | GSI on `projectId-index` |
+| `wallcrawler-contexts` | Browser context metadata and S3 storage keys | `contextId` (string) | One item per persisted context |
+
+All tables use on-demand billing mode and point-in-time recovery (PITR).
+
+---
+
+## `wallcrawler-sessions`
+
+**Primary key**: `sessionId` (string)  
+**TTL attribute**: `expiresAt` (number) – seconds since epoch  
+**Stream**: `NEW_AND_OLD_IMAGES` (consumed by `sessions-stream-processor`)  
+**Global Secondary Indexes**:
+- `projectId-createdAt-index` → PK `projectId` (string), SK `createdAt` (ISO8601 string)
+- `status-expiresAt-index` → PK `status` (string), SK `expiresAt` (number, KEYS_ONLY)
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `sessionId` | `S` | Canonical session identifier (`sess_xxxx`) |
+| `status` | `S` | SDK-visible status (`RUNNING`, `COMPLETED`, `ERROR`, `TIMED_OUT`) |
+| `internalStatus` | `S` | Detailed lifecycle status (`CREATING`, `PROVISIONING`, `READY`, etc.) |
+| `projectId` | `S` | Owning project |
+| `createdAt` / `updatedAt` / `startedAt` | `S` | ISO8601 timestamps |
+| `expiresAt` | `N` | Unix timestamp used for TTL and status GSI |
+| `keepAlive` | `BOOL` | Indicates whether the container should persist beyond default timeout |
+| `region` | `S` | Target AWS region (currently informational) |
+| `publicIP` | `S` | Public IP assigned to the Fargate task |
+| `ecsTaskArn` | `S` | Task ARN for cleanup/diagnostics |
+| `connectUrl` | `S` | Signed WebSocket URL for Direct Mode (optional) |
+| `signingKey` | `S` | JWT token returned to the client (restricted access) |
+| `seleniumRemoteUrl` | `S` | Optional Remote WebDriver endpoint |
+| `contextId` | `S` | Associated browser context (if provided) |
+| `contextPersist` | `BOOL` | Persist context back to S3 on shutdown |
+| `contextStorageKey` | `S` | S3 key (`<projectId>/<contextId>/profile.tar.gz`) |
+| `proxyBytes` | `N` | Data transfer usage counter |
+| `avgCpuUsage` / `memoryUsage` | `N` | Aggregated resource metrics (optional) |
+| `eventHistory` | `L` | Array of EventBridge event envelopes (for auditing) |
+| `lastEventTimestamp` | `S` | Last event recorded by the controller/processor |
+| `retryCount` | `N` | Automatic retry attempts |
+| `userMetadata` | `M` | Arbitrary JSON metadata supplied by clients |
 
-#### billingInfo (Map)
+### Lifecycle
 
-```json
-{
-  "costCenter": "engineering",
-  "cpuSeconds": 120.5,
-  "memoryMBHours": 2.1,
-  "actionsCount": 45,
-  "lastBillingAt": 1704067200
-}
-```
+1. `sessions-create` seeds the record with `CREATING` status, TTL (`expiresAt`), and signing key.  
+2. `ecs-task-processor` updates the record when the ECS task reaches `RUNNING` (public IP, `connectUrl`, `internalStatus=READY`).  
+3. The DynamoDB stream notifies `sessions-stream-processor`, which publishes to SNS (`wallcrawler-session-ready`).  
+4. `sessions-update` transitions the status to `STOPPED` and stops the task when `REQUEST_RELEASE` is received.  
+5. DynamoDB TTL removes the item after the configured timeout window if no manual cleanup occurs.
 
-### Access Patterns
+---
 
-#### 1. Get Session by ID
+## `wallcrawler-projects`
 
-```
-Operation: GetItem
-Key: { sessionId: "sess_a1b2c3d4" }
-```
+**Primary key**: `projectId` (string)
 
-#### 2. List Sessions by Project
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `projectId` | `S` | Project identifier (`project_default`, etc.) |
+| `name` | `S` | Human-friendly name |
+| `ownerId` | `S` (optional) | External owner identifier |
+| `defaultTimeout` | `N` | Default session timeout (seconds) |
+| `concurrency` | `N` | Max concurrent sessions allowed |
+| `status` | `S` | `ACTIVE` or `INACTIVE` |
+| `createdAt` / `updatedAt` | `S` | ISO8601 timestamps |
+| `billingTier` | `S` (optional) | Future pricing tier hook |
 
-```
-Operation: Query
-Index: projectId-createdAt-index
-KeyCondition: projectId = "jobseek"
-ScanIndexForward: false (newest first)
-```
+The authorizer validates that the selected project is active before issuing an allow policy.
 
-#### 3. Find Active Sessions
+---
 
-```
-Operation: Query
-Index: status-expiresAt-index
-KeyCondition: status = "ACTIVE"
-```
+## `wallcrawler-api-keys`
 
-#### 4. Update Session Status
+**Primary key**: `apiKeyHash` (string, SHA-256 of the raw key)  
+**Global Secondary Index**: `projectId-index` (PK `projectId`)
 
-```
-Operation: UpdateItem
-Key: { sessionId: "sess_a1b2c3d4" }
-UpdateExpression: "SET #status = :status, updatedAt = :now"
-```
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `apiKeyHash` | `S` | SHA-256 hash of the customer provided API key |
+| `keyId` | `S` (optional) | Friendly identifier for metrics | 
+| `projectId` | `S` | Primary project for billing/metrics |
+| `projectIds` | `L` | List of additional accessible projects |
+| `name` | `S` (optional) | Label for internal use |
+| `status` | `S` | `ACTIVE` or `INACTIVE` |
+| `createdAt` | `S` | Creation timestamp |
+| `lastUsedAt` | `S` (optional) | Populated by the authorizer if enabled |
 
-#### 5. Delete Session
+`sessions-create` and other handlers pull the authorized project list from custom authorizer context rather than querying this table directly.
 
-```
-Operation: DeleteItem
-Key: { sessionId: "sess_a1b2c3d4" }
-```
+---
 
-### TTL Configuration
+## `wallcrawler-contexts`
 
-- **TTL Attribute**: `expiresAt`
-- **Default TTL**: 1 hour from creation
-- **Behavior**: DynamoDB automatically deletes items after TTL expires
-- **Grace Period**: Items may persist up to 48 hours after TTL (eventually consistent)
+**Primary key**: `contextId` (string)
 
-### Cost Optimization
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `contextId` | `S` | Context identifier (`ctx_xxxx`) |
+| `projectId` | `S` | Owning project |
+| `storageKey` | `S` | S3 key pointing to the archived Chrome profile |
+| `createdAt` / `updatedAt` | `S` | ISO8601 timestamps |
+| `status` | `S` | `CREATED`, future lifecycle states |
 
-#### On-Demand Pricing (as of 2024)
+Associated S3 bucket (`wallcrawler-contexts-*`) stores the serialized profile at `<projectId>/<contextId>/profile.tar.gz`. The ECS controller downloads this archive before Chrome starts and, when `persist=true`, uploads an updated archive on shutdown.
 
-- **Write Request Units**: $1.25 per million writes
-- **Read Request Units**: $0.25 per million reads
-- **Storage**: $0.25 per GB-month
+---
 
-#### Typical Session Costs
+## Event-Driven Integrations
 
-- **Create**: 1 WRU = $0.00000125
-- **Read**: 1 RRU = $0.00000025
-- **List (GSI Query)**: ~10 RRUs = $0.0000025
-- **Update**: 1 WRU = $0.00000125
-- **Total per session**: ~$0.000005 (0.0005 cents)
+- **DynamoDB Streams**: The `wallcrawler-sessions` stream drives the `sessions-stream-processor` Lambda, which publishes `READY` notifications to SNS.  
+- **SNS Topic**: `wallcrawler-session-ready` fan-outs to the waiting `sessions-create` Lambda (and any future subscribers).  
+- **EventBridge**: ECS task state changes trigger `ecs-task-processor`, which enriches the session record and emits custom events for observability.
 
-### Best Practices
+---
 
-#### 1. Efficient Queries
+## TTL & Expiration
 
-- Always use GSIs for list operations
-- Limit query results with `Limit` parameter
-- Use projection expressions to reduce data transfer
+- Sessions default to a 3600-second timeout (`SESSION_TIMEOUT_HOURS` environment variable controls the cap).  
+- `NormalizeSessionTimeout` enforces the maximum configured timeout.  
+- Deleting the DynamoDB item (via TTL or manual cleanup) removes it from all GSIs; no additional cleanup job is required.
 
-#### 2. Batch Operations
+---
 
-- Use BatchGetItem for multiple session reads
-- Implement exponential backoff for throttling
+## Seeding & Administration
 
-#### 3. Monitoring
+After a fresh deployment:
 
-- Track ConsumedCapacity for cost monitoring
-- Set up CloudWatch alarms for throttling
-- Monitor TTL deletion metrics
+1. **Create a project** in `wallcrawler-projects` (see `docs/deploy/DEPLOYMENT_GUIDE.md`).
+2. **Insert an API key** into `wallcrawler-api-keys` with `apiKeyHash`, `projectId`, and optional `projectIds` list.
+3. Contexts and sessions are created via the public API; no manual seeding is required for those tables.
 
-#### 4. Security
-
-- Encrypt sensitive data before storing
-- Use IAM policies for least-privilege access
-- Enable point-in-time recovery for compliance
-
-### Migration from Redis
-
-#### Key Differences
-
-1. **No expiration callbacks**: Use TTL for automatic cleanup
-2. **No pub/sub**: Use EventBridge for event-driven workflows
-3. **Query flexibility**: Use GSIs instead of SCAN operations
-4. **Consistency**: Eventually consistent by default
-
-#### Migration Steps
-
-1. Deploy DynamoDB table with CDK
-2. Update Lambda functions to use DynamoDB client
-3. Update ECS containers to write to DynamoDB
-4. Monitor both systems during transition
-5. Decommission Redis cluster
-
-### Troubleshooting
-
-#### Common Issues
-
-1. **Session Not Found**
-   - Check if TTL has expired
-   - Verify correct sessionId format
-   - Ensure proper IAM permissions
-
-2. **Query Performance**
-   - Use GSIs instead of Scan
-   - Implement pagination for large results
-   - Consider caching for frequently accessed data
-
-3. **Throttling**
-   - Switch to provisioned capacity if consistent
-   - Implement exponential backoff
-   - Review access patterns
-
-4. **Cost Spikes**
-   - Monitor hot partition keys
-   - Review TTL configuration
-   - Optimize query patterns
-
-### CloudWatch Metrics
-
-Key metrics to monitor:
-
-- `UserErrors`: Client-side errors (4xx)
-- `SystemErrors`: Server-side errors (5xx)
-- `ConsumedReadCapacityUnits`: Read usage
-- `ConsumedWriteCapacityUnits`: Write usage
-- `TimeToLiveDeletedItemCount`: TTL cleanup rate
-
-### Future Enhancements
-
-1. **DynamoDB Streams**: Real-time session event processing
-2. **Global Tables**: Multi-region replication
-3. **Auto-scaling**: Switch to provisioned capacity with scaling
-4. **Contributor Insights**: Identify access pattern anomalies
+These tables form the authoritative source of truth for authentication and session state across the platform.

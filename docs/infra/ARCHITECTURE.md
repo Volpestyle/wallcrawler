@@ -74,29 +74,34 @@ sequenceDiagram
     participant Client
     participant API as API Gateway
     participant Auth as Lambda Authorizer
-    participant Create as sessions-create
+    participant SessionCreate as sessions-create
     participant Contexts as DynamoDB (contexts)
     participant Sessions as DynamoDB (sessions)
     participant ECS as ECS Fargate
+    participant Bridge as EventBridge
+    participant TaskProc as ecs-task-processor
     participant SNS as SNS (session-ready)
     participant Stream as sessions-stream-processor
+    participant Keys as DynamoDB (api-keys)
 
     Client->>API: POST /v1/sessions { browserSettings.context.id }
     API->>Auth: Authorize request
-    Auth->>DynamoDB: Lookup API key -> allowed projects
+    Auth->>Keys: Lookup API key -> allowed projects
     Auth->>API: Return allow policy and projectId
-    API->>Create: Invoke Lambda
-    Create->>Contexts: Validate context belongs to project
-    Create->>Sessions: Put session (CREATING)
-    Create->>Sessions: Update session (PROVISIONING, JWT)
-    Create->>ECS: RunTask (env includes context + project)
-    Create-->>Client: Wait on SNS notification
+    API->>SessionCreate: Invoke Lambda
+    SessionCreate->>Contexts: Validate context belongs to project
+    SessionCreate->>Sessions: Put session (CREATING)
+    SessionCreate->>Sessions: Update session (PROVISIONING, JWT)
+    SessionCreate->>ECS: RunTask (env includes context + project)
+    SessionCreate-->>Client: Wait on SNS notification
 
-    ECS-->>Sessions: Controller updates session to READY (connect URL, IP)
+    ECS-->>Bridge: Task state change (RUNNING)
+    Bridge->>TaskProc: Invoke lambda
+    TaskProc->>Sessions: Update session to READY (public IP, connectUrl)
     Sessions-->>Stream: DynamoDB stream event
     Stream->>SNS: Publish READY notification
-    SNS->>Create: Notify waiting lambda
-    Create->>Client: 200 { connectUrl, signingKey, ... }
+    SNS->>SessionCreate: Notify waiting lambda
+    SessionCreate->>Client: 200 { connectUrl, signingKey, ... }
 ```
 
 ### Context Lifecycle
@@ -136,19 +141,20 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Controller as ECS Controller
+    participant TaskProc as ecs-task-processor
     participant Sessions as DynamoDB (sessions)
     participant Stream as DynamoDB Stream
     participant Processor as sessions-stream-processor
     participant SNS as SNS Topic
-    participant Create as sessions-create
+    participant SessionCreate as sessions-create
+    participant Client
 
-    Controller->>Sessions: Update session (READY, connectUrl)
+    TaskProc->>Sessions: Update session (READY, connectUrl)
     Sessions-->>Stream: Emit stream record
     Stream->>Processor: Invoke Lambda
     Processor->>SNS: Publish READY notification
-    SNS->>Create: Deliver message
-    Create->>Client: Return session response
+    SNS->>SessionCreate: Deliver message
+    SessionCreate->>Client: Return session response
 ```
 
 ### Multi-Project Authorization
