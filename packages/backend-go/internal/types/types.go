@@ -25,6 +25,29 @@ type SessionCreateResponse struct {
 	ConnectURL string `json:"connectUrl"`
 }
 
+type Context struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type ContextCreateResponse struct {
+	ID                       string `json:"id"`
+	CipherAlgorithm          string `json:"cipherAlgorithm"`
+	InitializationVectorSize int    `json:"initializationVectorSize"`
+	PublicKey                string `json:"publicKey"`
+	UploadURL                string `json:"uploadUrl"`
+}
+
+type ContextUpdateResponse struct {
+	ID                       string `json:"id"`
+	CipherAlgorithm          string `json:"cipherAlgorithm"`
+	InitializationVectorSize int    `json:"initializationVectorSize"`
+	PublicKey                string `json:"publicKey"`
+	UploadURL                string `json:"uploadUrl"`
+}
+
 // Stagehand session start types
 type StartSessionRequest struct {
 	ModelName                      string                 `json:"modelName"`
@@ -179,22 +202,27 @@ type LogMessage struct {
 
 type SessionState struct {
 	// SDK-compatible fields
-	ID           string                 `json:"id"`
-	CreatedAt    string                 `json:"createdAt"`
-	ExpiresAt    string                 `json:"expiresAt"`
-	ExpiresAtUnix int64                 `json:"-" dynamodbav:"expiresAt"` // Numeric timestamp for DynamoDB GSI
-	KeepAlive    bool                   `json:"keepAlive"`
-	ProjectID    string                 `json:"projectId"`
-	ProxyBytes   int                    `json:"proxyBytes"`
-	Region       string                 `json:"region"`
-	StartedAt    string                 `json:"startedAt"`
-	Status       string                 `json:"status"` // RUNNING, ERROR, TIMED_OUT, COMPLETED
-	UpdatedAt    string                 `json:"updatedAt"`
-	AvgCPUUsage  *int                   `json:"avgCpuUsage,omitempty"`
-	ContextID    *string                `json:"contextId,omitempty"`
-	EndedAt      *string                `json:"endedAt,omitempty"`
-	MemoryUsage  *int                   `json:"memoryUsage,omitempty"`
-	UserMetadata map[string]interface{} `json:"userMetadata,omitempty"`
+	ID             string                 `json:"id"`
+	CreatedAt      string                 `json:"createdAt"`
+	ExpiresAt      string                 `json:"expiresAt"`
+	ExpiresAtUnix  int64                  `json:"-" dynamodbav:"expiresAt"` // Numeric timestamp for DynamoDB GSI
+	KeepAlive      bool                   `json:"keepAlive"`
+	ProjectID      string                 `json:"projectId"`
+	ProxyBytes     int                    `json:"proxyBytes"`
+	Region         string                 `json:"region"`
+	StartedAt      string                 `json:"startedAt"`
+	Status         string                 `json:"status"` // RUNNING, ERROR, TIMED_OUT, COMPLETED
+	UpdatedAt      string                 `json:"updatedAt"`
+	AvgCPUUsage    *int                   `json:"avgCpuUsage,omitempty"`
+	ContextID      *string                `json:"contextId,omitempty"`
+	ContextPersist bool                   `json:"contextPersist,omitempty"`
+	EndedAt        *string                `json:"endedAt,omitempty"`
+	MemoryUsage    *int                   `json:"memoryUsage,omitempty"`
+	UserMetadata   map[string]interface{} `json:"userMetadata,omitempty"`
+
+	// Internal lifecycle tracking (not exposed directly to SDK)
+	InternalStatus    string  `json:"-" dynamodbav:"internalStatus,omitempty"`
+	ContextStorageKey *string `json:"-" dynamodbav:"contextStorageKey,omitempty"`
 
 	// Additional fields for session creation response
 	ConnectURL        *string `json:"connectUrl,omitempty"`
@@ -257,4 +285,37 @@ type ModelConfig struct {
 	SelfHeal             bool   `json:"selfHeal"`
 	WaitForCaptchaSolves bool   `json:"waitForCaptchaSolves"`
 	ActionTimeoutMs      int    `json:"actionTimeoutMs"`
+}
+
+const (
+	APIKeyStatusActive   = "ACTIVE"
+	APIKeyStatusInactive = "INACTIVE"
+)
+
+type APIKeyMetadata struct {
+	APIKeyHash string   `json:"-" dynamodbav:"apiKeyHash"`
+	KeyID      *string  `json:"keyId,omitempty" dynamodbav:"keyId,omitempty"`
+	ProjectID  string   `json:"projectId" dynamodbav:"projectId"`
+	ProjectIDs []string `json:"projectIds,omitempty" dynamodbav:"projectIds,omitempty"`
+	Name       *string  `json:"name,omitempty" dynamodbav:"name,omitempty"`
+	Status     string   `json:"status" dynamodbav:"status"`
+	CreatedAt  string   `json:"createdAt" dynamodbav:"createdAt"`
+	LastUsedAt *string  `json:"lastUsedAt,omitempty" dynamodbav:"lastUsedAt,omitempty"`
+}
+
+const (
+	ProjectStatusActive   = "ACTIVE"
+	ProjectStatusInactive = "INACTIVE"
+)
+
+type Project struct {
+	ID             string  `json:"id" dynamodbav:"projectId"`
+	Name           string  `json:"name" dynamodbav:"name"`
+	OwnerID        *string `json:"ownerId,omitempty" dynamodbav:"ownerId,omitempty"`
+	DefaultTimeout int     `json:"defaultTimeout" dynamodbav:"defaultTimeout"`
+	Concurrency    int     `json:"concurrency" dynamodbav:"concurrency"`
+	Status         string  `json:"status" dynamodbav:"status"`
+	CreatedAt      string  `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt      string  `json:"updatedAt" dynamodbav:"updatedAt"`
+	BillingTier    *string `json:"billingTier,omitempty" dynamodbav:"billingTier,omitempty"`
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -35,9 +36,9 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing session ID parameter"))
 	}
 
-	// Validate API key header only
-	if request.Headers["x-wc-api-key"] == "" {
-		return utils.CreateAPIResponse(401, utils.ErrorResponse("Missing required header: x-wc-api-key"))
+	projectID := utils.GetAuthorizedProjectID(request.RequestContext.Authorizer)
+	if projectID == "" {
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Unauthorized project access"))
 	}
 
 	// Get DynamoDB client
@@ -55,6 +56,10 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	// Check if session is active and has public IP
+	if !strings.EqualFold(sessionState.ProjectID, projectID) {
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Session does not belong to this project"))
+	}
+
 	if !utils.IsSessionActive(sessionState.Status) {
 		return utils.CreateAPIResponse(400, utils.ErrorResponse("Session is not active"))
 	}
@@ -107,11 +112,11 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		if eventType != utils.EventTypeAPIGateway {
 			return nil, fmt.Errorf("expected API Gateway event, got %v", eventType)
 		}
-		
+
 		apiReq := parsedEvent.(events.APIGatewayProxyRequest)
 		return Handler(ctx, apiReq)
 	})

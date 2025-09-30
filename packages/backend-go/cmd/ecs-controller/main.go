@@ -1,23 +1,32 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/wallcrawler/backend-go/internal/cdpproxy"
 
 	"github.com/chromedp/cdproto/target"
@@ -28,6 +37,7 @@ type Controller struct {
 	sessionID         string
 	ddbClient         *dynamodb.Client
 	ecsClient         *ecs.Client
+	s3Client          *s3.Client
 	cdpProxy          *cdpproxy.CDPProxy
 	chromeCmd         *exec.Cmd
 	disconnectTimeout time.Duration
@@ -37,6 +47,12 @@ type Controller struct {
 	allocatorCancel   context.CancelFunc
 	ctx               context.Context
 	cancel            context.CancelFunc
+	contextID         string
+	contextsBucket    string
+	contextS3Key      string
+	contextPersist    bool
+	contextEnabled    bool
+	profileDir        string
 }
 
 func main() {
@@ -65,6 +81,20 @@ func main() {
 		ddbClient:         dynamodb.NewFromConfig(cfg),
 		ecsClient:         ecs.NewFromConfig(cfg),
 		disconnectTimeout: disconnectTimeout,
+	}
+	controller.s3Client = s3.NewFromConfig(cfg)
+	controller.contextID = os.Getenv("CONTEXT_ID")
+	controller.contextsBucket = os.Getenv("CONTEXTS_BUCKET_NAME")
+	controller.contextS3Key = os.Getenv("CONTEXT_S3_KEY")
+	controller.contextPersist = strings.EqualFold(os.Getenv("CONTEXT_PERSIST"), "true")
+	controller.profileDir = "/home/wallcrawler/.config/chrome-profile"
+
+	if controller.contextID != "" && controller.contextsBucket != "" && controller.contextS3Key != "" {
+		controller.contextEnabled = true
+	}
+
+	if err := controller.prepareContext(context.Background()); err != nil {
+		log.Fatalf("Failed to prepare browser context: %v", err)
 	}
 
 	// Start Chrome with remote debugging
@@ -113,6 +143,57 @@ func main() {
 	controller.cleanup()
 }
 
+func (c *Controller) prepareContext(ctx context.Context) error {
+	if c.profileDir == "" {
+		return nil
+	}
+
+	if err := os.RemoveAll(c.profileDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(c.profileDir, 0o755); err != nil {
+		return err
+	}
+
+	if !c.contextEnabled {
+		return nil
+	}
+
+	tmpFile, err := os.CreateTemp("", "context-*.tar.gz")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+	}()
+
+	downloader := manager.NewDownloader(c.s3Client)
+	_, err = downloader.Download(ctx, tmpFile, &s3.GetObjectInput{
+		Bucket: aws.String(c.contextsBucket),
+		Key:    aws.String(c.contextS3Key),
+	})
+	if err != nil {
+		var notFound *s3types.NoSuchKey
+		if errors.As(err, &notFound) {
+			log.Printf("No existing context archive for %s, starting fresh profile", c.contextID)
+			return nil
+		}
+		return err
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+
+	if err := extractTarGz(tmpFile.Name(), c.profileDir); err != nil {
+		return err
+	}
+
+	log.Printf("Loaded browser context %s from S3", c.contextID)
+	return nil
+}
+
 func (c *Controller) startChrome() error {
 	// Chrome command line arguments for remote debugging
 	args := []string{
@@ -150,9 +231,14 @@ func (c *Controller) startChrome() error {
 		"--headless=new",
 		"--window-size=1920,1080",
 		"--virtual-time-budget=5000",
-		// Use about:blank as default
-		"about:blank",
 	}
+
+	if c.contextEnabled && c.profileDir != "" {
+		args = append(args, fmt.Sprintf("--user-data-dir=%s", c.profileDir))
+	}
+
+	// Use about:blank as default
+	args = append(args, "about:blank")
 
 	// Start Chrome process
 	c.chromeCmd = exec.Command("google-chrome", args...)
@@ -279,7 +365,7 @@ func (c *Controller) initiateShutdown(ctx context.Context) {
 	log.Printf("Initiating graceful shutdown for session %s", c.sessionID)
 
 	// Update session status in DynamoDB
-	tableName := os.Getenv("DYNAMODB_TABLE_NAME")
+	tableName := os.Getenv("SESSIONS_TABLE_NAME")
 	if tableName != "" {
 		updateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -302,6 +388,8 @@ func (c *Controller) initiateShutdown(ctx context.Context) {
 		if err != nil {
 			log.Printf("Error updating session status: %v", err)
 		}
+	} else {
+		log.Printf("Sessions table name not configured; skipping status update")
 	}
 
 	// Cleanup and exit
@@ -397,7 +485,156 @@ func (c *Controller) cleanup() {
 		}
 	}
 
+	if c.contextEnabled && c.contextPersist && c.contextsBucket != "" && c.contextS3Key != "" {
+		if err := c.persistContext(context.Background()); err != nil {
+			log.Printf("error persisting browser context: %v", err)
+		} else {
+			log.Printf("Persisted browser context %s to S3", c.contextID)
+		}
+	}
+
 	// AWS SDK clients don't need explicit cleanup
 
 	log.Printf("Controller shutdown complete for session %s", c.sessionID)
+}
+
+func (c *Controller) persistContext(ctx context.Context) error {
+	if c.profileDir == "" {
+		return nil
+	}
+
+	archivePath, err := createTarGz(c.profileDir)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(archivePath)
+
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	uploader := manager.NewUploader(c.s3Client)
+	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(c.contextsBucket),
+		Key:    aws.String(c.contextS3Key),
+		Body:   file,
+	})
+	return err
+}
+
+func createTarGz(srcDir string) (string, error) {
+	archiveFile, err := os.CreateTemp("", "context-*.tar.gz")
+	if err != nil {
+		return "", err
+	}
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	err = filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." {
+			return nil
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = relPath
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(tarWriter, file)
+		file.Close()
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	tarWriter.Close()
+	gzipWriter.Close()
+	archiveFile.Close()
+
+	if err != nil {
+		os.Remove(archiveFile.Name())
+		return "", err
+	}
+
+	return archiveFile.Name(), nil
+}
+
+func extractTarGz(archivePath, destination string) error {
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		return err
+	}
+
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gzipReader.Close()
+
+	tarReader := tar.NewReader(gzipReader)
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		targetPath := filepath.Join(destination, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return err
+			}
+			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+		}
+	}
+
+	return nil
 }

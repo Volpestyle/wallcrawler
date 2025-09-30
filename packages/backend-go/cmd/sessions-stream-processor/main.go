@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -65,18 +66,21 @@ func Handler(ctx context.Context, event events.DynamoDBEvent) error {
 		}
 		sessionID := sessionIDAttr.String()
 
-		// Check if this is a status change to READY
-		newStatusAttr, hasNewStatus := record.Change.NewImage["status"]
-		if !hasNewStatus {
+		// Check if this is a status change to READY (internal lifecycle status)
+		internalStatusAttr, ok := record.Change.NewImage["internalStatus"]
+		if !ok {
 			continue
 		}
-		newStatus := newStatusAttr.String()
+		newStatus := internalStatusAttr.String()
 
 		// For MODIFY events, check if status changed from non-READY to READY
 		if record.EventName == "MODIFY" {
 			if record.Change.OldImage != nil {
-				oldStatusAttr, hasOldStatus := record.Change.OldImage["status"]
-				if hasOldStatus && oldStatusAttr.String() == "READY" {
+				oldStatus := ""
+				if oldInternal, ok := record.Change.OldImage["internalStatus"]; ok {
+					oldStatus = oldInternal.String()
+				}
+				if strings.EqualFold(oldStatus, "READY") {
 					// Status was already READY, skip
 					continue
 				}
@@ -84,7 +88,7 @@ func Handler(ctx context.Context, event events.DynamoDBEvent) error {
 		}
 
 		// Only notify for READY status
-		if newStatus != "READY" {
+		if !strings.EqualFold(newStatus, "READY") {
 			continue
 		}
 
