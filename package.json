@@ -13,7 +13,10 @@
         "deploy": "pnpm --filter @wallcrawler/aws-cdk deploy",
         "deploy:ci": "pnpm --filter @wallcrawler/aws-cdk deploy:ci",
         "cdk": "pnpm --filter @wallcrawler/aws-cdk cdk",
-        "generate-env": "pnpm --filter @wallcrawler/aws-cdk generate-env"
+        "generate-env": "pnpm --filter @wallcrawler/aws-cdk generate-env",
+        "cdk:dev": "pnpm --filter @wallcrawler/aws-cdk deploy:dev",
+        "cdk:staging": "pnpm --filter @wallcrawler/aws-cdk deploy:staging",
+        "cdk:prod": "pnpm --filter @wallcrawler/aws-cdk deploy:prod"
     },
     "keywords": [
         "browser-automation",
