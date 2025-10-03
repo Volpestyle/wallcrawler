@@ -42,8 +42,8 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(403, utils.ErrorResponse("Session does not belong to this project"))
 	}
 
-	// Return full session details - no conversion needed
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(sessionState))
+	// Return full session details in Browserbase-compatible shape
+	return utils.CreateAPIResponse(200, sessionState)
 }
 
 func main() {

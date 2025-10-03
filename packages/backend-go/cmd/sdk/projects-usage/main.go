@@ -87,7 +87,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		ProxyBytes:     totalProxyBytes,
 	}
 
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(usage))
+	return utils.CreateAPIResponse(200, usage)
 }
 
 func main() {

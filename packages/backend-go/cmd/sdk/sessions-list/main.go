@@ -70,7 +70,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	log.Printf("Listed %d sessions for project %s (filtered from %d total)", len(filteredSessions), projectID, len(projectSessions))
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(filteredSessions))
+	return utils.CreateAPIResponse(200, filteredSessions)
 }
 
 // matchesStatus checks if session status matches the filter
