@@ -26,15 +26,16 @@ import (
 )
 
 var (
-	SessionsTableName  = os.Getenv("SESSIONS_TABLE_NAME")
-	ProjectsTableName  = os.Getenv("PROJECTS_TABLE_NAME")
-	APIKeysTableName   = os.Getenv("API_KEYS_TABLE_NAME")
-	ContextsTableName  = os.Getenv("CONTEXTS_TABLE_NAME")
-	ContextsBucketName = os.Getenv("CONTEXTS_BUCKET_NAME")
-	ECSCluster         = os.Getenv("ECS_CLUSTER")
-	ECSTaskDefFamily   = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
-	ConnectURL         = os.Getenv("CONNECT_URL_BASE")
-	maxSessionTimeout  = getMaxSessionTimeout()
+	SessionsTableName          = os.Getenv("SESSIONS_TABLE_NAME")
+	ProjectsTableName          = os.Getenv("PROJECTS_TABLE_NAME")
+	APIKeysTableName           = os.Getenv("API_KEYS_TABLE_NAME")
+	ContextsTableName          = os.Getenv("CONTEXTS_TABLE_NAME")
+	ContextsBucketName         = os.Getenv("CONTEXTS_BUCKET_NAME")
+	SessionArtifactsBucketName = os.Getenv("SESSION_ARTIFACTS_BUCKET_NAME")
+	ECSCluster                 = os.Getenv("ECS_CLUSTER")
+	ECSTaskDefFamily           = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
+	ConnectURL                 = os.Getenv("CONNECT_URL_BASE")
+	maxSessionTimeout          = getMaxSessionTimeout()
 )
 
 const (

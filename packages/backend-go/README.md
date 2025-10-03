@@ -17,9 +17,11 @@ cmd/
 ├── api/                    # Stagehand API endpoints (/sessions/*)
 │   └── sessions-start/     # POST /sessions/start - AI sessions (stubbed)
 │
-├── session-provisioner/   # EventBridge session lifecycle management
 ├── ecs-controller/        # ECS task management for browser containers
-└── cdp-url/              # Direct Mode CDP URL generation
+├── ecs-task-processor/    # Background ECS task orchestration
+├── sessions-stream-processor/ # Event stream consumers for session lifecycle
+├── authorizer/            # API Gateway Lambda authorizer
+└── common/                # Shared handlers (e.g., not implemented responses)
 ```
 
 ## Implementation Status
@@ -35,7 +37,7 @@ cmd/
 
 **Direct Mode**:
 
-- Secure CDP access via JWT-authenticated proxy
+- Secure CDP access via JWT-authenticated proxy embedded in session responses
 - Enterprise monitoring with rate limiting
 - Public IP assignment for ECS tasks
 - Native Chrome screencast support
@@ -91,7 +93,7 @@ go build ./cmd/sdk/sessions-create
 #### Shared Components
 
 - `internal/types/`: Common data structures and types
-- `internal/utils/`: Shared utilities (Redis, AWS, validation)
+- `internal/utils/`: Shared utilities (AWS clients, validation)
 
 ### Adding New Endpoints
 
@@ -114,12 +116,12 @@ go build ./cmd/sdk/sessions-create
 Lambda functions are configured via environment variables:
 
 ```yaml
-REDIS_ADDR: Redis cluster endpoint
 ECS_CLUSTER: ECS cluster name for browser containers
 ECS_TASK_DEFINITION: Browser task definition ARN
 AWS_REGION: AWS deployment region
 CONNECT_URL_BASE: Base URL for session connections
 WALLCRAWLER_JWT_SIGNING_SECRET_ARN: JWT signing key from Secrets Manager
+SESSION_ARTIFACTS_BUCKET_NAME: S3 bucket used for session uploads and recordings
 ```
 
 ### Testing
@@ -149,7 +151,7 @@ This creates:
 - Lambda functions for all handlers
 - API Gateway with proper routing
 - ECS cluster for browser containers
-- Redis cluster for session state
+- S3 session artifacts bucket for uploads/recordings
 - EventBridge for async processing
 
 ## API Reference
@@ -167,15 +169,7 @@ See [API Endpoints Reference](../../docs/api-endpoints-reference.md) for complet
 
 ### Response Format
 
-All handlers return consistent response format:
-
-```go
-// Success
-utils.CreateAPIResponse(200, utils.SuccessResponse(data))
-
-// Error
-utils.CreateAPIResponse(400, utils.ErrorResponse("Error message"))
-```
+SDK handlers now return Browserbase-compatible JSON payloads directly (no `success` wrapper) so the existing Stagehand and Browserbase SDK clients work without adaptation. Error responses continue to use `utils.ErrorResponse` for a consistent shape and messaging.
 
 ### Error Handling
 
