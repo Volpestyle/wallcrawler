@@ -129,7 +129,6 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // DynamoDB table for session management
         const sessionsTable = new dynamodb.Table(this, 'SessionsTable', {
-            tableName: 'wallcrawler-sessions',
             partitionKey: { name: 'sessionId', type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             timeToLiveAttribute: 'expiresAt', // TTL field for automatic cleanup
@@ -137,6 +136,9 @@ export class WallcrawlerStack extends cdk.Stack {
             stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES, // Enable streams for session state changes
             removalPolicy: cdk.RemovalPolicy.DESTROY, // For dev/test environments
         });
+
+        cdk.Tags.of(sessionsTable).add('Service', 'Wallcrawler');
+        cdk.Tags.of(sessionsTable).add('Resource', 'Sessions');
 
         // Global Secondary Index for project queries
         sessionsTable.addGlobalSecondaryIndex({
@@ -187,6 +189,15 @@ export class WallcrawlerStack extends cdk.Stack {
         });
 
         const contextsBucket = new s3.Bucket(this, 'ContextsBucket', {
+            encryption: s3.BucketEncryption.S3_MANAGED,
+            blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+            enforceSSL: true,
+            versioned: false,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            autoDeleteObjects: true,
+        });
+
+        const sessionArtifactsBucket = new s3.Bucket(this, 'SessionArtifactsBucket', {
             encryption: s3.BucketEncryption.S3_MANAGED,
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             enforceSSL: true,
@@ -340,6 +351,7 @@ export class WallcrawlerStack extends cdk.Stack {
             API_KEYS_TABLE_NAME: apiKeysTable.tableName,
             CONTEXTS_TABLE_NAME: contextsTable.tableName,
             CONTEXTS_BUCKET_NAME: contextsBucket.bucketName,
+            SESSION_ARTIFACTS_BUCKET_NAME: sessionArtifactsBucket.bucketName,
             ECS_CLUSTER: ecsCluster.clusterName,
             // Use task definition family name instead of ARN to avoid circular reference
             ECS_TASK_DEFINITION_FAMILY: 'wallcrawler-browser',
@@ -404,6 +416,30 @@ export class WallcrawlerStack extends cdk.Stack {
             'SDKSessionsUpdateLambda',
             'sdk/sessions-update',
             'SDK: Update session (REQUEST_RELEASE)'
+        );
+
+        const sdkSessionsDownloadsLambda = createLambdaFunction(
+            'SDKSessionsDownloadsLambda',
+            'sdk/sessions-downloads',
+            'SDK: List session file downloads'
+        );
+
+        const sdkSessionsLogsLambda = createLambdaFunction(
+            'SDKSessionsLogsLambda',
+            'sdk/sessions-logs',
+            'SDK: Retrieve session event logs'
+        );
+
+        const sdkSessionsRecordingLambda = createLambdaFunction(
+            'SDKSessionsRecordingLambda',
+            'sdk/sessions-recording',
+            'SDK: Retrieve session recording metadata'
+        );
+
+        const sdkSessionsUploadsLambda = createLambdaFunction(
+            'SDKSessionsUploadsLambda',
+            'sdk/sessions-uploads',
+            'SDK: Generate pre-signed upload URLs for session assets'
         );
 
         const sdkProjectsListLambda = createLambdaFunction(
@@ -739,25 +775,25 @@ export class WallcrawlerStack extends cdk.Stack {
 
         // GET /v1/sessions/{id}/downloads - Downloads
         v1SessionResource.addResource('downloads').addMethod('GET',
-            createAuthenticatedIntegration(sdkNotImplementedLambda),
+            createAuthenticatedIntegration(sdkSessionsDownloadsLambda),
             { authorizer }
         );
 
         // GET /v1/sessions/{id}/logs - Logs
         v1SessionResource.addResource('logs').addMethod('GET',
-            createAuthenticatedIntegration(sdkNotImplementedLambda),
+            createAuthenticatedIntegration(sdkSessionsLogsLambda),
             { authorizer }
         );
 
         // GET /v1/sessions/{id}/recording - Recording
         v1SessionResource.addResource('recording').addMethod('GET',
-            createAuthenticatedIntegration(sdkNotImplementedLambda),
+            createAuthenticatedIntegration(sdkSessionsRecordingLambda),
             { authorizer }
         );
 
         // POST /v1/sessions/{id}/uploads - Uploads
         v1SessionResource.addResource('uploads').addMethod('POST',
-            createAuthenticatedIntegration(sdkNotImplementedLambda),
+            createAuthenticatedIntegration(sdkSessionsUploadsLambda),
             {
                 authorizer,
                 requestValidator,
@@ -1009,6 +1045,8 @@ export class WallcrawlerStack extends cdk.Stack {
             resources: [
                 contextsBucket.bucketArn,
                 `${contextsBucket.bucketArn}/*`,
+                sessionArtifactsBucket.bucketArn,
+                `${sessionArtifactsBucket.bucketArn}/*`,
             ],
         }));
 
@@ -1143,18 +1181,23 @@ export class WallcrawlerStack extends cdk.Stack {
             value: jwtSigningSecret.secretArn,
         });
 
+        new cdk.CfnOutput(this, 'SessionArtifactsBucketName', {
+            description: 'S3 bucket for session uploads and artifacts',
+            value: sessionArtifactsBucket.bucketName,
+        });
+
         // Development mode cost savings output
         if (isDevelopment) {
             new cdk.CfnOutput(this, 'DevelopmentMode', {
                 description: 'Development mode is enabled with cost optimizations',
-                value: 'ENABLED - No NAT Gateway ($45/mo saved), DynamoDB on-demand pricing, Lambdas outside VPC, Redis t3.micro for pub/sub only',
+                value: 'ENABLED - No NAT Gateway ($45/mo saved), DynamoDB on-demand pricing, Lambdas outside VPC',
             });
         }
 
         // Hybrid storage architecture output
         new cdk.CfnOutput(this, 'StorageArchitecture', {
             description: 'Hybrid storage approach for optimal performance and cost',
-            value: 'DynamoDB for session state + Redis t3.micro for pub/sub events',
+            value: 'DynamoDB for session state + SNS/EventBridge for pub/sub events',
         });
     }
 } 

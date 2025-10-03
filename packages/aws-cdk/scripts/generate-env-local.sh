@@ -70,14 +70,13 @@ get_output() {
 # Get all output values
 API_GATEWAY_URL=$(get_output "APIGatewayURL")
 INTERNAL_API_URL=$(get_output "InternalAPIGatewayURL")
-PUBLIC_API_URL=$(get_output "PublicAPIGatewayURL")
 API_KEY_ID=$(get_output "ApiKeyId")
 DYNAMODB_TABLE=$(get_output "DynamoDBTableName")
-REDIS_ENDPOINT=$(get_output "RedisEndpoint")
 ECS_CLUSTER=$(get_output "ECSClusterName")
 VPC_ID=$(get_output "VPCId")
 TASK_DEFINITION_ARN=$(get_output "TaskDefinitionArn")
 JWT_SECRET_ARN=$(get_output "JWTSigningSecretArn")
+SESSION_ARTIFACTS_BUCKET=$(get_output "SessionArtifactsBucketName")
 
 # Get the actual API key value
 echo "Retrieving API key value..."
@@ -114,7 +113,7 @@ cat > "$OUTPUT_FILE" << EOF
 # API Access - Choose ONE based on your authentication method:
 
 # Option 1: Public API (Recommended) - Only requires Wallcrawler API key
-WALLCRAWLER_API_URL=$PUBLIC_API_URL
+WALLCRAWLER_API_URL=$API_GATEWAY_URL
 WALLCRAWLER_API_KEY=<YOUR_WALLCRAWLER_API_KEY>
 
 # Option 2: Internal API - Requires AWS API key
@@ -126,12 +125,12 @@ WALLCRAWLER_PROJECT_ID=default
 
 # AWS Resources (for internal use)
 WALLCRAWLER_DYNAMODB_TABLE=$DYNAMODB_TABLE
-WALLCRAWLER_REDIS_ENDPOINT=$REDIS_ENDPOINT
 WALLCRAWLER_ECS_CLUSTER=$ECS_CLUSTER
 WALLCRAWLER_VPC_ID=$VPC_ID
 WALLCRAWLER_TASK_DEFINITION_ARN=$TASK_DEFINITION_ARN
 WALLCRAWLER_INTERNAL_API_URL=$INTERNAL_API_URL
-WALLCRAWLER_PUBLIC_API_URL=$PUBLIC_API_URL
+WALLCRAWLER_PUBLIC_API_URL=$API_GATEWAY_URL
+WALLCRAWLER_SESSION_ARTIFACTS_BUCKET=$SESSION_ARTIFACTS_BUCKET
 
 # JWT Authentication (for Direct Mode)
 WALLCRAWLER_JWT_SECRET_ARN=$JWT_SECRET_ARN
@@ -146,18 +145,18 @@ echo ""
 echo -e "${GREEN}✅ Successfully generated $OUTPUT_FILE${NC}"
 echo ""
 echo -e "${YELLOW}Summary:${NC}"
-echo "  Public API URL: $PUBLIC_API_URL"
+echo "  Public API URL: $API_GATEWAY_URL"
 echo "  Internal API URL: $INTERNAL_API_URL"
 echo "  AWS API Key: ${API_KEY_VALUE:0:10}..."
 echo "  DynamoDB Table: $DYNAMODB_TABLE"
-echo "  Redis Endpoint: $REDIS_ENDPOINT"
 echo "  ECS Cluster: $ECS_CLUSTER"
 echo "  JWT Secret ARN: $JWT_SECRET_ARN"
+echo "  Session Artifacts Bucket: $SESSION_ARTIFACTS_BUCKET"
 echo ""
 echo -e "${YELLOW}Usage Instructions:${NC}"
 echo ""
 echo "1. For Public API access (RECOMMENDED):"
-echo "   - Use Public API URL: $PUBLIC_API_URL"
+echo "   - Use Public API URL: $API_GATEWAY_URL"
 echo "   - Set x-wc-api-key header with your Wallcrawler API key"
 echo "   - No AWS API key needed!"
 echo ""
