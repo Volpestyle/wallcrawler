@@ -134,7 +134,7 @@ export class WallcrawlerStack extends cdk.Stack {
             timeToLiveAttribute: 'expiresAt', // TTL field for automatic cleanup
             pointInTimeRecovery: true,
             stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES, // Enable streams for session state changes
-            removalPolicy: cdk.RemovalPolicy.DESTROY, // For dev/test environments
+            removalPolicy: isDevelopment ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
         });
 
         cdk.Tags.of(sessionsTable).add('Service', 'Wallcrawler');
@@ -162,7 +162,7 @@ export class WallcrawlerStack extends cdk.Stack {
             partitionKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             pointInTimeRecovery: true,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            removalPolicy: isDevelopment ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
         });
 
         // API keys table keyed by hashed API key value
@@ -171,7 +171,7 @@ export class WallcrawlerStack extends cdk.Stack {
             partitionKey: { name: 'apiKeyHash', type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             pointInTimeRecovery: true,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            removalPolicy: isDevelopment ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
         });
 
         apiKeysTable.addGlobalSecondaryIndex({
@@ -185,7 +185,7 @@ export class WallcrawlerStack extends cdk.Stack {
             partitionKey: { name: 'contextId', type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             pointInTimeRecovery: true,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            removalPolicy: isDevelopment ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
         });
 
         const contextsBucket = new s3.Bucket(this, 'ContextsBucket', {
@@ -193,8 +193,8 @@ export class WallcrawlerStack extends cdk.Stack {
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             enforceSSL: true,
             versioned: false,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-            autoDeleteObjects: true,
+            removalPolicy: isDevelopment ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
+            autoDeleteObjects: isDevelopment,
         });
 
         const sessionArtifactsBucket = new s3.Bucket(this, 'SessionArtifactsBucket', {
@@ -202,8 +202,8 @@ export class WallcrawlerStack extends cdk.Stack {
             blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
             enforceSSL: true,
             versioned: false,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-            autoDeleteObjects: true,
+            removalPolicy: isDevelopment ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
+            autoDeleteObjects: isDevelopment,
         });
 
         // SNS Topic for session ready notifications
@@ -561,9 +561,6 @@ export class WallcrawlerStack extends cdk.Stack {
             1 // 1 minute timeout
         );
 
-        // Pass the AWS API key to the authorizer (will be set later)
-        authorizerLambda.addEnvironment('AWS_API_KEY', 'PLACEHOLDER');
-
         // API Gateway for REST endpoints
         const api = new apigateway.RestApi(this, 'WallcrawlerAPI', {
             restApiName: 'Wallcrawler API',
@@ -648,42 +645,8 @@ export class WallcrawlerStack extends cdk.Stack {
             ]),
         });
 
-        const authorizerApiKeyUpdater = new cr.AwsCustomResource(this, 'AuthorizerApiKeyUpdater', {
-            onCreate: {
-                service: 'Lambda',
-                action: 'updateFunctionConfiguration',
-                parameters: {
-                    FunctionName: authorizerLambda.functionName,
-                    Environment: {
-                        Variables: {
-                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
-                        },
-                    },
-                },
-                physicalResourceId: cr.PhysicalResourceId.of(`${authorizerLambda.functionName}-api-key-update`),
-            },
-            onUpdate: {
-                service: 'Lambda',
-                action: 'updateFunctionConfiguration',
-                parameters: {
-                    FunctionName: authorizerLambda.functionName,
-                    Environment: {
-                        Variables: {
-                            AWS_API_KEY: apiKeyRetriever.getResponseField('value'),
-                        },
-                    },
-                },
-            },
-            policy: cr.AwsCustomResourcePolicy.fromStatements([
-                new iam.PolicyStatement({
-                    actions: ['lambda:UpdateFunctionConfiguration'],
-                    resources: [authorizerLambda.functionArn],
-                }),
-            ]),
-        });
-
-        authorizerApiKeyUpdater.node.addDependency(apiKey);
-        authorizerApiKeyUpdater.node.addDependency(apiKeyRetriever);
+        apiKeyRetriever.node.addDependency(apiKey);
+        authorizerLambda.addEnvironment('AWS_API_KEY', apiKeyRetriever.getResponseField('value'));
 
         // Request validator for API
         const requestValidator = new apigateway.RequestValidator(this, 'RequestValidator', {

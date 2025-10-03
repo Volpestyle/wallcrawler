@@ -25,14 +25,24 @@ echo "  Region: $REGION"
 echo "✓ Checking Docker daemon..."
 if ! docker ps > /dev/null 2>&1; then
     echo "❌ Docker daemon is not running"
-    echo "💡 Starting Docker Desktop..."
-    open -a Docker
-    
-    # Wait for Docker to start
-    while ! docker ps > /dev/null 2>&1; do
-        echo "⏳ Waiting for Docker to start..."
-        sleep 2
-    done
+    if [ -n "${CI:-}" ]; then
+        echo "🚫 CI environment cannot auto-start Docker. Ensure the runner image supports Docker."
+        exit 1
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
+        echo "💡 Starting Docker Desktop..."
+        open -a Docker
+
+        # Wait for Docker to start
+        while ! docker ps > /dev/null 2>&1; do
+            echo "⏳ Waiting for Docker to start..."
+            sleep 2
+        done
+    else
+        echo "💡 Please start Docker manually and rerun the deployment."
+        exit 1
+    fi
 fi
 echo "✓ Docker daemon is running"
 
@@ -131,10 +141,14 @@ if [ "$ENVIRONMENT" == "prod" ]; then
     echo "  ⚠️  You are about to deploy to PRODUCTION!"
     echo "  Account: $ACCOUNT_ID"
     echo "  Region: $REGION"
-    read -p "  Are you sure you want to continue? (yes/no): " CONFIRM
-    if [ "$CONFIRM" != "yes" ]; then
-        echo "  ❌ Production deployment cancelled"
-        exit 1
+    if [ -n "${CI:-}" ]; then
+        echo "  ✅ CI environment detected; skipping interactive confirmation."
+    else
+        read -p "  Are you sure you want to continue? (yes/no): " CONFIRM
+        if [ "$CONFIRM" != "yes" ]; then
+            echo "  ❌ Production deployment cancelled"
+            exit 1
+        fi
     fi
 fi
 
