@@ -1,6 +1,6 @@
 # CloudWatch Logging Best Practices for Wallcrawler Sessions
 
-This document outlines logging strategies for session visibility now that terminated sessions are cleaned up after 15 minutes.
+This document outlines logging strategies for session visibility now that terminated sessions are cleaned up after 15 minutes. For an infrastructure-wide map of log groups, metrics, and audit trails, see [../infra/OBSERVABILITY.md](../../infra/OBSERVABILITY.md).
 
 ## Overview
 
@@ -14,7 +14,7 @@ Use JSON structured logs for easy querying in CloudWatch Insights:
 type SessionLogEntry struct {
     Timestamp   string                 `json:"timestamp"`
     SessionID   string                 `json:"session_id"`
-    ProjectID   string                 `json:"project_id"`
+    ProjectID   string                 `json:"project_id,omitempty"`
     EventType   string                 `json:"event_type"`
     Status      string                 `json:"status"`
     Duration    int64                  `json:"duration_ms,omitempty"`
@@ -22,10 +22,31 @@ type SessionLogEntry struct {
     Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
+var (
+    // Structured logging is enabled by default; set STRUCTURED_LOGGING=false to fall back to plain text
+    structuredLogging = os.Getenv("STRUCTURED_LOGGING") != "false"
+)
+
 // Example usage
 func LogSessionEvent(event SessionLogEntry) {
-    jsonBytes, _ := json.Marshal(event)
-    log.Println(string(jsonBytes))
+    if event.Timestamp == "" {
+        event.Timestamp = time.Now().UTC().Format(time.RFC3339)
+    }
+
+    if structuredLogging {
+        jsonBytes, err := json.Marshal(event)
+        if err != nil {
+            log.Printf("Error marshaling log entry: %v", err)
+            return
+        }
+        log.Println(string(jsonBytes))
+    } else {
+        if event.Error != "" {
+            log.Printf("[%s] Session %s: %s (error: %s)", event.EventType, event.SessionID, event.Status, event.Error)
+        } else {
+            log.Printf("[%s] Session %s: %s", event.EventType, event.SessionID, event.Status)
+        }
+    }
 }
 ```
 
@@ -63,6 +84,7 @@ LogSessionEvent(SessionLogEntry{
 // Session Terminated
 LogSessionEvent(SessionLogEntry{
     SessionID: sessionID,
+    ProjectID: projectID,
     EventType: "SESSION_TERMINATED",
     Status:    "STOPPED",
     Duration:  sessionDuration.Milliseconds(),
@@ -80,6 +102,7 @@ LogSessionEvent(SessionLogEntry{
 // Browser Operations
 LogSessionEvent(SessionLogEntry{
     SessionID: sessionID,
+    ProjectID: projectID,
     EventType: "BROWSER_OPERATION",
     Metadata: map[string]interface{}{
         "operation": "navigate|extract|screenshot|act",
@@ -92,6 +115,7 @@ LogSessionEvent(SessionLogEntry{
 // Errors
 LogSessionEvent(SessionLogEntry{
     SessionID: sessionID,
+    ProjectID: projectID,
     EventType: "SESSION_ERROR",
     Error:     err.Error(),
     Metadata: map[string]interface{}{
@@ -107,12 +131,12 @@ LogSessionEvent(SessionLogEntry{
 // Periodic resource metrics
 LogSessionEvent(SessionLogEntry{
     SessionID: sessionID,
+    ProjectID: projectID,
     EventType: "RESOURCE_METRICS",
     Metadata: map[string]interface{}{
-        "cpu_percent":    cpuUsage,
-        "memory_mb":      memoryMB,
-        "network_bytes":  networkBytes,
-        "active_targets": chromeTargets,
+        "cpu_percent":   cpuUsage,
+        "memory_mb":     memoryMB,
+        "network_bytes": networkBytes,
     },
 })
 ```
@@ -170,47 +194,34 @@ fields @timestamp, event_type, status, error, metadata
 ## Implementation Example
 
 ```go
-// utils/logging.go
-package utils
-
-import (
-    "encoding/json"
-    "log"
-    "os"
-)
-
-var (
-    // Use environment variable to enable/disable structured logging
-    structuredLogging = os.Getenv("STRUCTURED_LOGGING") == "true"
-)
-
 func LogSessionCreated(sessionID, projectID string, metadata map[string]interface{}) {
-    if structuredLogging {
-        LogSessionEvent(SessionLogEntry{
-            Timestamp: time.Now().Format(time.RFC3339),
-            SessionID: sessionID,
-            ProjectID: projectID,
-            EventType: "SESSION_CREATED",
-            Status:    "CREATING",
-            Metadata:  metadata,
-        })
-    } else {
-        log.Printf("Session created: %s for project %s", sessionID, projectID)
-    }
+    LogSessionEvent(SessionLogEntry{
+        SessionID: sessionID,
+        ProjectID: projectID,
+        EventType: "SESSION_CREATED",
+        Status:    "CREATING",
+        Metadata:  metadata,
+    })
 }
 
-func LogSessionError(sessionID string, err error, metadata map[string]interface{}) {
-    if structuredLogging {
-        LogSessionEvent(SessionLogEntry{
-            Timestamp: time.Now().Format(time.RFC3339),
-            SessionID: sessionID,
-            EventType: "SESSION_ERROR",
-            Error:     err.Error(),
-            Metadata:  metadata,
-        })
-    } else {
-        log.Printf("Session %s error: %v", sessionID, err)
+func LogSessionError(sessionID, projectID string, err error, operation string, metadata map[string]interface{}) {
+    LogSessionEvent(SessionLogEntry{
+        SessionID: sessionID,
+        ProjectID: projectID,
+        EventType: "SESSION_ERROR",
+        Error:     err.Error(),
+        Metadata:  merge(metadata, map[string]interface{}{"operation": operation}),
+    })
+}
+
+func merge(base, extra map[string]interface{}) map[string]interface{} {
+    if base == nil {
+        base = make(map[string]interface{})
     }
+    for k, v := range extra {
+        base[k] = v
+    }
+    return base
 }
 ```
 

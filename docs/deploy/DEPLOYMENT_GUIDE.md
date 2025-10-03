@@ -29,6 +29,7 @@ npm run deploy:prod
 
 3. **Post-deployment** (Automatic)
    - Generates `wallcrawler-config.txt` with all configuration values
+   - Seeds the default project/API key (see `wallcrawler-api-key.txt` for the raw key)
 
 ## Environment Configurations
 
@@ -83,27 +84,46 @@ If the generated file leaves `WALLCRAWLER_API_URL` (or `WALLCRAWLER_PUBLIC_API_U
 
 ## Post-deployment Initialization
 
-After the stack is deployed you must seed the multi-tenant tables and issue at least one Wallcrawler API key.
+The deploy script now seeds a default project (`project_default`) and issues a fresh Wallcrawler API key automatically. The raw key is written to `packages/aws-cdk/wallcrawler-api-key.txt`—store it somewhere secure (password manager, Secrets Manager, etc.) and delete the local copy when you are finished. We intentionally do **not** publish this file or `wallcrawler-config.txt` as CI artifacts; GitHub artifacts are decrypted for any collaborator with repository access, so we pull the values locally instead.
 
-1. **Create a project record**
-   ```bash
-   aws dynamodb put-item \
-     --table-name wallcrawler-projects \
-     --item '{"projectId":{"S":"project_default"},"name":{"S":"Default Project"},"defaultTimeout":{"N":"3600"},"concurrency":{"N":"5"},"status":{"S":"ACTIVE"},"createdAt":{"S":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"},"updatedAt":{"S":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}}'
-   ```
-2. **Create an API key** (replace `wc_example_key` with your secret). Include as many `{"S":"project_id"}` entries in the `projectIds` list as you need.
-   ```bash
-   RAW_KEY="wc_example_key"
-   KEY_HASH=$(python - <<'EOF'
+Recommended workflow:
+
+1. Let the GitHub Actions deployment finish (it already runs the bootstrap script).
+2. On your workstation, run `pnpm --filter @wallcrawler/aws-cdk run post-deploy` if you need to reseed the tables or rotate the default key. Re-running is idempotent: the script skips the project insert when it already exists and only creates a new API key when the table is empty.
+3. Run `pnpm --filter @wallcrawler/aws-cdk generate-env` to pull the latest CloudFormation outputs and API key value into a fresh `wallcrawler-config.txt`.
+4. Copy the required values into your application’s `.env` file, then securely store or remove the generated files.
+
+### AWS API Gateway Key
+
+- CDK provisions a separate AWS API Gateway key (`wallcrawler-internal-api-key`) for the internal API endpoint. A custom resource copies the live key value into the Lambda authorizer’s environment and the stack exposes the key ID (and a convenience CLI command) as outputs.
+- `generate-env-local.sh` runs `aws apigateway get-api-key --include-value` so the generated `wallcrawler-config.txt` contains the decrypted value under `WALLCRAWLER_AWS_API_KEY`. Handle it like any other secret—store it in your vault if you plan to call the internal API directly and keep it out of source control.
+- Rotation: delete the key in API Gateway or trigger the bootstrap script to recreate it. The custom resource will propagate the new value to the authorizer on the next deploy; update your secret store accordingly.
+
+## Observability
+
+- For a full map of CloudWatch log groups, ECS Container Insights, and CloudTrail pointers, see [docs/infra/OBSERVABILITY.md](../infra/OBSERVABILITY.md).
+- Session-specific logging queries remain in [CloudWatch logging best practices](../api/sessions/cloudwatch-logging-best-practices.md).
+- GitHub Actions deployment logs mirror local `pnpm cdk:<env>` output; combine them with the CloudWatch groups above when diagnosing issues.
+
+If you want to add additional tenants or keys manually, the AWS CLI snippets below remain valid:
+
+```bash
+# Add another project
+aws dynamodb put-item \
+  --table-name wallcrawler-projects \
+  --item '{"projectId":{"S":"project_beta"},"name":{"S":"Beta Project"},"defaultTimeout":{"N":"3600"},"concurrency":{"N":"5"},"status":{"S":"ACTIVE"},"createdAt":{"S":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"},"updatedAt":{"S":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}}'
+
+# Add an API key (replace RAW_KEY with your secret)
+RAW_KEY="wc_example_key"
+KEY_HASH=$(python - <<'EOF'
 import hashlib, os
 print(hashlib.sha256(os.environ['RAW_KEY'].encode()).hexdigest())
 EOF
 )
-   aws dynamodb put-item \
-     --table-name wallcrawler-api-keys \
-     --item '{"apiKeyHash":{"S":"'"${KEY_HASH}"'"},"projectId":{"S":"project_default"},"projectIds":{"L":[{"S":"project_default"}]},"status":{"S":"ACTIVE"},"createdAt":{"S":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}}'
-   ```
-3. **Share the raw API key** (`wc_example_key`) with trusted clients. The hashed value is stored in DynamoDB; the raw value is never persisted by Wallcrawler.
+aws dynamodb put-item \
+  --table-name wallcrawler-api-keys \
+  --item '{"apiKeyHash":{"S":"'"${KEY_HASH}"'"},"projectId":{"S":"project_default"},"projectIds":{"L":[{"S":"project_default"}]},"status":{"S":"ACTIVE"},"createdAt":{"S":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}}'
+```
 
 Contexts are stored in the automatically created S3 bucket (`CONTEXTS_BUCKET_NAME` in the generated config).
 

@@ -18,7 +18,7 @@ Self‑hosted, AWS‑backed remote browser platform with Stagehand LLM browsing,
 
 ### Packages
 
-- `@wallcrawler/aws-cdk` — AWS CDK app defining all infrastructure (API Gateway, Lambda, ECS/Fargate, EventBridge, DynamoDB, Redis, etc.)
+- `@wallcrawler/aws-cdk` — AWS CDK app defining all infrastructure (API Gateway, Lambda, ECS/Fargate, EventBridge, DynamoDB, S3, etc.)
   - Source: [packages/aws-cdk/](packages/aws-cdk/)
   - See: [docs/infra/ARCHITECTURE.md](docs/infra/ARCHITECTURE.md) and [docs/deploy/DEPLOYMENT_GUIDE.md](docs/deploy/DEPLOYMENT_GUIDE.md)
 

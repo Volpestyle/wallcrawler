@@ -11,9 +11,10 @@
 | `GET`  | `/v1/sessions/{id}`           | Get session details               | `sdk/sessions-retrieve`      | ✅ **Implemented**      |
 | `POST` | `/v1/sessions/{id}`           | Update session (terminate)        | `sdk/sessions-update`        | ✅ **Implemented**      |
 | `GET`  | `/v1/sessions/{id}/debug`     | Get debug/live URLs               | `sdk/sessions-debug`         | ✅ **Implemented**      |
-| `GET`  | `/v1/sessions/{id}/logs`      | Session logs                      | `common/not-implemented`     | 🚫 **Not implemented**  |
-| `GET`  | `/v1/sessions/{id}/recording` | Session recording                 | `common/not-implemented`     | 🚫 **Not implemented**  |
-| `POST` | `/v1/sessions/{id}/uploads`   | Asset uploads                     | `common/not-implemented`     | 🚫 **Not implemented**  |
+| `GET`  | `/v1/sessions/{id}/logs`      | Session logs                      | `sdk/sessions-logs`          | ✅ **Implemented**      |
+| `GET`  | `/v1/sessions/{id}/downloads` | Session downloads                 | `sdk/sessions-downloads`     | ✅ **Implemented**      |
+| `GET`  | `/v1/sessions/{id}/recording` | Session recording                 | `sdk/sessions-recording`     | ✅ **Implemented**      |
+| `POST` | `/v1/sessions/{id}/uploads`   | Asset uploads                     | `sdk/sessions-uploads`       | ✅ **Implemented**      |
 | `POST` | `/v1/contexts`                | Create reusable browser context   | `sdk/contexts-create`        | ✅ **Implemented**      |
 | `GET`  | `/v1/contexts/{id}`           | Retrieve context metadata         | `sdk/contexts-retrieve`      | ✅ **Implemented**      |
 | `PUT`  | `/v1/contexts/{id}`           | Refresh context upload URL        | `sdk/contexts-update`        | ✅ **Implemented**      |
@@ -99,12 +100,9 @@
 
 ```typescript
 {
-  "success": true,
-  "data": {
-    "id": "sess_abc123",
-    "status": "TERMINATING",
-    "projectId": "project_123"
-  }
+  "id": "sess_abc123",
+  "status": "TERMINATING",
+  "projectId": "project_123"
 }
 ```
 
@@ -117,26 +115,43 @@
 
 ```typescript
 {
-  "success": true,
-  "data": {
-    "id": "sess_abc123",
-    "status": "RUNNING",
-    "projectId": "project_123",
-    "connectUrl": "ws://203.0.113.10:9223?signingKey=eyJhbGci...",
-    "seleniumRemoteUrl": "http://203.0.113.10:4444/wd/hub",
-    "publicIP": "203.0.113.10",
-    "createdAt": "2024-01-15T10:30:00Z",
-    "updatedAt": "2024-01-15T10:30:45Z",
-    "expiresAt": "2024-01-15T11:30:00Z",
-    "keepAlive": false,
-    "region": "us-east-1",
-    "signingKey": "eyJhbGciOi...",
-    "userMetadata": { "environment": "test" }
-  }
+  "id": "sess_abc123",
+  "status": "RUNNING",
+  "projectId": "project_123",
+  "connectUrl": "ws://203.0.113.10:9223?signingKey=eyJhbGci...",
+  "seleniumRemoteUrl": "http://203.0.113.10:4444/wd/hub",
+  "publicIp": "203.0.113.10",
+  "createdAt": "2024-01-15T10:30:00Z",
+  "updatedAt": "2024-01-15T10:30:45Z",
+  "expiresAt": "2024-01-15T11:30:00Z",
+  "keepAlive": false,
+  "region": "us-east-1",
+  "signingKey": "eyJhbGciOi...",
+  "userMetadata": { "environment": "test" }
 }
 ```
 
-> ⚠️ `GET /v1/sessions/{id}/logs`, `GET /v1/sessions/{id}/recording`, and `POST /v1/sessions/{id}/uploads` currently return `501 Not Implemented` while the capture pipeline is finalized.
+> ✅ `GET /v1/sessions/{id}/logs`, `GET /v1/sessions/{id}/downloads`, `GET /v1/sessions/{id}/recording`, and `POST /v1/sessions/{id}/uploads` now leverage the session artifacts bucket to surface event history, downloadable assets, and recording URLs via pre-signed S3 links.
+
+#### `GET /v1/sessions/{id}/logs` - Session Logs
+
+Returns the session's EventBridge history as an ordered array so clients can display lifecycle milestones or troubleshoot issues. An empty array is returned when no events have been captured.  
+**Handler**: `packages/backend-go/cmd/sdk/sessions-logs/`
+
+#### `GET /v1/sessions/{id}/downloads` - Session Downloads
+
+Lists files that were uploaded via the `/uploads` endpoint (or other workflow automation) and provides temporary pre-signed download URLs. Objects are stored in the session artifacts S3 bucket under `sessions/<sessionId>/uploads/`.  
+**Handler**: `packages/backend-go/cmd/sdk/sessions-downloads/`
+
+#### `POST /v1/sessions/{id}/uploads` - Session Uploads
+
+Generates a pre-signed PUT URL so clients can upload files associated with a session. The response includes the generated object key, expiry timestamp, and any headers the caller should honor (for example `Content-Type`).  
+**Handler**: `packages/backend-go/cmd/sdk/sessions-uploads/`
+
+#### `GET /v1/sessions/{id}/recording` - Session Recording
+
+Provides metadata and a pre-signed download URL for the most recent recording stored under `sessions/<sessionId>/recordings/`. Returns `404` if no recording is available yet.  
+**Handler**: `packages/backend-go/cmd/sdk/sessions-recording/`
 
 #### `POST /v1/contexts` - Create Context
 
@@ -145,14 +160,11 @@
 
 ```typescript
 {
-  "success": true,
-  "data": {
-    "id": "ctx_ab12cd34",
-    "cipherAlgorithm": "NONE",
-    "initializationVectorSize": 0,
-    "publicKey": "",
-    "uploadUrl": "https://s3.amazonaws.com/..."
-  }
+  "id": "ctx_ab12cd34",
+  "cipherAlgorithm": "NONE",
+  "initializationVectorSize": 0,
+  "publicKey": "",
+  "uploadUrl": "https://s3.amazonaws.com/..."
 }
 ```
 
@@ -174,23 +186,20 @@ Returns all projects associated with the caller's API key. When a key spans mult
 **Handler**: `packages/backend-go/cmd/sdk/projects-list/`
 
 ```typescript
-{
-  "success": true,
-  "data": [
-    {
-      "id": "project_default",
-      "name": "Default Project",
-      "defaultTimeout": 3600,
-      "concurrency": 5
-    },
-    {
-      "id": "project_beta",
-      "name": "Beta Project",
-      "defaultTimeout": 1800,
-      "concurrency": 2
-    }
-  ]
-}
+[
+  {
+    "id": "project_default",
+    "name": "Default Project",
+    "defaultTimeout": 3600,
+    "concurrency": 5
+  },
+  {
+    "id": "project_beta",
+    "name": "Beta Project",
+    "defaultTimeout": 1800,
+    "concurrency": 2
+  }
+]
 ```
 
 #### `GET /v1/projects/{id}` - Retrieve Project

@@ -46,6 +46,13 @@ const wallcrawler = new Wallcrawler({
 })
 ```
 
+### Managing Secrets
+
+- Treat the API key and any JWT signing secrets as production credentials. Store them in a managed vault (1Password, AWS Secrets Manager, HashiCorp Vault, etc.), not in source control or CI artifacts.
+- During deployment, the platform team seeds the key; consumer apps should fetch it from their chosen secret store at process start (or via short-lived config endpoints) and inject it into `WALLCRAWLER_API_KEY`.
+- Rotate keys by coordinating with the platform team: they rerun the bootstrap script to issue a new key, you update the secret entry, then roll out your services.
+- Never log raw keys or commit the generated `wallcrawler-api-key.txt`; `.gitignore` already excludes it, but double-check before opening pull requests.
+
 ## Session Filtering
 
 The SDK supports filtering sessions by user metadata using the `q` parameter:
@@ -87,6 +94,8 @@ const sessions = await wallcrawler.sessions.list({
   keepAlive?: boolean
 }
 ```
+
+> Wallcrawler currently focuses on Stagehand parity. Fields such as `browserSettings`, `extensionId`, and `proxies` that exist in the original Browserbase SDK are ignored.
 
 **Response:**
 ```typescript
