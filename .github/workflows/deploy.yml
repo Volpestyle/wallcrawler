@@ -1,0 +1,101 @@
+name: Test and Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - 'release-*'
+  workflow_dispatch:
+
+env:
+  PNPM_VERSION: 10.13.1
+  NODE_VERSION: '20'
+  GO_VERSION: '1.24.5'
+  AWS_REGION: us-east-1
+  AWS_DEPLOY_ROLE_ARN: arn:aws:iam::842434829012:role/github-oidc
+
+jobs:
+  tests:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Go unit tests
+        working-directory: packages/backend-go
+        run: go test ./...
+
+      - name: Run package tests
+        run: pnpm --filter @wallcrawler/tests test
+
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    needs: tests
+    environment:
+      name: ${{ startsWith(github.ref, 'refs/heads/release-') && 'prod' || 'dev' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy infrastructure
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: pnpm cdk:${{ startsWith(github.ref, 'refs/heads/release-') && 'prod' || 'dev' }}

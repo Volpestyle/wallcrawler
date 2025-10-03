@@ -4,21 +4,28 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/wallcrawler/backend-go/internal/types"
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
 
+type sessionLogsResponse struct {
+	SessionID string               `json:"sessionId"`
+	Events    []types.SessionEvent `json:"events"`
+}
+
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	sessionID := request.PathParameters["id"]
+	if strings.TrimSpace(sessionID) == "" {
+		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing session ID parameter"))
+	}
+
 	projectID := utils.GetAuthorizedProjectID(request.RequestContext.Authorizer)
 	if projectID == "" {
 		return utils.CreateAPIResponse(403, utils.ErrorResponse("Unauthorized project access"))
-	}
-
-	contextID := request.PathParameters["id"]
-	if contextID == "" {
-		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing context ID"))
 	}
 
 	ddbClient, err := utils.GetDynamoDBClient(ctx)
@@ -27,13 +34,26 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
 	}
 
-	record, err := utils.GetContextForProject(ctx, ddbClient, projectID, contextID)
+	sessionState, err := utils.GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
-		log.Printf("error retrieving context %s: %v", contextID, err)
-		return utils.CreateAPIResponse(404, utils.ErrorResponse("Context not found"))
+		log.Printf("error retrieving session: %v", err)
+		return utils.CreateAPIResponse(404, utils.ErrorResponse("Session not found"))
 	}
 
-	response := utils.ContextRecordToAPI(record)
+	if !strings.EqualFold(sessionState.ProjectID, projectID) {
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Session does not belong to this project"))
+	}
+
+	events := sessionState.EventHistory
+	if events == nil {
+		events = []types.SessionEvent{}
+	}
+
+	response := sessionLogsResponse{
+		SessionID: sessionID,
+		Events:    events,
+	}
+
 	return utils.CreateAPIResponse(200, response)
 }
 

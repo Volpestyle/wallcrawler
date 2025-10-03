@@ -1,0 +1,24 @@
+# Exclude VCS metadata and IDE junk
+.git
+.gitignore
+.DS_Store
+
+# Node/Go build caches that should not ship in the Docker context
+build/
+dist/
+node_modules/
+
+# Locally built binaries and archives
+main
+sessions-create
+sessions-list
+sessions-retrieve
+authorizer
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Tests & tooling not required for building the controller
+scripts/
+coverage/

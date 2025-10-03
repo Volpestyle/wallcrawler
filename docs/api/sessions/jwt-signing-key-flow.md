@@ -158,8 +158,8 @@ const session = await wallcrawler.sessions.create({ projectId });
 
 ```javascript
 // pages/api/browser/scrape.js (or app/api/browser/scrape/route.js)
-import { Wallcrawler } from '@wallcrawler/sdk-node';
-import { Stagehand } from '@browserbase/stagehand';
+import { Wallcrawler } from '@wallcrawler/sdk';
+import { Stagehand } from '@wallcrawler/stagehand';
 
 const wallcrawler = new Wallcrawler({
   apiKey: process.env.WALLCRAWLER_API_KEY,
@@ -173,10 +173,17 @@ export async function POST(request) {
     });
     
     // Use browser - all server-side
+    // Ensure WALLCRAWLER_API_URL is set to your CloudFront/API Gateway domain
     const stagehand = new Stagehand({
-      env: 'BROWSERBASE',
-      sessionConnectUrl: session.connectUrl,
+      env: 'WALLCRAWLER',
+      useAPI: false,
+      apiKey: process.env.WALLCRAWLER_API_KEY,
+      projectId: process.env.WALLCRAWLER_PROJECT_ID,
+      browserbaseSessionID: session.id,
+      disablePino: true,
     });
+
+    await stagehand.init();
     
     const { url, selector } = await request.json();
     await stagehand.page.goto(url);

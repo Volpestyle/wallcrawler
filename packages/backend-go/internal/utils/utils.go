@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -26,15 +25,16 @@ import (
 )
 
 var (
-	SessionsTableName  = os.Getenv("SESSIONS_TABLE_NAME")
-	ProjectsTableName  = os.Getenv("PROJECTS_TABLE_NAME")
-	APIKeysTableName   = os.Getenv("API_KEYS_TABLE_NAME")
-	ContextsTableName  = os.Getenv("CONTEXTS_TABLE_NAME")
-	ContextsBucketName = os.Getenv("CONTEXTS_BUCKET_NAME")
-	ECSCluster         = os.Getenv("ECS_CLUSTER")
-	ECSTaskDefFamily   = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
-	ConnectURL         = os.Getenv("CONNECT_URL_BASE")
-	maxSessionTimeout  = getMaxSessionTimeout()
+	SessionsTableName          = os.Getenv("SESSIONS_TABLE_NAME")
+	ProjectsTableName          = os.Getenv("PROJECTS_TABLE_NAME")
+	APIKeysTableName           = os.Getenv("API_KEYS_TABLE_NAME")
+	ContextsTableName          = os.Getenv("CONTEXTS_TABLE_NAME")
+	ContextsBucketName         = os.Getenv("CONTEXTS_BUCKET_NAME")
+	SessionArtifactsBucketName = os.Getenv("SESSION_ARTIFACTS_BUCKET_NAME")
+	ECSCluster                 = os.Getenv("ECS_CLUSTER")
+	ECSTaskDefFamily           = os.Getenv("ECS_TASK_DEFINITION_FAMILY") // Just the family name, not the full ARN
+	ConnectURL                 = os.Getenv("CONNECT_URL_BASE")
+	maxSessionTimeout          = getMaxSessionTimeout()
 )
 
 const (
@@ -532,52 +532,6 @@ func ValidateAPIKey(headers map[string]string) error {
 	return nil
 }
 
-// FormatStreamEvent formats a streaming event
-func FormatStreamEvent(eventType string, data interface{}) string {
-	event := types.StreamEvent{
-		Type: eventType,
-		Data: data,
-	}
-
-	eventJSON, err := json.Marshal(event)
-	if err != nil {
-		log.Printf("Error marshaling stream event: %v", err)
-		return ""
-	}
-
-	return fmt.Sprintf("data: %s\n\n", string(eventJSON))
-}
-
-// SendSystemEvent sends a system event with status and result
-func SendSystemEvent(status string, result interface{}, errorMsg string) string {
-	systemEvent := types.SystemEvent{
-		Status: status,
-	}
-
-	if result != nil {
-		systemEvent.Result = result
-	}
-
-	if errorMsg != "" {
-		systemEvent.Error = errorMsg
-	}
-
-	return FormatStreamEvent("system", systemEvent)
-}
-
-// SendLogEvent sends a log event
-func SendLogEvent(level, text string) string {
-	logEvent := types.LogEvent{
-		Message: types.LogMessage{
-			Level:     level,
-			Text:      text,
-			Timestamp: time.Now(),
-		},
-	}
-
-	return FormatStreamEvent("log", logEvent)
-}
-
 // CreateAPIResponse creates an API Gateway proxy response
 func CreateAPIResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
 	bodyJSON, err := json.Marshal(body)
@@ -595,93 +549,6 @@ func CreateAPIResponse(statusCode int, body interface{}) (events.APIGatewayProxy
 		},
 		Body: string(bodyJSON),
 	}, nil
-}
-
-// GetAllSessions retrieves all sessions from DynamoDB using Scan
-func GetAllSessions(ctx context.Context, ddbClient *dynamodb.Client) ([]*types.SessionState, error) {
-	var sessions []*types.SessionState
-	var lastEvaluatedKey map[string]dynamotypes.AttributeValue
-
-	for {
-		// Scan the table
-		scanInput := &dynamodb.ScanInput{
-			TableName: aws.String(SessionsTableName),
-			Limit:     aws.Int32(100),
-		}
-		if lastEvaluatedKey != nil {
-			scanInput.ExclusiveStartKey = lastEvaluatedKey
-		}
-
-		result, err := ddbClient.Scan(ctx, scanInput)
-		if err != nil {
-			return nil, err
-		}
-
-		// Convert items to SessionState
-		for _, item := range result.Items {
-			var sessionState types.SessionState
-			err := attributevalue.UnmarshalMap(item, &sessionState)
-			if err != nil {
-				// Try manual unmarshaling
-				sessionState.ID = getStringValue(item["sessionId"])
-				sessionState.Status = getStringValue(item["status"])
-				sessionState.InternalStatus = getStringValue(item["internalStatus"])
-				sessionState.ProjectID = getStringValue(item["projectId"])
-				sessionState.PublicIP = getStringValue(item["publicIP"])
-				sessionState.ECSTaskARN = getStringValue(item["ecsTaskArn"])
-
-				// Handle optional pointer fields
-				if connectURL := getStringValue(item["connectUrl"]); connectURL != "" {
-					sessionState.ConnectURL = &connectURL
-				}
-				if persistAttr, ok := item["contextPersist"].(*dynamotypes.AttributeValueMemberBOOL); ok {
-					sessionState.ContextPersist = persistAttr.Value
-				}
-				if storageKey := getStringValue(item["contextStorageKey"]); storageKey != "" {
-					sessionState.ContextStorageKey = &storageKey
-				}
-				if signingKey := getStringValue(item["signingKey"]); signingKey != "" {
-					sessionState.SigningKey = &signingKey
-				}
-				if persistAttr, ok := item["contextPersist"].(*dynamotypes.AttributeValueMemberBOOL); ok {
-					sessionState.ContextPersist = persistAttr.Value
-				}
-				if storageKey := getStringValue(item["contextStorageKey"]); storageKey != "" {
-					sessionState.ContextStorageKey = &storageKey
-				}
-
-				// Parse timestamps
-				if createdAt := getNumberValue(item["createdAt"]); createdAt != 0 {
-					sessionState.CreatedAt = time.Unix(createdAt, 0).Format(time.RFC3339)
-				}
-				if updatedAt := getNumberValue(item["updatedAt"]); updatedAt != 0 {
-					sessionState.UpdatedAt = time.Unix(updatedAt, 0).Format(time.RFC3339)
-				}
-
-				// Parse optional fields
-				if metadata, ok := item["userMetadata"]; ok {
-					attributevalue.Unmarshal(metadata, &sessionState.UserMetadata)
-				}
-				if config, ok := item["modelConfig"]; ok {
-					attributevalue.Unmarshal(config, &sessionState.ModelConfig)
-				}
-
-				if sessionState.ID == "" {
-					continue // Skip invalid sessions
-				}
-			}
-
-			sessions = append(sessions, &sessionState)
-		}
-
-		// Check if there are more items
-		lastEvaluatedKey = result.LastEvaluatedKey
-		if lastEvaluatedKey == nil {
-			break
-		}
-	}
-
-	return sessions, nil
 }
 
 // GetECSTaskPublicIP gets the public IP of an ECS task for CDP connection
@@ -892,25 +759,6 @@ func IsSessionActive(status string) bool {
 		status == types.SessionStatusStarting
 }
 
-// IsSessionTerminal checks if session is in a terminal state
-func IsSessionTerminal(status string) bool {
-	return status == types.SessionStatusStopped ||
-		status == types.SessionStatusFailed
-}
-
-// IncrementSessionRetryCount increments the retry count for a session
-func IncrementSessionRetryCount(ctx context.Context, ddbClient *dynamodb.Client, sessionID string) error {
-	sessionState, err := GetSession(ctx, ddbClient, sessionID)
-	if err != nil {
-		return err
-	}
-
-	sessionState.RetryCount++
-	sessionState.UpdatedAt = time.Now().Format(time.RFC3339)
-
-	return StoreSession(ctx, ddbClient, sessionState)
-}
-
 // MapStatusToSDK converts internal session status to SDK-compatible status
 func MapStatusToSDK(internalStatus string) string {
 	switch internalStatus {
@@ -928,23 +776,6 @@ func MapStatusToSDK(internalStatus string) string {
 		return "TIMED_OUT"
 	default:
 		return "ERROR" // Unknown status, default to error
-	}
-}
-
-// MapSDKToInternal provides a best-effort reverse mapping for legacy records that only
-// stored SDK-level statuses.
-func MapSDKToInternal(sdkStatus string) string {
-	switch strings.ToUpper(sdkStatus) {
-	case "RUNNING":
-		return types.SessionStatusActive
-	case "COMPLETED":
-		return types.SessionStatusStopped
-	case "TIMED_OUT":
-		return types.SessionStatusTimedOut
-	case "ERROR":
-		return types.SessionStatusFailed
-	default:
-		return types.SessionStatusActive
 	}
 }
 

@@ -76,7 +76,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	if sessionState.Status == types.SessionStatusStopped ||
 		sessionState.Status == types.SessionStatusFailed {
 		log.Printf("Session %s is already terminated with status: %s", sessionID, sessionState.Status)
-		return utils.CreateAPIResponse(200, utils.SuccessResponse(sessionState))
+		return utils.CreateAPIResponse(200, sessionState)
 	}
 
 	log.Printf("Processing termination request for session %s", sessionID)
@@ -131,7 +131,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	})
 
 	log.Printf("Successfully terminated session %s", sessionID)
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(updatedSession))
+	return utils.CreateAPIResponse(200, updatedSession)
 }
 
 func main() {

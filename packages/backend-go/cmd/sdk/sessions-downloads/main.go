@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -12,15 +13,25 @@ import (
 	"github.com/wallcrawler/backend-go/internal/utils"
 )
 
+type sessionDownloadsResponse struct {
+	SessionID string                  `json:"sessionId"`
+	Downloads []types.SessionArtifact `json:"downloads"`
+}
+
 func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	sessionID := request.PathParameters["id"]
+	if strings.TrimSpace(sessionID) == "" {
+		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing session ID parameter"))
+	}
+
 	projectID := utils.GetAuthorizedProjectID(request.RequestContext.Authorizer)
 	if projectID == "" {
 		return utils.CreateAPIResponse(403, utils.ErrorResponse("Unauthorized project access"))
 	}
 
-	contextID := request.PathParameters["id"]
-	if contextID == "" {
-		return utils.CreateAPIResponse(400, utils.ErrorResponse("Missing context ID"))
+	if utils.SessionArtifactsBucketName == "" {
+		log.Printf("Session artifacts bucket not configured")
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Session artifacts bucket not configured"))
 	}
 
 	ddbClient, err := utils.GetDynamoDBClient(ctx)
@@ -29,33 +40,25 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to initialize storage"))
 	}
 
-	record, err := utils.GetContextForProject(ctx, ddbClient, projectID, contextID)
+	sessionState, err := utils.GetSession(ctx, ddbClient, sessionID)
 	if err != nil {
-		log.Printf("error retrieving context %s: %v", contextID, err)
-		return utils.CreateAPIResponse(404, utils.ErrorResponse("Context not found"))
+		log.Printf("error retrieving session: %v", err)
+		return utils.CreateAPIResponse(404, utils.ErrorResponse("Session not found"))
 	}
 
-	if err := utils.UpdateContextTimestamp(ctx, ddbClient, record); err != nil {
-		log.Printf("error updating context timestamp: %v", err)
-		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to update context"))
+	if !strings.EqualFold(sessionState.ProjectID, projectID) {
+		return utils.CreateAPIResponse(403, utils.ErrorResponse("Session does not belong to this project"))
 	}
 
-	if utils.ContextsBucketName == "" {
-		return utils.CreateAPIResponse(500, utils.ErrorResponse("Contexts bucket not configured"))
-	}
-
-	uploadURL, err := utils.GenerateUploadURL(ctx, utils.ContextsBucketName, record.StorageKey, 15*time.Minute)
+	artifacts, err := utils.ListSessionArtifacts(ctx, utils.SessionArtifactsBucketName, utils.SessionUploadsPrefix(sessionID), 15*time.Minute)
 	if err != nil {
-		log.Printf("error generating upload URL: %v", err)
-		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to generate upload URL"))
+		log.Printf("error listing session uploads: %v", err)
+		return utils.CreateAPIResponse(500, utils.ErrorResponse("Failed to list session uploads"))
 	}
 
-	response := types.ContextUpdateResponse{
-		ID:                       record.ID,
-		CipherAlgorithm:          "NONE",
-		InitializationVectorSize: 0,
-		PublicKey:                "",
-		UploadURL:                uploadURL,
+	response := sessionDownloadsResponse{
+		SessionID: sessionID,
+		Downloads: artifacts,
 	}
 
 	return utils.CreateAPIResponse(200, response)

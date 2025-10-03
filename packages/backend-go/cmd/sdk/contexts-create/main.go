@@ -67,7 +67,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		UploadURL:                uploadURL,
 	}
 
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(response))
+	return utils.CreateAPIResponse(200, response)
 }
 
 func main() {

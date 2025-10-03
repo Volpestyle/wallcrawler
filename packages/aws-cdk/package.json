@@ -22,7 +22,7 @@
         "destroy:staging": "cdk destroy --all --context environment=staging",
         "destroy:prod": "echo 'WARNING: About to destroy PRODUCTION! Use: cdk destroy --all --context environment=prod'",
         "generate-config": "./scripts/generate-env-local.sh",
-        "post-deploy": "npm run generate-config",
+        "post-deploy": "npm run generate-config && ./scripts/post-deploy-bootstrap.sh",
         "synth": "npm run build && cdk synth --all",
         "diff": "npm run build && cdk diff --all",
         "bootstrap": "cdk bootstrap"

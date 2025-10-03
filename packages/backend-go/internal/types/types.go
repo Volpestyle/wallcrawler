@@ -258,6 +258,15 @@ type SessionEvent struct {
 	CorrelationID string                 `json:"correlationId,omitempty"`
 }
 
+type SessionArtifact struct {
+	Key              string    `json:"key"`
+	FileName         string    `json:"fileName"`
+	Size             int64     `json:"size"`
+	LastModified     string    `json:"lastModified"`
+	DownloadURL      string    `json:"downloadUrl"`
+	LastModifiedTime time.Time `json:"-"`
+}
+
 // ResourceLimits defines session resource constraints
 type ResourceLimits struct {
 	MaxCPU      int `json:"maxCPU"`      // Maximum CPU allocation

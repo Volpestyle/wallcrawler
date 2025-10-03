@@ -61,7 +61,7 @@ func Handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		return utils.CreateAPIResponse(404, utils.ErrorResponse("Project not found"))
 	}
 
-	return utils.CreateAPIResponse(200, utils.SuccessResponse(toProjectSummary(project)))
+	return utils.CreateAPIResponse(200, toProjectSummary(project))
 }
 
 func main() {
