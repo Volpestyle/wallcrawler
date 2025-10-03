@@ -135,7 +135,3 @@ func ContextStorageKey(record *contextRecord) string {
 	}
 	return record.StorageKey
 }
-
-func ContextS3Key(projectID, contextID string) string {
-	return contextS3Key(projectID, contextID)
-}

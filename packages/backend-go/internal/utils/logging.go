@@ -58,20 +58,6 @@ func LogSessionCreated(sessionID, projectID string, metadata map[string]interfac
 	})
 }
 
-// LogSessionReady logs when a session becomes ready
-func LogSessionReady(sessionID, projectID, publicIP string, provisioningTimeMs int64) {
-	LogSessionEvent(SessionLogEntry{
-		SessionID: sessionID,
-		ProjectID: projectID,
-		EventType: "SESSION_READY",
-		Status:    "READY",
-		Duration:  provisioningTimeMs,
-		Metadata: map[string]interface{}{
-			"public_ip": publicIP,
-		},
-	})
-}
-
 // LogSessionTerminated logs when a session is terminated
 func LogSessionTerminated(sessionID, projectID, reason string, sessionDurationMs int64, metadata map[string]interface{}) {
 	if metadata == nil {
@@ -102,50 +88,6 @@ func LogSessionError(sessionID, projectID string, err error, operation string, m
 		EventType: "SESSION_ERROR",
 		Error:     err.Error(),
 		Metadata:  metadata,
-	})
-}
-
-// LogSessionTimeout logs when a session times out
-func LogSessionTimeout(sessionID, projectID string, sessionAge time.Duration) {
-	LogSessionEvent(SessionLogEntry{
-		SessionID: sessionID,
-		ProjectID: projectID,
-		EventType: "SESSION_TIMEOUT",
-		Status:    "TIMED_OUT",
-		Duration:  sessionAge.Milliseconds(),
-		Metadata: map[string]interface{}{
-			"timeout_minutes": sessionAge.Minutes(),
-		},
-	})
-}
-
-// LogBrowserOperation logs browser operations
-func LogBrowserOperation(sessionID, projectID, operation string, success bool, metadata map[string]interface{}) {
-	if metadata == nil {
-		metadata = make(map[string]interface{})
-	}
-	metadata["operation"] = operation
-	metadata["success"] = success
-
-	LogSessionEvent(SessionLogEntry{
-		SessionID: sessionID,
-		ProjectID: projectID,
-		EventType: "BROWSER_OPERATION",
-		Metadata:  metadata,
-	})
-}
-
-// LogResourceMetrics logs resource usage metrics
-func LogResourceMetrics(sessionID, projectID string, cpuPercent, memoryMB float64, networkBytes int64) {
-	LogSessionEvent(SessionLogEntry{
-		SessionID: sessionID,
-		ProjectID: projectID,
-		EventType: "RESOURCE_METRICS",
-		Metadata: map[string]interface{}{
-			"cpu_percent":   cpuPercent,
-			"memory_mb":     memoryMB,
-			"network_bytes": networkBytes,
-		},
 	})
 }
 

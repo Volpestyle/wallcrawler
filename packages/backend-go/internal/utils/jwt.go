@@ -246,34 +246,3 @@ func ValidateCDPToken(tokenString string) (*CDPSigningPayload, error) {
 
 	return nil, fmt.Errorf("invalid token claims")
 }
-
-// GenerateSignedCDPURL creates a signed CDP WebSocket URL
-func GenerateSignedCDPURL(sessionID, projectID, userID, clientIP string) (string, error) {
-	payload := CDPSigningPayload{
-		SessionID: sessionID,
-		ProjectID: projectID,
-		UserID:    userID,
-		IssuedAt:  time.Now().Unix(),
-		ExpiresAt: time.Now().Add(10 * time.Minute).Unix(),
-		Nonce:     GenerateRandomNonce(),
-		IPAddress: clientIP,
-	}
-
-	token, err := CreateCDPToken(payload)
-	if err != nil {
-		return "", err
-	}
-
-	// For now, return the WebSocket URL with the token
-	// Later this will point to our authenticated CDP proxy
-	return fmt.Sprintf("ws://localhost:9223/cdp?signingKey=%s", token), nil
-}
-
-// ParseSigningKeyFromURL extracts and validates the signing key from a URL
-func ParseSigningKeyFromURL(url string) (*CDPSigningPayload, error) {
-	// Simple extraction - in a real implementation you'd parse the URL properly
-	// For now, assume format: ws://host:port/path?signingKey=TOKEN
-
-	// This is a placeholder - implement proper URL parsing
-	return nil, fmt.Errorf("URL parsing not yet implemented")
-}
